@@ -6,17 +6,16 @@
 #include"common.h"
 
 typedef struct TaskStateSegment{
-	unsigned short previousTaskLink;
-	unsigned short reserved0;
-	unsigned int esp0;
-	unsigned short ss0, reserved1;
-	unsigned int esp1;
-	unsigned short ss1, reserved2;
-	unsigned int esp2;
-	unsigned short ss2, reserved3;
-	unsigned int cr3, eip, eflags,
+	uint16_t previousTaskLink, reserved0;
+	uint32_t esp0;
+	uint16_t ss0, reserved1;
+	uint32_t esp1;
+	uint16_t ss1, reserved2;
+	uint32_t esp2;
+	uint16_t ss2, reserved3;
+	uint32_t cr3, eip, eflags,
 	eax, ecx, edx, ebx, esp, ebp, esi, edi;
-	unsigned short
+	uint16_t
 	es, reserved4,
 	cs, reserved5,
 	ss, reserved6,
@@ -31,14 +30,20 @@ typedef struct TaskStateSegment{
 
 static_assert(sizeof(TSS) == 104);
 
-struct Task{
+typedef struct Task{
+	enum TaskState{
+		RUNNING,
+		READY,
+		WAITING,
+		UNUSED
+	}state;
 	struct InterruptParam registers;
 	SegmentTable *ldt;
 	PageDirectory *pageTable;
-};
+}Task;
 /*
 static void ltr(SegmentSelector *tssSelector){
-	unsigned short s = toShort(tssSelector);
+	uint16_t s = toShort(tssSelector);
 	__asm__(
 	"ltr %0\n"
 	:
@@ -46,11 +51,12 @@ static void ltr(SegmentSelector *tssSelector){
 	);
 }
 */
+
 void initTaskManager(
 	MemoryManager *m,
 	SegmentTable *gdt,
 	SegmentSelector *kernelSS,
-	unsigned int kernelESP
+	uint32_t kernelESP
 ){
 	TSS *tss = allocate(m, sizeof(TSS));
 	memset(tss, 0, sizeof(TSS));
@@ -59,5 +65,5 @@ void initTaskManager(
 	tss->ioBitmapAddress = sizeof(TSS);
 	// set eflags IOPL
 	// clear eflags ni
-	addSegment(gdt, (unsigned)tss, sizeof(TSS) - 1, KERNEL_TSS);
+	addSegment(gdt, (uintptr_t)tss, sizeof(TSS) - 1, KERNEL_TSS);
 }

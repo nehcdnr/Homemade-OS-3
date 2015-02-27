@@ -1,39 +1,36 @@
 #ifndef HANDLER_H_INCLUDED
 #define HANDLER_H_INCLUDED
+#include<std.h>
 
 typedef struct InterruptVector InterruptVector;
 
 // handler parameter, see interruptentry.asm
 typedef struct InterruptParam{
+	uintptr_t argument; // pushed by os
 	InterruptVector *vector;
-	unsigned short
-	gs, unused0,
-	fs, unused1,
-	es, unused2,
-	ds, unused3;// pushed by os
-	unsigned int
+	uint32_t
+	gs, fs, es, ds,
 	edi, esi, ebp,
-	ebx, edx, ecx, eax;
-	int errorCode;
-	unsigned int
+	ebx, edx, ecx, eax,
+	errorCode, // pushed by cpu or os
 	eip, cs, eflags, // pushed by cpu
 	esp, ss; // pushed if privilege changed
 }InterruptParam;
 
 // handler
-void defaultInterruptHandler(InterruptParam param);
+void defaultInterruptHandler(volatile InterruptParam param);
 
-typedef void (*InterruptHandler)(InterruptParam param);
+typedef void (*InterruptHandler)(volatile InterruptParam param);
 typedef struct InterruptTable InterruptTable;
 // vector
-InterruptVector *registerInterrupt(InterruptTable *t, InterruptHandler handler);
-InterruptHandler setInterruptHandler(InterruptVector *v, InterruptHandler handler);
+InterruptVector *registerInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg);
 InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount);
-InterruptVector *registerSpuriousInterrupt(InterruptTable *t, InterruptHandler handler);
+InterruptVector *registerSpuriousInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg);
+void replaceHandler(InterruptVector *v, InterruptHandler *handler, uintptr_t *arg);
 
 extern void (*volatile endOfInterrupt)(InterruptVector *);
 
-unsigned char toChar(InterruptVector *v);
+uint8_t toChar(InterruptVector *v);
 int getIRQ(InterruptVector *v);
 
 
@@ -45,7 +42,7 @@ enum IRQ{
 	MOUSE_IRQ = 12
 };
 typedef union PIC PIC;
-extern InterruptHandler (*setPICHandler)(PIC *pic, enum IRQ irq, InterruptHandler handler);
+extern InterruptVector *(*irqToVector)(PIC *pic, enum IRQ irq);
 extern void (*setPICMask)(PIC *pic, enum IRQ irq, int setMask);
 
 #endif

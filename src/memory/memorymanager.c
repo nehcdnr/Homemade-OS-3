@@ -13,12 +13,10 @@ enum AddressRangeType{
 static_assert(sizeof(enum AddressRangeType) == 4);
 
 typedef struct AddressRange{
-	unsigned int base0_32;
-	unsigned int base32_64;
-	unsigned int size0_32;
-	unsigned int size32_64;
+	uint64_t base;
+	uint64_t size;
 	enum AddressRangeType type;
-	unsigned int extra;
+	uint32_t extra;
 }AddressRange;
 static_assert(sizeof(AddressRange) == 24);
 
@@ -26,13 +24,13 @@ extern const AddressRange *const addressRange;
 extern const int addressRangeCount;
 
 struct MemoryManager{
-	unsigned base;
-	unsigned size;
-	unsigned usedSize;
+	uintptr_t base;
+	size_t size;
+	size_t usedSize;
 	Spinlock *lock;
 };
 
-static MemoryManager *createNoLockMemoryManager(unsigned base, unsigned size){
+static MemoryManager *createNoLockMemoryManager(uintptr_t base, size_t size){
 	MemoryManager *m = (MemoryManager*)base;
 	m->base = base;
 	m->size = size;
@@ -41,7 +39,7 @@ static MemoryManager *createNoLockMemoryManager(unsigned base, unsigned size){
 	return m;
 }
 
-MemoryManager *createMemoryManager(unsigned base, unsigned size){
+MemoryManager *createMemoryManager(uintptr_t base, size_t size){
 	MemoryManager *m = createNoLockMemoryManager(base, size);
 	m->lock = createSpinlock(m);
 	return m;
@@ -49,36 +47,36 @@ MemoryManager *createMemoryManager(unsigned base, unsigned size){
 
 #define PADDING_SIZE(VALUE, ALIGN) ((VALUE) % (ALIGN) == 0? 0: (ALIGN) - (VALUE) % (ALIGN))
 
-static unsigned getMaxAddress32(const AddressRange* ar){
-	if(ar->size32_64 != 0 || ar->base0_32 > 0xffffffff - ar->size0_32){
+static uintptr_t getMaxAddress32(const AddressRange* ar){
+	if(ar->base + ar->size > 0xffffffff){
 		return 0xffffffff;
 	}
 	else{
-		return ar->base0_32 + ar->size0_32 - 1;
+		return ar->base + ar->size - 1;
 	}
 }
 
 MemoryManager *initKernelMemoryManager(void){
 	int i;
 	// find first usable memory address >= 1MB
-	unsigned manageBase = 0xffffffff;
-	const unsigned manageSize = (8 << 20);
+	uintptr_t manageBase = 0xffffffff;
+	const size_t manageSize = (8 << 20);
 	// printf("%d memory address ranges\n", addressRangeCount);
 	for(i = 0; i < addressRangeCount; i++){
 		const AddressRange *ar = addressRange + i;
 
-		printf("type: %d base: %x %x size: %x %x\n", ar->type,
-		ar->base32_64, ar->base0_32,
-		ar->size32_64, ar->size0_32);
+		kprintf("type: %d base: %x %x size: %x %x\n", ar->type,
+		ar->base >> 32, ar->base & 0xffffffff,
+		ar->size >> 32, ar->size & 0xffffffff);
 
 		if(
 		ar->type == USABLE &&
-		ar->base32_64 == 0 && // address < 4GB
-		ar->base0_32 >= (1 << 20) && // address >= 1MB
-		(ar->size32_64 != 0 || ar->size0_32 >= manageSize) && // size >= 8MB
-		ar->base0_32 < manageBase
+		(ar->base >> 32) == 0 && // address < 4GB
+		ar->base >= (1 << 20) && // address >= 1MB
+		ar->size >= manageSize && // size >= 8MB
+		ar->base < manageBase
 		){
-			manageBase = ar->base0_32;
+			manageBase = (uintptr_t)ar->base;
 		}
 	}
 	if(manageBase >= 0xffffffff - manageSize){
@@ -87,8 +85,8 @@ MemoryManager *initKernelMemoryManager(void){
 	return createMemoryManager(manageBase, manageSize);
 }
 
-void *allocateAligned(MemoryManager *m, unsigned size, unsigned align){
-	const unsigned padSize = PADDING_SIZE(m->base + m->usedSize, align);
+void *allocateAligned(MemoryManager *m, size_t size, size_t align){
+	const size_t padSize = PADDING_SIZE(m->base + m->usedSize, align);
 	void *address = NULL;
 	if(m->lock != NULL){
 		acquireLock(m->lock);
@@ -96,7 +94,6 @@ void *allocateAligned(MemoryManager *m, unsigned size, unsigned align){
 	if(size <= m->size - padSize - m->usedSize){
 		address = (void*)(m->base + m->usedSize + padSize);
 		m->usedSize += size + padSize;
-	//printf("allocate = %u, base = %u\n", size, m->base+m->usedSize);
 	}
 	if(m->lock != NULL){
 		releaseLock(m->lock);
@@ -105,13 +102,13 @@ void *allocateAligned(MemoryManager *m, unsigned size, unsigned align){
 	return address;
 }
 
-#define DEFAULT_ALIGN (4)
+#define DEFAULT_ALIGN ((size_t)4)
 
-void *allocate(MemoryManager *m, unsigned size){
+void *allocate(MemoryManager *m, size_t size){
 	return allocateAligned(m, size, DEFAULT_ALIGN);
 }
 
-unsigned getAllocatedSize(MemoryManager *m){
+size_t getAllocatedSize(MemoryManager *m){
 	return m->usedSize;
 }
 
@@ -121,7 +118,7 @@ struct PageManager{
 	// pages[0 ~ freePageCount] are free pages
 	// pages[freePageCount ~ pageCount] are using pages
 	struct PageAllocation{
-		unsigned address;
+		uintptr_t address;
 	}*pages;
 };
 
@@ -137,14 +134,13 @@ PageManager *initKernelPageManager(MemoryManager *m){
 			const AddressRange *ar = addressRange + i;
 			if(
 			ar->type != USABLE ||
-			ar->base32_64 != 0 ||
-			ar->base32_64 > 0xffffffff - (PAGE_UNIT_SIZE - 1) ||
-			(ar->size0_32 == 0 && ar->size32_64 == 0)
+			ar->base > 0xffffffff - (PAGE_UNIT_SIZE - 1) ||
+			ar->size < PAGE_UNIT_SIZE
 			){
 				continue;
 			}
-			unsigned base = ar->base0_32 + PADDING_SIZE(ar->base0_32, PAGE_UNIT_SIZE);
-			unsigned maxAddress = getMaxAddress32(ar);
+			uintptr_t base = ((uintptr_t)ar->base) + PADDING_SIZE(((uintptr_t)ar->base), PAGE_UNIT_SIZE);
+			uintptr_t maxAddress = getMaxAddress32(ar);
 			while(base <= maxAddress - (PAGE_UNIT_SIZE - 1)){
 				if(iter == 0){
 					p->pageCount++;
@@ -152,8 +148,8 @@ PageManager *initKernelPageManager(MemoryManager *m){
 				else{
 					if(base >= (1<<20) && (
 						base >= m->base + m->size ||
-						maxAddress < m->base)
-					){ // page and kernel not overlap
+						maxAddress < m->base
+					)){ // page and kernel not overlap
 						p->pages[p->freePageCount].address = base;
 						p->freePageCount++;
 					}
@@ -163,7 +159,7 @@ PageManager *initKernelPageManager(MemoryManager *m){
 					}
 				}
 				if(base == maxAddress - (PAGE_UNIT_SIZE - 1))
-					break;;
+					break;
 				base += PAGE_UNIT_SIZE;
 			}
 		}
@@ -175,16 +171,16 @@ PageManager *initKernelPageManager(MemoryManager *m){
 	return p;
 }
 
-unsigned getUsingSize(PageManager *p){
-	return (p->pageCount - p->freePageCount) * PAGE_UNIT_SIZE;
+size_t getUsingSize(PageManager *p){
+	return PAGE_UNIT_SIZE * (size_t)(p->pageCount - p->freePageCount);
 }
-unsigned getUsableSize(PageManager *p){
-	return p->pageCount * PAGE_UNIT_SIZE;
+size_t getUsableSize(PageManager *p){
+	return PAGE_UNIT_SIZE * (size_t)p->pageCount;
 }
 
 /*
 void enablePaging(MemoryManager *m){
-	setCR3((unsigned)(m->pageDirectory));
+	setCR3((uint32_t)(m->pageDirectory));
 	setCR0(getCR0() | 0x80000000);
 }
 */

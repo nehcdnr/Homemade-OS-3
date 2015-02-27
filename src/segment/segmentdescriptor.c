@@ -3,20 +3,20 @@
 #include"segment/segment.h"
 
 typedef struct{
-	unsigned short limit_0_16;
-	unsigned short base_0_16;
-	unsigned char base_16_24;
-	unsigned char access;
-	unsigned char limit_16_20: 4;
-	unsigned char flag: 4;
-	unsigned char base_24_32;
+	uint16_t limit_0_16;
+	uint16_t base_0_16;
+	uint8_t base_16_24;
+	uint8_t access;
+	uint8_t limit_16_20: 4;
+	uint8_t flag: 4;
+	uint8_t base_24_32;
 }SegmentDescriptor;
 
 struct SegmentSelector{
-	unsigned short shortValue;
+	uint16_t shortValue;
 };
 
-unsigned short toShort(SegmentSelector* s){
+uint16_t toShort(SegmentSelector* s){
 	return s->shortValue;
 }
 
@@ -54,11 +54,11 @@ void setSegment0(SegmentTable *t){
 
 SegmentSelector *addSegment(
 	SegmentTable*t,
-	unsigned base,
-	unsigned limit,
+	uint32_t base,
+	uint32_t limit,
 	enum SegmentType type
 ){
-	unsigned char flag;
+	uint8_t flag;
 	if(limit >= (1 << 20)){
 		assert(limit % 4096 == 4095);
 		limit = (limit / 4096);
@@ -85,10 +85,10 @@ SegmentSelector *addSegment(
 
 // assembly.asm
 void lgdt(
-	unsigned limit,
+	uint32_t limit,
 	SegmentDescriptor *base,
-	unsigned short codeSegment,
-	unsigned short dataSegment
+	uint16_t codeSegment,
+	uint16_t dataSegment
 );
 
 void loadgdt(SegmentTable *gdt, SegmentSelector *codeSegment, SegmentSelector *dataSegment){
@@ -96,13 +96,13 @@ void loadgdt(SegmentTable *gdt, SegmentSelector *codeSegment, SegmentSelector *d
 	codeSegment->shortValue, dataSegment->shortValue);
 }
 
-void sgdt(unsigned int *base, unsigned short *limit){
-	unsigned short sgdt[3];
+void sgdt(uint32_t *base, uint16_t *limit){
+	uint16_t sgdt[3];
 	__asm__(
 	"sgdtl %0\n"
 	:"=m"(sgdt)
 	:
 	);
 	*limit = sgdt[0];
-	*base = sgdt[1] + (((unsigned int)sgdt[2]) << 16);
+	*base = sgdt[1] + (((uint32_t)sgdt[2]) << 16);
 }

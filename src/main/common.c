@@ -1,18 +1,28 @@
 #include"common.h"
 #include"assembly/assembly.h"
 
-void *memset(void *ptr, unsigned char value, int size){
-	int a;
+// static_assert(sizeof(int8_t) == 1);
+static_assert(sizeof(uint8_t) == 1);
+// static_assert(sizeof(int16_t) == 2);
+static_assert(sizeof(uint16_t) == 2);
+// static_assert(sizeof(int32_t) == 4);
+static_assert(sizeof(uint32_t) == 4);
+// static_assert(sizeof(int64_t) == 8);
+static_assert(sizeof(uint64_t) == 8);
+static_assert(sizeof(uintptr_t) == sizeof(void*));
+
+void *memset(void *ptr, unsigned char value, size_t size){
+	size_t a;
 	for(a = 0; a < size; a++){
-		((unsigned char*)ptr)[a] = value;
+		((uint8_t*)ptr)[a] = value;
 	}
 	return ptr;
 }
 
-void *memcpy(void* dst, const void*src, int size){
-	int a;
+void *memcpy(void *dst, const void *src, size_t size){
+	size_t a;
 	for(a = 0; a < size; a++){
-		((char*)dst)[a] = ((char*)src)[a];
+		((uint8_t*)dst)[a] = ((uint8_t*)src)[a];
 	}
 	return dst;
 }
@@ -44,7 +54,7 @@ int strcmp(const char *s1, const char *s2){
 
 static int printString(const char *s){
 	int a;
-	volatile short *const consoleVideo=(short*)0xb8000;
+	volatile uint16_t *const consoleVideo=(uint16_t*)0xb8000;
 	static int globalCursor = 0;
 	int cursor = globalCursor;
 	static const int maxRow = 25, maxColumn=80;
@@ -111,7 +121,7 @@ static int printCharacter(int c){
 	return printString(t);
 }
 
-int printf(const char* format, ...){
+int kprintf(const char* format, ...){
 	int printCount = 0;
 	va_list argList;
 	va_start(argList, format);
@@ -162,7 +172,7 @@ int printf(const char* format, ...){
 }
 
 void printAndHalt(const char *condition, const char *file, int line){
-	printf("failure: %s %s %d", condition, file, line);
+	kprintf("failure: %s %s %d", condition, file, line);
 	while(1)
 		hlt();
 }

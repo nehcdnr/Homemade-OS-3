@@ -1,9 +1,10 @@
 #include"interrupt/handler.h"
-// APIC
-typedef volatile unsigned *const MemoryMappedRegister;
 
-// InterruptTable
-InterruptHandler setIRQHandler(InterruptVector *vectorBase, int irq, InterruptHandler handler);
+// interruptdescriptor.c
+InterruptVector *getVector(InterruptVector *base, int irq);
+
+// APIC
+typedef volatile uint32_t *const MemoryMappedRegister;
 
 // generic PIC
 typedef struct IOAPIC IOAPIC;
@@ -12,7 +13,6 @@ typedef union PIC{
 	PIC8259 *pic8259;
 	IOAPIC *apic;
 }PIC;
-
 
 typedef struct MemoryManager MemoryManager;
 typedef struct InterruptTable InterruptTable;
@@ -24,11 +24,17 @@ PIC *castPIC8259(PIC8259 *pic8259);
 // I/O APIC
 int isAPICSupported(void);
 IOAPIC *initAPIC(MemoryManager* m, InterruptTable *t);
-int getProcessorCount(IOAPIC *apic);
+int getNumberOfLAPIC(IOAPIC *apic);
+uint32_t getLAPICIDByIndex(IOAPIC *apic, int index);
 PIC *castAPIC(IOAPIC *apic);
 
 // local APIC
 typedef struct LAPIC LAPIC;
-LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t, IOAPIC *apic);
-void interprocessorINIT(LAPIC *lapic, int targetLAPICID);
-void interprocessorSTARTUP(LAPIC *lapic, int targetLAPICID, unsigned int entryAddress);
+LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t);
+InterruptVector *getTimerVector(LAPIC *lapic);
+int isBSP(LAPIC *lapic);
+uint32_t getLAPICID(LAPIC *lapic);
+void testAndResetLAPICTimer(LAPIC *lapic, IOAPIC* ioapic);
+void resetLAPICTimer(LAPIC *lapic);
+void interprocessorINIT(LAPIC *lapic, uint32_t targetLAPICID);
+void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entryAddress);

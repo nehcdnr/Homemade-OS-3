@@ -5,8 +5,8 @@
 #include"memory/memory.h"
 
 struct Spinlock{
-	volatile unsigned acquirable;
-	unsigned interruptFlag;
+	volatile uint32_t acquirable;
+	int interruptFlag;
 };
 
 Spinlock *createSpinlock(MemoryManager *m){
@@ -25,7 +25,7 @@ void acquireLock(Spinlock *spinlock){
 	int tryCount = 0;
 	while(1){
 		cli();
-		unsigned acquired = xchg(&spinlock->acquirable, 0);
+		int acquired = xchg(&spinlock->acquirable, 0);
 		if(acquired)
 			break;
 		if(spinlock->interruptFlag)

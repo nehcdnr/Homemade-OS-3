@@ -13,17 +13,19 @@ void apEntry(void);
 
 static MemoryManager *memory = NULL;
 static PageManager *page = NULL;
-static SegmentTable *gdt = NULL;
-static SegmentSelector *codeSegment = NULL, *dataSegment = NULL;
-static InterruptTable *idt = NULL;
 
 void bspEntry(void){
 	// 1. memory
 	memory = initKernelMemoryManager();
 	page = initKernelPageManager(memory);
-	printf("available memory: %u KB\n", getUsableSize(page) / 1024);
+	kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
+	apEntry();
+}
+
+void apEntry(void){
 	// 2. GDT
-	gdt = createSegmentTable(memory, 4);
+	SegmentTable *gdt = createSegmentTable(memory, 4);
+	SegmentSelector *codeSegment, *dataSegment;
 	setSegment0(gdt);
 	codeSegment = addSegment(gdt, 0, 0xffffffff, KERNEL_CODE);
 	dataSegment = addSegment(gdt, 0, 0xffffffff, KERNEL_DATA);
@@ -31,26 +33,21 @@ void bspEntry(void){
 	initTaskManager(memory, gdt, dataSegment, getEBP());
 	loadgdt(gdt, codeSegment, dataSegment);
 	// 4. IDT
-	idt = initInterruptTable(memory, codeSegment);
+	InterruptTable *idt = initInterruptTable(memory, codeSegment);
 	lidt(idt);
 	// 5. PIC
-	initPIC(memory, idt);
-	initMultiprocessor();
+	/*PIC *pic = */initPIC(memory, idt, createTimer(memory));
+	//initMultiprocessor();
 
-printf("start accepting interrupt...\n");
+kprintf("start accepting interrupt...\n");
 	sti();
-	printf("halt...\n");
+	kprintf("halt...\n");
+	/*
+	kprintf("start sleeping\n");
+	kernelSleep(10000);
+	kprintf("end sleeping\n");
+	*/
 	while(1){
 		hlt();
 	}
-}
-
-void apEntry(void){
-	initTaskManager(memory, gdt, dataSegment, getEBP());
-	loadgdt(gdt, codeSegment, dataSegment);
-	lidt(idt);
-
-printf("ap ok\n");
-
-	hlt();
 }

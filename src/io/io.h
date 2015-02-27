@@ -1,7 +1,13 @@
-
+// timer8254.c
 typedef union PIC PIC;
+void setTimer8254Frequency(unsigned frequency);
 
-struct InterruptVector;
-void initTimer(PIC *vectorBase);
+// timer.c
+typedef struct InterruptParam InterruptParam;
+typedef struct TimerEventList TimerEventList;
+typedef struct MemoryManager MemoryManager;
+typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
-void setTimerFrequency(unsigned frequency);
+TimerEventList *createTimer(MemoryManager *m);
+void replaceTimerHandler(TimerEventList *tel, InterruptVector *v);
+void kernelSleep(TimerEventList *tel, unsigned millisecond);

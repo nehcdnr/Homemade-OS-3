@@ -5,15 +5,15 @@
 #include"memory/memory.h"
 
 typedef struct{
-	char signature[4];
-	unsigned int length;
-	unsigned char revision;
-	unsigned char checksum;
-	unsigned char oemID[6];
-	unsigned char oemTableID[8];
-	unsigned int oemRevision;
-	unsigned int creatorID;
-	unsigned int creatorRevision;
+	int8_t signature[4];
+	uint32_t length;
+	uint8_t revision;
+	uint8_t checksum;
+	uint8_t oemID[6];
+	uint8_t oemTableID[8];
+	uint32_t oemRevision;
+	uint32_t creatorID;
+	uint32_t creatorRevision;
 }SDTHeader;
 
 typedef struct{
@@ -24,17 +24,17 @@ typedef struct{
 // from ACPI spec
 typedef struct{
 	// ACPI 1.0 (revision = 0)
-	char signature[8];
-	unsigned char checksum;
-	unsigned char oemID[6];
-	unsigned char revision;
+	int8_t signature[8];
+	uint8_t checksum;
+	uint8_t oemID[6];
+	uint8_t revision;
 	RSDT *rsdtAddress;
 	// ACPI 2.0 (revision = 2) (unsupported)
-	unsigned int length;
-	unsigned int xsdtAddress_0_32;
-	unsigned int xsdtAddress_32_64;
-	unsigned char exChecksum;
-	unsigned char reserved[3];
+	uint32_t length;
+	uint32_t xsdtAddress_0_32;
+	uint32_t xsdtAddress_32_64;
+	uint8_t exChecksum;
+	uint8_t reserved[3];
 }RSDP;
 #define RSDP_REVISION_0_SIZE (20)
 
@@ -54,49 +54,50 @@ typedef struct{
 		GICD = 11*/
 		NUMBER_OF_APIC_STRUCT_TYPE
 	}type;
-	unsigned char length;
+	uint8_t length;
 }ICSHeader;
 
 typedef struct{
 	ICSHeader header;
-	unsigned char processorID;
-	unsigned char apicID;
-	unsigned int flags; // = 1 if enabled
+	uint8_t processorID;
+	uint8_t apicID;
+	uint32_t flags; // = 1 if enabled
 }LocalAPICStruct;
 
 typedef struct{
 	ICSHeader header;
-	unsigned char ioAPICID;
-	unsigned char reserved;
-	unsigned *ioAPICAddress;
-	unsigned globalSystemInterruptBase;
+	uint8_t ioAPICID;
+	uint8_t reserved;
+	uint32_t ioAPICAddress;
+	uint32_t globalSystemInterruptBase;
 }IOAPICStruct;
 
-typedef /*__attribute__((__packed__))*/ struct{
+typedef struct __attribute__((__packed__)){
 	ICSHeader header;
-	unsigned char bus;
-	unsigned char source;
-	unsigned int globalSystemInterrupt;
-	unsigned short flags; // bit 2~0: polarity bit 4~2: trigger mode
+	uint8_t bus;
+	uint8_t source;
+	uint32_t globalSystemInterrupt;
+	uint16_t flags; // bit 2~0: polarity bit 4~2: trigger mode
 }SourceOverrideStruct;
 
 typedef struct{
 	ICSHeader header;
-	unsigned short flags;
-	unsigned int globalSystemInterrupt;
+	uint16_t flags;
+	uint32_t globalSystemInterrupt;
 }NonMaskableStruct;
 
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	ICSHeader header;
-	unsigned char processorID;
-	unsigned short flags;
-	unsigned char localAPICLINT;
+	uint8_t processorID;
+	uint8_t flags0_8; // uint16_t flags attribute((__packed__)) fails
+	uint8_t flags8_16;
+	uint8_t localAPICLINT;
 }LocalNonMaskableStruct;
 
 typedef struct{
 	SDTHeader header;
-	void* localControllerAddress;
-	unsigned int flags; // = 1 if the PC supports 8259 mode
+	uint32_t localControllerAddress;
+	uint32_t flags; // = 1 if the PC supports 8259 mode
 	ICSHeader ics[0]; // interrupt controller structure
 }MADT;
 
@@ -104,25 +105,29 @@ static_assert(sizeof(ICSHeader) == 2);
 static_assert(sizeof(LocalAPICStruct) == 8);
 static_assert(sizeof(IOAPICStruct) == 12);
 // gcc always pads to the last element
-static_assert(sizeof(SourceOverrideStruct) == 10 + 2);
+static_assert(sizeof(SourceOverrideStruct) == 10);
+static_assert((size_t)(&((SourceOverrideStruct*)0)->flags) == 8);
 static_assert(sizeof(NonMaskableStruct) == 8);
-static_assert(sizeof(LocalNonMaskableStruct) == 6 + 2);
+static_assert(sizeof(LocalNonMaskableStruct) == 6);
+static_assert((size_t)(&((LocalNonMaskableStruct*)0)->localAPICLINT) == 5);
+
+static_assert(sizeof(enum APICStructureType) == 1);
 
 #define DEFAULT_EBDA_BEGIN (0x9fc00)
 #define EBDA_END (0xa0000)
-static unsigned findAddressOfEBDA(void){
-	unsigned address = ((*(unsigned short*)0x40e)<<4);
+static uintptr_t findAddressOfEBDA(void){
+	uintptr_t address = ((*(uint16_t*)0x40e)<<4);
 	if(address >= EBDA_END || address < 0x80000){
-		printf("suspicious EBDA address: %x\n", address);
+		kprintf("suspicious EBDA address: %x\n", address);
 		address = DEFAULT_EBDA_BEGIN;
 	}
-	printf("address of EBDA = %x\n", address);
+	kprintf("address of EBDA = %x\n", address);
 	return address;
 }
 
-static unsigned char checksum(const void *data, int size){
-	const char *d = (const char*)data;
-	unsigned char sum = 0;
+static uint8_t checksum(const void *data, size_t size){
+	const uint8_t *d = (const uint8_t*)data;
+	uint8_t sum = 0;
 	while(size--){
 		sum+=*d;
 		d++;
@@ -130,9 +135,9 @@ static unsigned char checksum(const void *data, int size){
 	return sum;
 }
 
-static void *searchString(const char *string, unsigned beginAddress, unsigned endAddress){
-	unsigned a;
-	unsigned b = strlen(string);
+static void *searchString(const char *string, uintptr_t beginAddress, uintptr_t endAddress){
+	uintptr_t a;
+	uintptr_t b = strlen(string);
 	for(a = beginAddress; a + b <= endAddress; a++){
 		if(strncmp(string, (char*)a, b) == 0)
 			return (void*)a;
@@ -163,14 +168,14 @@ struct IOAPIC{
 #define IOREDTBL0_32(V) (0x10 + (V)*2 + 0)
 #define IOREDTBL32_64(V) (0x10 + (V)*2 + 1)
 
-static void writeIOAPIC(MemoryMappedRegister ioRegSel, unsigned selector, unsigned data){
-	MemoryMappedRegister ioWin = (unsigned*)(((unsigned)ioRegSel) + 0x10);
+static void writeIOAPIC(MemoryMappedRegister ioRegSel, uint32_t selector, uint32_t data){
+	MemoryMappedRegister ioWin = (MemoryMappedRegister)(((uintptr_t)ioRegSel) + 0x10);
 	*ioRegSel = selector;
 	*ioWin = data;
 }
 
-static unsigned readIOAPIC(MemoryMappedRegister ioRegSel, unsigned selector){
-	MemoryMappedRegister ioWin = (unsigned*)(((unsigned)ioRegSel) + 0x10);
+static uint32_t readIOAPIC(MemoryMappedRegister ioRegSel, uint32_t selector){
+	MemoryMappedRegister ioWin = (MemoryMappedRegister)(((uintptr_t)ioRegSel) + 0x10);
 	*ioRegSel = selector;
 	return *ioWin;
 }
@@ -182,7 +187,7 @@ static void parseIOAPIC(
 ){
 	// printf("id = %d, interrupt base = %d, address = %x\n",
 	// ias->ioAPICID, ias->globalSystemInterruptBase, ias->ioAPICAddress);
-	MemoryMappedRegister address = ias->ioAPICAddress;
+	MemoryMappedRegister address = (MemoryMappedRegister)ias->ioAPICAddress;
 	// bit 24~28 = I/O APIC ID
 	// printf("%x\n", readIOAPIC(address, 0));
 	// bit 0~8 = APIC version, bit 16~24 = redirection entry count - 1
@@ -192,8 +197,8 @@ static void parseIOAPIC(
 	//printf("%d interrupts registered to IDT\n", profile->interruptCount);
 	int v;
 	for(v = 0; v < profile->interruptCount; v++){
-		unsigned redir0_32 = readIOAPIC(address, IOREDTBL0_32(v));
-		//unsigned redir32_64 = readIOAPIC(address, IOREDTBL32_64(v));
+		uint32_t redir0_32 = readIOAPIC(address, IOREDTBL0_32(v));
+		//uint32_t redir32_64 = readIOAPIC(address, IOREDTBL32_64(v));
 		//printf(" %x %x/", redir0_32, redir32_64);
 		/*
 		bit 64~56: destination (in physical or logical mode)
@@ -240,28 +245,32 @@ static void setIOAPICMask(PIC *pic, enum IRQ irq, int setMask){
 	IOAPIC *apic = pic->apic;
 	int i = irq;
 	struct IOAPICProfile *iap = getIOAPICProfile(apic, &i);
-	unsigned r = readIOAPIC(iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i));
+	uint32_t r = readIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i));
 	if(setMask)
 		r |= 0x00010000;
 	else
 		r &= (~0x00010000);
-	writeIOAPIC(iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i), r);
+	writeIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i), r);
 }
 
-static InterruptHandler setAPICIRQHandler(PIC *pic, enum IRQ irq, InterruptHandler handler){
+static InterruptVector *apicIRQToVector(PIC *pic, enum IRQ irq){
 	IOAPIC *apic = pic->apic;
 	int i = irq;
 	struct IOAPICProfile *iap = getIOAPICProfile(apic, &i);
-	return setIRQHandler(iap->vectorBase, i, handler);
+	return getVector(iap->vectorBase, i);
 }
 
-int getProcessorCount(IOAPIC *apic){
+int getNumberOfLAPIC(IOAPIC *apic){
 	return apic->localCount;
 }
 
+uint32_t getLAPICIDByIndex(IOAPIC *ioapic, int index){
+	return ioapic->local[index]->apicID;
+}
+
 static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
-	printf("MADT total size = %d\n",madt->header.length);
-	unsigned offset;
+	kprintf("MADT total size = %d\n",madt->header.length);
+	size_t offset;
 	// pass 1: count tables of different types
 	int typeCount[NUMBER_OF_APIC_STRUCT_TYPE];
 	int typeIndex;
@@ -270,7 +279,7 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	}
 	offset = sizeof(MADT);
 	while(offset < madt->header.length){
-		ICSHeader *icsHeader = (ICSHeader*)(((unsigned)madt) + offset);
+		ICSHeader *icsHeader = (ICSHeader*)(((uintptr_t)madt) + offset);
 		offset+=icsHeader->length;
 		if(icsHeader->type < NUMBER_OF_APIC_STRUCT_TYPE)
 			typeCount[icsHeader->type]++;
@@ -293,7 +302,7 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	}
 	offset = sizeof(MADT);
 	while(offset < madt->header.length){
-		ICSHeader *icsHeader = (ICSHeader*)(((unsigned)madt) + offset);
+		ICSHeader *icsHeader = (ICSHeader*)(((uintptr_t)madt) + offset);
 		offset += icsHeader->length;
 		const enum APICStructureType type = icsHeader->type;
 		if(type >= NUMBER_OF_APIC_STRUCT_TYPE){
@@ -310,22 +319,22 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 			break;
 		case SOURCE_OVERRIDE:
 			apic->override[cnt] = (SourceOverrideStruct*)icsHeader;
-			break;/*
+			break;
 		case NON_MASKABLE:
-			{
+			/*{
 				NonMaskableStruct *nms = (NonMaskableStruct*)icsHeader;
 				printf("nmi = %d\n", nms->globalSystemInterrupt);
-			}
+			}*/
 			break;
 		case LOCAL_NON_MASKABLE:
-			{
+			/*{
 				LocalNonMaskableStruct *lnms = (LocalNonMaskableStruct*)icsHeader;
 				printf("processor = %d, LINT = %d, flags = %d\n",
 				lnms->localAPICLINT, lnms->localAPICLINT, lnms->flags);
-			}
-			break;*/
+			}*/
+			break;
 		default:
-			printf("unknown interrupt controller of type %d at offset %d in MADT\n",
+			kprintf("unknown interrupt controller of type %d at offset %d in MADT\n",
 			icsHeader->type, offset - icsHeader->length);
 			break;
 		}
@@ -333,14 +342,14 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	return apic;
 }
 
-static RSDP *searchRSDP(unsigned searchBegin, unsigned searchEnd){
+static RSDP *searchRSDP(uintptr_t searchBegin, uintptr_t searchEnd){
 	RSDP *rsdp = NULL;
 	while(rsdp == NULL){
 		rsdp = searchString("RSD PTR ", searchBegin, searchEnd);
 		if(rsdp == NULL)
 			break;
-		if(checksum((unsigned char*)rsdp, RSDP_REVISION_0_SIZE) != 0){
-			searchBegin = 1 + (unsigned)rsdp;
+		if(checksum((uint8_t*)rsdp, RSDP_REVISION_0_SIZE) != 0){
+			searchBegin = 1 + (uintptr_t)rsdp;
 			rsdp = NULL;
 		}
 	}
@@ -356,17 +365,17 @@ static const RSDT *findRSDT(void){
 	if(rsdp == NULL){
 		return NULL;
 	}
-	printf("found Root System Description Pointer at %x\n", rsdp);
-	printf("RSDP version = %d\n", rsdp->revision);
+	kprintf("found Root System Description Pointer at %x\n", rsdp);
+	kprintf("RSDP version = %d\n", rsdp->revision);
 	if(rsdp->revision == 2){
-		printf("RSDP length = %u, xsdt address = %x:%x\n",
+		kprintf("RSDP length = %u, xsdt address = %x:%x\n",
 		rsdp->length,
 		rsdp->xsdtAddress_32_64, rsdp->xsdtAddress_0_32);
-		printf("warning: long mode and ACPI 2.0 are not supported\n");
+		kprintf("warning: long mode and ACPI 2.0 are not supported\n");
 	}
 	const RSDT * rsdt = rsdp->rsdtAddress;
 	if(strncmp(rsdt->header.signature, "RSDT", 4) != 0){
-		printf("bad RSDT signature\n");
+		kprintf("bad RSDT signature\n");
 	}
 	if(checksum(rsdt, rsdt->header.length) != 0){
 		panic("bad RSDT checksum");
@@ -375,56 +384,31 @@ static const RSDT *findRSDT(void){
 	return rsdt;
 }
 
-#define ITERATOR_BEGIN (-1)
-#define ITERATOR_END (-2)
-static int iterateRSDT(const RSDT *rsdt, int iterator, const char *signature){
-	int rsdtEntryCount = (rsdt->header.length - sizeof(RSDT)) / sizeof(SDTHeader*);
-	// printf("Root System Description Table length = %d\n", rsdtEntryCount);
-	for(iterator++; iterator < rsdtEntryCount; iterator++){
-		if(strncmp(rsdt->entry[iterator]->signature, signature, 4) == 0){
-			if(checksum(rsdt->entry[iterator], rsdt->entry[iterator]->length) != 0){
-				panic("bad checksum");
-			}
-			return iterator;
-		}
-	}
-	return ITERATOR_END;
-}
-
 IOAPIC *initAPIC(MemoryManager* m, InterruptTable *t){
 	IOAPIC *apic = NULL;
 	const RSDT *rsdt = findRSDT();
 	assert(rsdt != NULL);
-	int i = ITERATOR_BEGIN;
-	while(1){
-		i = iterateRSDT(rsdt, i, "APIC"); // MADT signature
-		if(i == ITERATOR_END)
-			break;
+	int rsdtEntryCount = (rsdt->header.length - sizeof(RSDT)) / sizeof(SDTHeader*);
+	int i;
+	for(i = 0; i < rsdtEntryCount; i++){
+		SDTHeader* madt = rsdt->entry[i];
+		if(strncmp(madt->signature, "APIC", 4) != 0){
+			continue;
+		}
+		if(checksum(madt, madt->length) != 0){
+			panic("bad MADT checksum");
+		}
 		if(apic != NULL){
 			panic("found more than 1 MADTs");
 		}
 		apic = parseMADT(m, (const MADT*)(rsdt->entry[i]), t);
 	}
 	setPICMask = setIOAPICMask;
-	setPICHandler = setAPICIRQHandler;
+	irqToVector = apicIRQToVector;
 
 	return apic;
 }
 
 PIC *castAPIC(IOAPIC *apic){
 	return &apic->this;
-}
-
-PIC *initPIC(MemoryManager *m, InterruptTable *t){
-	if(isAPICSupported() == 0){
-		PIC8259 *pic8259 = initPIC8259(m, t);
-		return castPIC8259(pic8259);
-	}
-	// must disable 8259 when enable APIC
-	disablePIC8259();
-	IOAPIC *ioapic = initAPIC(m, t);
-	LAPIC *lapic = initLocalAPIC(m, t, ioapic);
-	lapic=(void*)lapic;
-	printf("number of processors = %d\n", getProcessorCount(ioapic));
-	return castAPIC(ioapic);
 }

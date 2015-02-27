@@ -5,9 +5,6 @@
 #include"common.h"
 #include"assembly/assembly.h"
 
-InterruptHandler (*setPICHandler)(PIC *pic, enum IRQ irq, InterruptHandler handler);
-void (*setPICMask)(PIC *pic, enum IRQ irq, int setMask);
-
 // refer to chipset datasheet
 enum{
 	M_ICW1 = 0x20,
@@ -37,13 +34,13 @@ typedef struct PIC8259{
 	PIC this;
 	InterruptTable *interruptTable;
 	InterruptVector *vectorBase;
-	unsigned char masterMask, slaveMask;
+	uint8_t masterMask, slaveMask;
 }PIC8259;
 
 static void setPIC8259Mask(PIC *pic, enum IRQ irq, int setMask){
 	PIC8259 *pic8259 = pic->pic8259;
 	int i = (irq < 8? irq: irq - 8);
-	unsigned char *mask = (irq < 8? &pic8259->masterMask: &pic8259->slaveMask);
+	uint8_t *mask = (irq < 8? &pic8259->masterMask: &pic8259->slaveMask);
 	if(setMask)
 		(*mask) |= (1 << i);
 	else
@@ -51,12 +48,12 @@ static void setPIC8259Mask(PIC *pic, enum IRQ irq, int setMask){
 	out((irq < 8? M_OCW1: S_OCW1), *mask);
 }
 
-static InterruptHandler setPIC8259Handler(PIC *pic, enum IRQ irq, InterruptHandler handler){
+static InterruptVector *PIC8259IRQToVector(PIC *pic, enum IRQ irq){
 	PIC8259 *pic8259 = pic->pic8259;
-	return setIRQHandler(pic8259->vectorBase, irq, handler);
+	return getVector(pic8259->vectorBase, irq);
 }
 
-static void resetPIC8259(unsigned char vectorBase){
+static void resetPIC8259(uint8_t vectorBase){
 	// mask all
 	out(M_OCW1, 0xff);
 	out(S_OCW1, 0xff);
@@ -87,10 +84,11 @@ PIC8259 *initPIC8259(struct MemoryManager *m, InterruptTable *t){
 	pic->masterMask = 0xff;
 	pic->slaveMask = 0xff;
 	resetPIC8259(toChar(pic->vectorBase));
+	irqToVector = PIC8259IRQToVector;
 	setPICMask = setPIC8259Mask;
-	setPICHandler = setPIC8259Handler;
+
 	endOfInterrupt = eoi8259;
-	printf("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
+	kprintf("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
 	return pic;
 }
 

@@ -1,7 +1,8 @@
+#include<std.h>
 
 typedef struct SegmentTable SegmentTable;
 typedef struct SegmentSelector SegmentSelector;
-unsigned short toShort(SegmentSelector* s);
+uint16_t toShort(SegmentSelector* s);
 
 enum SegmentType{
 	KERNEL_CODE = 0x98,
@@ -17,7 +18,7 @@ typedef struct TaskStateSegment TSS;
 
 SegmentTable *createSegmentTable(MemoryManager *m, int length);
 void setSegment0(SegmentTable*t);
-SegmentSelector *addSegment(SegmentTable *t, unsigned base, unsigned limit, enum SegmentType type);
+SegmentSelector *addSegment(SegmentTable *t, uint32_t base, uint32_t limit, enum SegmentType type);
 SegmentSelector *addTSS(SegmentTable *t, TSS *tss);
 void loadgdt(SegmentTable *gdt, SegmentSelector *codeSegment, SegmentSelector *dataSegment);
-void sgdt(unsigned int *base, unsigned short *limit);
+void sgdt(uint32_t *base, uint16_t *limit);

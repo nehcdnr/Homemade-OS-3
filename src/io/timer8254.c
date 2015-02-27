@@ -4,19 +4,7 @@
 #include"common.h"
 #include"assembly/assembly.h"
 
-static void timerHandler(InterruptParam p){
-	printf("interrupt #%d (timer)\n", toChar(p.vector));
-	endOfInterrupt(p.vector);
-	sti();
-}
-
-void initTimer(PIC *pic){
-	setTimerFrequency(100);
-	setPICHandler(pic, TIMER_IRQ, timerHandler);
-	setPICMask(pic, TIMER_IRQ, 0);
-}
-
-void setTimerFrequency(unsigned frequency){
+void setTimer8254Frequency(unsigned frequency){
 	enum{
 		TIMER_COMMAND = 0x43,
 		TIMER_DATA0 = 0x40

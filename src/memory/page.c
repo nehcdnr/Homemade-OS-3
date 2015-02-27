@@ -6,35 +6,35 @@
 #define PAGE_TABLE_LENGTH (1024)
 typedef struct PageDirectory{
 	struct PageDirectoryEntry{
-		char present: 1;
-		char writable: 1;
-		char userAccessible: 1;
-		char writeThrough: 1;
-		char cacheDisabled: 1;
-		char accessed: 1;
-		char ignored1: 1;
-		char size4MB: 1;
-		char ignored2: 1;
-		unsigned char unused: 3;
-		unsigned char address0_4: 4;
-		unsigned short address4_20: 16;
+		uint8_t present: 1;
+		uint8_t writable: 1;
+		uint8_t userAccessible: 1;
+		uint8_t writeThrough: 1;
+		uint8_t cacheDisabled: 1;
+		uint8_t accessed: 1;
+		uint8_t ignored1: 1;
+		uint8_t size4MB: 1;
+		uint8_t ignored2: 1;
+		uint8_t unused: 3;
+		uint8_t address0_4: 4;
+		uint16_t address4_20: 16;
 	}entry[PAGE_TABLE_LENGTH];
 }PageDirectory;
 
 typedef struct PageTable{
 	struct PageTableEntry{
-		char present: 1;
-		char writable: 1;
-		char userAccessible: 1;
-		char writeThrough: 1;
-		char cacheDisabled: 1;
-		char accessed: 1;
-		char dirty: 1;
-		char ignored: 1;
-		char global: 1;
-		unsigned char unused: 3;
-		unsigned char address0_4: 4;
-		unsigned short address4_20: 16;
+		uint8_t present: 1;
+		uint8_t writable: 1;
+		uint8_t userAccessible: 1;
+		uint8_t writeThrough: 1;
+		uint8_t cacheDisabled: 1;
+		uint8_t accessed: 1;
+		uint8_t dirty: 1;
+		uint8_t ignored: 1;
+		uint8_t global: 1;
+		uint8_t unused: 3;
+		uint8_t address0_4: 4;
+		uint16_t address4_20: 16;
 	}entry[PAGE_TABLE_LENGTH];
 }PageTable;
 
@@ -56,13 +56,13 @@ static PageTable *createPageTable(MemoryManager *m){
 	return pt;
 }
 
-#define SET_ENTRY_ADDRESS(E, A) ((*(unsigned*)(E)) = (((*(unsigned*)(E)) & (4095)) | ((unsigned)(A))))
-#define GET_ENTRY_ADDRESS(E) ((void*)((*(unsigned*)(E)) & (~4095)))
+#define SET_ENTRY_ADDRESS(E, A) ((*(uint32_t*)(E)) = (((*(uint32_t*)(E)) & (4095)) | ((uint32_t)(A))))
+#define GET_ENTRY_ADDRESS(E) ((void*)((*(uint32_t*)(E)) & (~4095)))
 
-void set4KBKernelPage(MemoryManager *m, PageDirectory *pd, unsigned linearAddress, unsigned physicalAddress){
+void set4KBKernelPage(MemoryManager *m, PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress){
 	assert((physicalAddress & 4095) == 0 && (linearAddress & 4095) == 0);
-	unsigned i1 = ((linearAddress >> 22) & (PAGE_TABLE_LENGTH - 1));
-	unsigned i2 = ((linearAddress >> 12) & (PAGE_TABLE_LENGTH - 1));
+	uintptr_t i1 = ((linearAddress >> 22) & (PAGE_TABLE_LENGTH - 1));
+	uintptr_t i2 = ((linearAddress >> 12) & (PAGE_TABLE_LENGTH - 1));
 	struct PageDirectoryEntry *pde = pd->entry + i1;
 	PageTable *pt;
 	struct PageTableEntry *pte;
@@ -72,7 +72,7 @@ void set4KBKernelPage(MemoryManager *m, PageDirectory *pd, unsigned linearAddres
 	else{
 		pt = GET_ENTRY_ADDRESS(pde);
 	}
-	assert((((unsigned)pt) & 4095) == 0);
+	assert((((uintptr_t)pt) & 4095) == 0);
 	// assert(pte->present == 0);
 	pte = pt->entry + i2;
 	pte->writable = 1;

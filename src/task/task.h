@@ -1,3 +1,4 @@
+#include<std.h>
 
 typedef struct MemoryManager MemoryManager;
 typedef struct SegmentTable SegmentTable;
@@ -6,5 +7,5 @@ void initTaskManager(
 	MemoryManager *m,
 	SegmentTable *gdt,
 	SegmentSelector *kernelSS,
-	unsigned int kernelESP
+	uint32_t kernelESP
 );
