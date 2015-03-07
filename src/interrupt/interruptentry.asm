@@ -13,7 +13,11 @@ _numberOfIntEntries:
 
 global _intEntryBaseOffset
 _intEntryBaseOffset:
-	dd addBaseAddress - intEntrySetBegin
+	dd baseAddressData - intEntrySetBegin
+
+global _processorLocalAddressOffset
+_processorLocalAddressOffset:
+	dd processorLocal - intEntrySetBegin
 
 global _intEntriesTemplate:
 _intEntriesTemplate:
@@ -28,6 +32,10 @@ interruptEntry%[n]:
 	dd 0 ; handler parameter
 %assign n n+1
 %endrep
+processorLocal:
+	dd 0
+nestLevel:
+	dd 0
 
 %assign n 0
 %rep NUMBER_OF_HANDLERS
@@ -40,6 +48,12 @@ entry%[n]:
 	jmp generalEntry
 %assign n n+1
 %endrep
+
+getBase:
+	db 0xba ; opcode: mov edx, ...
+baseAddressData:
+	dd 0x90909090 ; operand: ... 0x90909090
+	ret
 
 generalEntry:
 	push ecx
@@ -57,14 +71,21 @@ generalEntry:
 	push gs
 	; mov WORD [esp + 2], 0
 
-	db 0x05 ; opcode: add eax, ...
-addBaseAddress:
-	dd 0x11001100 ; operand: ... 0x11001100
-
+	call getBase
+	add eax, edx
+	push DWORD [edx + nestLevel - intEntrySetBegin]
+	add DWORD [edx + nestLevel - intEntrySetBegin], 1
+	push DWORD [edx + processorLocal - intEntrySetBegin]
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
+
 	call [eax + 4] ; handler
-	add esp, 8
+
+	add esp, 16
+
+	call getBase
+	cli
+	sub DWORD [edx + nestLevel - intEntrySetBegin], 1
 	pop gs
 	pop fs
 	pop es

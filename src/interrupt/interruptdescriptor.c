@@ -44,6 +44,7 @@ extern const AsmIntEntry intEntriesTemplate[];
 extern const size_t sizeOfIntEntries;
 extern const int numberOfIntEntries;
 extern const size_t intEntryBaseOffset;
+extern const size_t processorLocalAddressOffset;
 
 struct InterruptTable{
 	int length;
@@ -53,12 +54,14 @@ struct InterruptTable{
 	InterruptDescriptor *descriptor;
 };
 
-static AsmIntEntry *createAsmIntEntries(MemoryManager *m){
-	AsmIntEntry *e = allocate(m, sizeOfIntEntries);
+static AsmIntEntry *createAsmIntEntries(MemoryManager *m, ProcessorLocal *p){
+	AsmIntEntry *e = allocateFixedSize(m, sizeOfIntEntries);
 	memcpy(e, intEntriesTemplate, sizeOfIntEntries);
 
 	uintptr_t *inst = (uintptr_t*)(intEntryBaseOffset + (uintptr_t)e);
+	uintptr_t *pla = (uintptr_t*)(processorLocalAddressOffset + (uintptr_t)e);
 	*inst = (uintptr_t)e;
+	*pla = (uintptr_t)p;
 	return e;
 }
 
@@ -89,6 +92,10 @@ void replaceHandler(InterruptVector *vector, InterruptHandler *handler, uintptr_
 	t->asmIntEntry[i].arg = *arg;
 	*handler = oldHandler;
 	*arg = oldArg;
+}
+
+void setHandler(InterruptVector *vector, InterruptHandler handler, uintptr_t arg){
+	replaceHandler(vector, &handler, &arg);
 }
 
 InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
@@ -129,16 +136,16 @@ static void noEOI(InterruptVector *v){
 	panic("EOI not registered");
 }
 
-void (*volatile endOfInterrupt)(InterruptVector*) = noEOI;
+void (*endOfInterrupt)(InterruptVector*) = noEOI;
 
 // segmentdescriptor.h
 uint16_t toShort(SegmentSelector* s);
 
-InterruptTable *initInterruptTable(MemoryManager *m, SegmentSelector *kernelCodeSelector){
-	struct InterruptTable *t = allocate(m, sizeof(InterruptTable));
+InterruptTable *initInterruptTable(MemoryManager *m, SegmentSelector *kernelCodeSelector, ProcessorLocal *pl){
+	struct InterruptTable *NEW(t, m);
 	t->descriptor = allocateAligned(m, numberOfIntEntries * sizeof(InterruptDescriptor), sizeof(InterruptDescriptor));
-	t->vector = allocate(m, numberOfIntEntries * sizeof(struct InterruptVector));
-	t->asmIntEntry = createAsmIntEntries(m);
+	t->vector = allocateFixedSize(m, numberOfIntEntries * sizeof(struct InterruptVector));
+	t->asmIntEntry = createAsmIntEntries(m, pl);
 	t->length = numberOfIntEntries;
 	t->usedCount = BEGIN_GENERAL_VECTOR;
 	kprintf("number of interrupt handlers = %d\n", t->length);

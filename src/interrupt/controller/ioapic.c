@@ -287,14 +287,14 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	if(offset != madt->header.length){
 		panic("parsing MADT error");
 	}
-	IOAPIC *apic = allocate(m, sizeof(IOAPIC));
+	IOAPIC *NEW(apic, m);
 	apic->this.apic = apic;
 	apic->localCount = typeCount[LOCAL_APIC];
 	apic->ioCount = typeCount[IO_APIC];
 	apic->overrideCount = typeCount[SOURCE_OVERRIDE];
-	apic->local = allocate(m, sizeof(LocalAPICStruct*) * typeCount[LOCAL_APIC]);
-	apic->io = allocate(m, sizeof(struct IOAPICProfile) * typeCount[IO_APIC]);
-	apic->override = allocate(m, sizeof(LocalAPICStruct*) * typeCount[SOURCE_OVERRIDE]);
+	NEW_ARRAY(apic->local, m, typeCount[LOCAL_APIC]);
+	NEW_ARRAY(apic->io, m, typeCount[IO_APIC]);
+	NEW_ARRAY(apic->override, m, typeCount[SOURCE_OVERRIDE]);
 
 	// pass 2: parse tables
 	for(typeIndex = 0; typeIndex < NUMBER_OF_APIC_STRUCT_TYPE; typeIndex++){

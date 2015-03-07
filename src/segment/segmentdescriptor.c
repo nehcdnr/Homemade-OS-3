@@ -30,8 +30,8 @@ struct SegmentTable{
 };
 
 SegmentTable *createSegmentTable(MemoryManager *m, int length){
-	SegmentTable *t = allocate(m, sizeof(SegmentTable));
-	t->selector = allocate(m, length * sizeof(SegmentSelector));
+	SegmentTable *NEW(t, m);
+	NEW(t->selector, m);
 	t->descriptor = allocateAligned(m, length * sizeof(SegmentDescriptor), sizeof(SegmentDescriptor));
 	t->length = length;
 	t->usedCount = 0;
@@ -65,7 +65,7 @@ SegmentSelector *addSegment(
 		flag = 8 + 4;
 	}
 	else{
-		flag = 8;
+		flag = 4;
 	}
 	const int u = t->usedCount;
 	assert(u < t->length);

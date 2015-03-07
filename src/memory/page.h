@@ -1,6 +1,10 @@
 
 typedef struct PageDirectory PageDirectory;
 typedef struct PageTable PageTable;
-PageDirectory *createPageDirectory(MemoryManager* m);
+PageDirectory *createPageDirectory(BlockManager *p);
 
-void set4KBKernelPage(MemoryManager *m, PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress);
+enum PageType{
+	KERNEL_PAGE,
+	USER_PAGE
+};
+void map4KBKernelPage(BlockManager *m, PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress);

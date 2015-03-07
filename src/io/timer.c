@@ -1,4 +1,6 @@
 #include"io.h"
+#include"task/task.h"
+#include"multiprocessor/processorlocal.h"
 #include"memory/memory.h"
 #include"common.h"
 #include"interrupt/handler.h"
@@ -47,7 +49,7 @@ void kernelSleep(TimerEventList *tel, unsigned millisecond){
 }
 
 static void timerHandler(InterruptParam p){
-	kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
+	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
 	endOfInterrupt(p.vector);
 	volatile TimerEvent *volatile *prev = &(((TimerEventList*)p.argument)->head);
 	while(*prev != NULL){
@@ -62,10 +64,13 @@ static void timerHandler(InterruptParam p){
 		}
 	}
 	sti();
+cli();
+	if(p.nestLevel == 0)
+		schedule(p.processorLocal->taskManager, &p);
 }
 
 TimerEventList *createTimer(MemoryManager *m){
-	TimerEventList *tel = allocate(m, sizeof(TimerEventList));
+	TimerEventList *NEW(tel, m);
 	tel->head = NULL;
 	return tel;
 }

@@ -83,7 +83,7 @@ static void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx){
 	);
 }
 
-int cpuid_HasOnChipAPIC(void){
+int cpuid_hasAPIC(void){
 	uint32_t eax, ebx, ecx, edx;
 	eax = 1;
 	ebx = ecx = edx = 0;

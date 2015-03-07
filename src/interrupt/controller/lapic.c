@@ -35,7 +35,7 @@ int isAPICSupported(void){
 		result = 0;
 		return 0;
 	}
-	if(cpuid_HasOnChipAPIC() == 0){
+	if(cpuid_hasAPIC() == 0){
 		kprintf("processor does not support local APIC");
 		result = 0;
 		return 0;
@@ -225,7 +225,7 @@ void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entry
 }
 
 LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t){
-	LAPIC *lapic = allocate(m, sizeof(LAPIC));
+	LAPIC *NEW(lapic, m);
 
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);

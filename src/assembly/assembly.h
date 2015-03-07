@@ -1,4 +1,4 @@
-#include "../std.h"
+#include<std.h>
 
 #define hlt() do{__asm__("hlt\n");}while(0)
 #define cli() do{__asm__("cli\n");}while(0)
@@ -19,7 +19,7 @@ uint32_t xchg(volatile uint32_t *a, uint32_t b);
 uint32_t getEFlags(void);
 
 int cpuid_isSupported(void);
-int cpuid_HasOnChipAPIC(void);
+int cpuid_hasAPIC(void);
 
 enum MSR{
 	IA32_APIC_BASE = 0x1b

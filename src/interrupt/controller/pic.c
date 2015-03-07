@@ -10,11 +10,11 @@ void (*setPICMask)(PIC *pic, enum IRQ irq, int setMask);
 
 // see entry.asm
 volatile uintptr_t *initialESP;
-#define KERNEL_STACK_SIZE (16384)
+#define KERNEL_STACK_SIZE (8192)
 static void wakeupOtherProcessors(MemoryManager *m, LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
 	const uint32_t lapicID = getLAPICID(lapic);
 	const int n = getNumberOfLAPIC(ioapic);
-	initialESP = allocate(m, sizeof(uintptr_t) * n);
+	NEW_ARRAY(initialESP, m, n);
 	int iter = 0;
 	// initialESP[0] = 0x7000; entry.asm
 	for(iter = 0; iter < 3; iter++){
@@ -24,7 +24,7 @@ static void wakeupOtherProcessors(MemoryManager *m, LAPIC *lapic, IOAPIC *ioapic
 			if(target == lapicID)
 				continue;
 			if(iter == 0){
-				initialESP[i] = (uintptr_t)allocate(m, KERNEL_STACK_SIZE);
+				initialESP[i] = (uintptr_t)allocateFixedSize(m, KERNEL_STACK_SIZE);
 				initialESP[i] += KERNEL_STACK_SIZE;
 			}
 			if(iter == 1){
@@ -42,21 +42,36 @@ static void wakeupOtherProcessors(MemoryManager *m, LAPIC *lapic, IOAPIC *ioapic
 	}
 }
 
+static void initIOInterrupt(PIC *pic){
+	replaceKeyboardHandler(irqToVector(pic, KEYBOARD_IRQ));
+	setPICMask(pic, KEYBOARD_IRQ, 0);
+
+	replaceMouseHandler(irqToVector(pic, MOUSE_IRQ));
+	setPICMask(pic, MOUSE_IRQ, 0);
+}
+
 PIC *initPIC(MemoryManager *m, InterruptTable *t, TimerEventList *timer){
-	if(isAPICSupported() == 0){
+	if(isAPICSupported() == 0||1){//XXX
 		PIC8259 *pic8259 = initPIC8259(m, t);
-		return castPIC8259(pic8259);
+		PIC *pic = castPIC8259(pic8259);
+		setTimer8254Frequency(TIMER_FREQUENCY);
+		replaceTimerHandler(timer, irqToVector(pic, TIMER_IRQ));
+		initIOInterrupt(pic);
+		setPICMask(pic, TIMER_IRQ, 0);
+		return pic;
 	}
 
 	LAPIC *lapic = initLocalAPIC(m, t);
 	if(isBSP(lapic)){
 		disablePIC8259();
 		IOAPIC *ioapic = initAPIC(m, t);
+		PIC *pic = castAPIC(ioapic);
 		kprintf("number of processors = %d\n", getNumberOfLAPIC(ioapic));
 		testAndResetLAPICTimer(lapic, ioapic);
 		replaceTimerHandler(timer, getTimerVector(lapic));
+		initIOInterrupt(pic);
 		wakeupOtherProcessors(m, lapic, ioapic, timer);
-		return castAPIC(ioapic);
+		return pic;
 	}
 	else{
 		resetLAPICTimer(lapic);

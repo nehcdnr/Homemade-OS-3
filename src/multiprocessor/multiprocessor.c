@@ -10,24 +10,29 @@ struct Spinlock{
 };
 
 Spinlock *createSpinlock(MemoryManager *m){
-	Spinlock *s = allocate(m, sizeof(Spinlock));
+	Spinlock *NEW(s, m);
 	s->acquirable = 1;
 	s->interruptFlag = 0;
 	return s;
 }
 
 int isAcquirable(Spinlock *spinlock){
+	if(spinlock == nullSpinlock)
+		return 1;
 	return spinlock->acquirable;
 }
 
-void acquireLock(Spinlock *spinlock){
+int acquireLock(Spinlock *spinlock){
+	if(spinlock == nullSpinlock){
+		return 0;
+	}
 	spinlock->interruptFlag = (getEFlags() & EFLAGS_IF);
 	int tryCount = 0;
 	while(1){
 		cli();
 		int acquired = xchg(&spinlock->acquirable, 0);
 		if(acquired)
-			break;
+			return tryCount;
 		if(spinlock->interruptFlag)
 			sti();
 		do{
@@ -38,6 +43,9 @@ void acquireLock(Spinlock *spinlock){
 }
 
 void releaseLock(Spinlock *spinlock){
+	if(spinlock == nullSpinlock){
+		return;
+	}
 	xchg(&spinlock->acquirable, 1);
 	if(spinlock->interruptFlag){
 		sti();

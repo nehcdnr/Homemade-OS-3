@@ -52,32 +52,7 @@ int strcmp(const char *s1, const char *s2){
 	return strcmp2(s1, s2, 0, 0);
 }
 
-static int printString(const char *s){
-	int a;
-	volatile uint16_t *const consoleVideo=(uint16_t*)0xb8000;
-	static int globalCursor = 0;
-	int cursor = globalCursor;
-	static const int maxRow = 25, maxColumn=80;
-	for(a = 0; s[a] != '\0'; a++){
-		if(s[a]=='\n'){
-			cursor = cursor - (cursor % maxColumn) + maxColumn;
-		}
-		else{
-			consoleVideo[cursor] = s[a] + 0x0f00;
-			cursor++;
-		}
-		if(cursor == maxRow * maxColumn){
-			int b;
-			for(b = 0; b < (maxRow - 1) * maxColumn; b++)
-				consoleVideo[b] = consoleVideo[b + maxColumn];
-			for(b = (maxRow - 1) * maxColumn; b < maxRow * maxColumn; b++)
-				consoleVideo[b] = ' ' + 0x0f00;
-			cursor -= maxColumn;
-		}
-	}
-	globalCursor = cursor;
-	return a;
-}
+int printString(const char *s);
 
 static int printHexadecimal(unsigned n){
 	char s[12];

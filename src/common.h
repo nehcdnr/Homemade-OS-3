@@ -2,6 +2,7 @@
 
 // memory.h
 void *memset(void *ptr, unsigned char value, size_t size);
+#define MEMSET0(P) memset((P), 0, sizeof(*(P)))
 void *memcpy(void *dst, const void *src, size_t size);
 
 // string.h
@@ -24,5 +25,5 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define static_assert(A) enum{STRCAT(_ASSERT_,__COUNTER__)=1/(A)}
 
 // other
-#define DIV_CEIL(A ,B) (((A)+(B)-1)/(B))
+#define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
 int kprintf(const char *format, ...);

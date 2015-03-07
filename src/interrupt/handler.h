@@ -2,12 +2,14 @@
 #define HANDLER_H_INCLUDED
 #include<std.h>
 
+typedef struct ProcessorLocal ProcessorLocal;
 typedef struct InterruptVector InterruptVector;
-
 // handler parameter, see interruptentry.asm
 typedef struct InterruptParam{
 	uintptr_t argument; // pushed by os
 	InterruptVector *vector;
+	ProcessorLocal *processorLocal;
+	uint32_t nestLevel;
 	uint32_t
 	gs, fs, es, ds,
 	edi, esi, ebp,
@@ -18,17 +20,18 @@ typedef struct InterruptParam{
 }InterruptParam;
 
 // handler
-void defaultInterruptHandler(volatile InterruptParam param);
+void defaultInterruptHandler(InterruptParam param);
 
-typedef void (*InterruptHandler)(volatile InterruptParam param);
+typedef void (*InterruptHandler)(InterruptParam param);
 typedef struct InterruptTable InterruptTable;
 // vector
 InterruptVector *registerInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg);
 InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount);
 InterruptVector *registerSpuriousInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg);
 void replaceHandler(InterruptVector *v, InterruptHandler *handler, uintptr_t *arg);
+void setHandler(InterruptVector *v, InterruptHandler handler, uintptr_t arg);
 
-extern void (*volatile endOfInterrupt)(InterruptVector *);
+extern void (*endOfInterrupt)(InterruptVector *);
 
 uint8_t toChar(InterruptVector *v);
 int getIRQ(InterruptVector *v);
