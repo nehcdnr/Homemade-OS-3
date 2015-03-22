@@ -96,7 +96,7 @@ static int printCharacter(int c){
 	return printString(t);
 }
 
-int kprintf(const char* format, ...){
+int printk(const char* format, ...){
 	int printCount = 0;
 	va_list argList;
 	va_start(argList, format);
@@ -147,7 +147,7 @@ int kprintf(const char* format, ...){
 }
 
 void printAndHalt(const char *condition, const char *file, int line){
-	kprintf("failure: %s %s %d", condition, file, line);
+	printk("failure: %s %s %d", condition, file, line);
 	while(1)
 		hlt();
 }

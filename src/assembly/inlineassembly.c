@@ -57,7 +57,7 @@ void setCR0(uint32_t value){
 	);
 }
 
-uint8_t in(uint16_t port){
+uint8_t in8(uint16_t port){
 	unsigned char value;
 	__asm__(
 	"in %1, %0\n"
@@ -67,9 +67,17 @@ uint8_t in(uint16_t port){
 	return value;
 }
 
-void out(uint16_t port, uint8_t value){
+void out8(uint16_t port, uint8_t value){
 	__asm__(
 	"out %1, %0\n"
+	:
+	:"d"(port), "a"(value)
+	);
+}
+
+void out16(uint16_t port, uint16_t value){
+	__asm__(
+	"out %1, %0"
 	:
 	:"d"(port), "a"(value)
 	);
@@ -84,11 +92,15 @@ static void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx){
 }
 
 int cpuid_hasAPIC(void){
-	uint32_t eax, ebx, ecx, edx;
-	eax = 1;
-	ebx = ecx = edx = 0;
+	uint32_t eax = 1, ebx = 0, ecx = 0, edx = 0;
 	cpuid(&eax, &ebx, &ecx, &edx);
 	return (edx >> 9) & 1;
+}
+
+int cpuid_getInitialAPICID(){
+	uint32_t eax = 1, ebx = 0, ecx = 0, edx = 0;
+	cpuid(&eax, &ebx, &ecx, &edx);
+	return (ebx >> 24) & 0xff;
 }
 
 void rdmsr(enum MSR ecx, uint32_t *edx,uint32_t *eax){

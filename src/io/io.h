@@ -18,5 +18,10 @@ int printConsole(ConsoleDisplay *cd, const char *s);
 ConsoleDisplay *initKernelConsole(MemoryManager *m);
 
 // keyboard.c
-void replaceKeyboardHandler(InterruptVector *v);
-void replaceMouseHandler(InterruptVector *v);
+typedef struct TaskManager TaskManager;
+void initPS2Driver(
+	InterruptVector *keyboardVector,
+	InterruptVector *mouseVector,
+	MemoryManager *m,
+	TaskManager *tm
+);

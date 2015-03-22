@@ -26,7 +26,7 @@ int acquireLock(Spinlock *spinlock){
 	if(spinlock == nullSpinlock){
 		return 0;
 	}
-	spinlock->interruptFlag = (getEFlags() & EFLAGS_IF);
+	spinlock->interruptFlag = (getEFlags().bit.interrupt);
 	int tryCount = 0;
 	while(1){
 		cli();

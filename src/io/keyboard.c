@@ -1,7 +1,10 @@
 #include"interrupt/handler.h"
 #include"assembly/assembly.h"
-#include"io/io.h"
+#include"interrupt/systemcall.h"
+#include"io.h"
+#include"task/task.h"
 #include"common.h"
+#include"fifo.h"
 
 static void mouseInput(uint8_t newData){
 	static int state = 0;
@@ -21,7 +24,7 @@ static void mouseInput(uint8_t newData){
 	if(data[0] & 128){ // y overflow
 		dy = (data[0] & 32? -128: 128);
 	}
-	kprintf("%x %x %d %d\n", pressed, released, dx,dy);
+	printk("%x %x %d %d\n", pressed, released, dx,dy);
 	prev0 = data[0];
 	state = 0;
 }
@@ -135,10 +138,12 @@ static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
 }
 
 static void keyboardInput(uint8_t newData){
-	//int
 	int release = 0;
 	unsigned int key = scanCodeToKey(newData, &release);
-	kprintf("%x %d %d\n",newData, key, release);
+	if(key != NO_KEY && key < 128 && release == 0){
+		printk("%c", key);
+	}
+	//printk("%x %d %d\n",newData, key, release);
 
 }
 
@@ -149,24 +154,44 @@ static void keyboardInput(uint8_t newData){
 #define WRITABLE_FLAG (2)
 #define DATA_FROM_MOUSE_FLAG (32)
 static int isReadable(void){
-	return in(PS2_CMD_PORT) & READABLE_FLAG;
+	return in8(PS2_CMD_PORT) & READABLE_FLAG;
 }
 
 static uint8_t readData(void){
-	return in(PS2_DATA_PORT);
+	return in8(PS2_DATA_PORT);
 }
 
 static void writeData(uint16_t port, uint8_t data){
-	while(in(PS2_CMD_PORT) & WRITABLE_FLAG);
-	out(port, data);
+	while(in8(PS2_CMD_PORT) & WRITABLE_FLAG);
+	out8(port, data);
 }
 
-static void ps2Handler(InterruptParam p){
-	// uintptr_t isMouse = p.argument;
-	// kprintf("kb interrupt %d, isMouse = %d\n", toChar(p.vector), isMouse);
-	uint8_t status = in(PS2_CMD_PORT);
+struct{
+	FIFO *fifo;
+	Task *driver;
+}ps2Param = {NULL, NULL};
+
+static void ps2Handler(InterruptParam *p){
+	uintptr_t status = in8(PS2_CMD_PORT);
 	if((status & READABLE_FLAG) != 0){
-		uint8_t data = readData();
+		uintptr_t data = readData();
+		FIFO *fifo = (FIFO*)(p->argument);
+		writeFIFO(fifo, (status | (data << 8)));
+	}
+	resume(ps2Param.driver);
+	endOfInterrupt(p);
+	sti();
+}
+
+static void ps2Driver(void){
+	while(1){
+		uintptr_t ds;
+		uint8_t data, status;
+		while(readFIFO(ps2Param.fifo, &ds) == 0){
+			systemCall(SYSCALL_SUSPEND);
+		}
+		data = ((ds >> 8) & 0xff);
+		status = (ds & 0xff);
 		if(status & DATA_FROM_MOUSE_FLAG){
 			mouseInput(data);
 		}
@@ -174,8 +199,6 @@ static void ps2Handler(InterruptParam p){
 			keyboardInput(data);
 		}
 	}
-	endOfInterrupt(p.vector);
-	sti();
 }
 
 static void initMouse(void){
@@ -195,30 +218,35 @@ static void initMouse(void){
 	}
 }
 
-void replaceMouseHandler(InterruptVector *v){
+static void initKeyboard(void){
+	int i;
+	for(i = 0; i < 256; i++){
+		scan1ToKey[i] = NO_KEY;
+		scanE0ToKey[i] = NO_KEY;
+	}
+	for(i = 0; scan1[i][0] != 0; i++){
+		scan1ToKey[scan1[i][1]] = scan1[i][0];
+	}
+	for(i = 0; scanE0[i][0] != 0; i++){
+		scanE0ToKey[scanE0[i][1]] = scanE0[i][0];
+	}
+}
+
+void initPS2Driver(
+	InterruptVector *keyboardVector,
+	InterruptVector *mouseVector,
+	MemoryManager *m,
+	TaskManager *tm
+){
 	static int needInit = 1;
 	if(needInit){
 		needInit = 0;
 		initMouse();
+		initKeyboard();
+		ps2Param.fifo = createFIFO(m, 64);
+		ps2Param.driver = createKernelTask(tm, ps2Driver);
+    resume(ps2Param.driver);
 	}
-
-	setHandler(v, ps2Handler, 1);
-}
-
-void replaceKeyboardHandler(InterruptVector *v){
-	static int needInit = 1;
-	if(needInit){
-		int i;
-		for(i = 0; i < 256; i++){
-			scan1ToKey[i] = NO_KEY;
-			scanE0ToKey[i] = NO_KEY;
-		}
-		for(i = 0; scan1[i][0] != 0; i++){
-			scan1ToKey[scan1[i][1]] = scan1[i][0];
-		}
-		for(i = 0; scanE0[i][0] != 0; i++){
-			scanE0ToKey[scanE0[i][1]] = scanE0[i][0];
-		}
-	}
-	setHandler(v, ps2Handler, 0);
+	setHandler(mouseVector, ps2Handler, (uintptr_t)ps2Param.fifo);
+	setHandler(keyboardVector, ps2Handler, (uintptr_t)ps2Param.fifo);
 }

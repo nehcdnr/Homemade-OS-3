@@ -22,12 +22,12 @@ enum{
 	S_OCW2 = 0xa0,
 };
 
-static void eoi8259(InterruptVector *v){
-	int irq = getIRQ(v);
+static void eoi8259(InterruptParam *p){
+	int irq = getIRQ(p->vector);
 	assert(irq >= 0 && irq < 16);
 	if(irq >= 8)
-		out(S_OCW2, 0x20);
-	out(M_OCW2, 0x20);
+		out8(S_OCW2, 0x20);
+	out8(M_OCW2, 0x20);
 }
 
 typedef struct PIC8259{
@@ -45,7 +45,7 @@ static void setPIC8259Mask(PIC *pic, enum IRQ irq, int setMask){
 		(*mask) |= (1 << i);
 	else
 		(*mask) &= (0xff ^ (1 << i));
-	out((irq < 8? M_OCW1: S_OCW1), *mask);
+	out8((irq < 8? M_OCW1: S_OCW1), *mask);
 }
 
 static InterruptVector *PIC8259IRQToVector(PIC *pic, enum IRQ irq){
@@ -55,21 +55,21 @@ static InterruptVector *PIC8259IRQToVector(PIC *pic, enum IRQ irq){
 
 static void resetPIC8259(uint8_t vectorBase){
 	// mask all
-	out(M_OCW1, 0xff);
-	out(S_OCW1, 0xff);
+	out8(M_OCW1, 0xff);
+	out8(S_OCW1, 0xff);
 	// master
-	out(M_ICW1, 0x11);
-	out(M_ICW2, vectorBase);
-	out(M_ICW3, 1<<2);
-	out(M_ICW4, 1);
+	out8(M_ICW1, 0x11);
+	out8(M_ICW2, vectorBase);
+	out8(M_ICW3, 1<<2);
+	out8(M_ICW4, 1);
 	// slave
-	out(S_ICW1, 0x11);
-	out(S_ICW2, vectorBase + 8);
-	out(S_ICW3, 2);
-	out(S_ICW4, 1);
+	out8(S_ICW1, 0x11);
+	out8(S_ICW2, vectorBase + 8);
+	out8(S_ICW3, 2);
+	out8(S_ICW4, 1);
 
-	out(M_OCW1, 0xff);
-	out(S_OCW1, 0xff);
+	out8(M_OCW1, 0xff);
+	out8(S_OCW1, 0xff);
 }
 
 void disablePIC8259(void){
@@ -88,7 +88,7 @@ PIC8259 *initPIC8259(struct MemoryManager *m, InterruptTable *t){
 	setPICMask = setPIC8259Mask;
 
 	endOfInterrupt = eoi8259;
-	kprintf("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
+	printk("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
 	return pic;
 }
 

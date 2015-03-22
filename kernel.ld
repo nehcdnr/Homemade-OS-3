@@ -5,7 +5,7 @@ SECTIONS{
 	.text : {*(.text)}
 	.rdata : {*(.rdata)}
 	.data : {*(.data)}
-
-	.drectve : {*(.drectve)}
 	.bss : {*(.bss)}
+	.drectve : {*(.drectve)}
+
 }

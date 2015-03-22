@@ -19,7 +19,7 @@ struct TimerEventList{
 };
 
 static void addTimerEvent(TimerEventList* tel, volatile TimerEvent *te){
-	int intFlag = (getEFlags() & EFLAGS_IF);
+	int intFlag = (getEFlags().bit.interrupt);
 	if(intFlag)
 	cli();
 	if(te->waitTicks <= 0){
@@ -48,10 +48,10 @@ void kernelSleep(TimerEventList *tel, unsigned millisecond){
 	}
 }
 
-static void timerHandler(InterruptParam p){
+static void timerHandler(InterruptParam *p){
 	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
-	endOfInterrupt(p.vector);
-	volatile TimerEvent *volatile *prev = &(((TimerEventList*)p.argument)->head);
+	endOfInterrupt(p);
+	volatile TimerEvent *volatile *prev = &(((TimerEventList*)p->argument)->head);
 	while(*prev != NULL){
 		volatile TimerEvent *curr = *prev;
 		curr->waitTicks--;
@@ -63,10 +63,8 @@ static void timerHandler(InterruptParam p){
 			prev = &(curr->nextEvent);
 		}
 	}
+	schedule(p->processorLocal->taskManager);
 	sti();
-cli();
-	if(p.nestLevel == 0)
-		schedule(p.processorLocal->taskManager, &p);
 }
 
 TimerEventList *createTimer(MemoryManager *m){

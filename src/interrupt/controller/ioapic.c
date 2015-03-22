@@ -1,3 +1,4 @@
+#include <io/bios.h>
 #include"pic.h"
 #include"pic_private.h"
 #include"interrupt/interrupt.h"
@@ -112,38 +113,6 @@ static_assert(sizeof(LocalNonMaskableStruct) == 6);
 static_assert((size_t)(&((LocalNonMaskableStruct*)0)->localAPICLINT) == 5);
 
 static_assert(sizeof(enum APICStructureType) == 1);
-
-#define DEFAULT_EBDA_BEGIN (0x9fc00)
-#define EBDA_END (0xa0000)
-static uintptr_t findAddressOfEBDA(void){
-	uintptr_t address = ((*(uint16_t*)0x40e)<<4);
-	if(address >= EBDA_END || address < 0x80000){
-		kprintf("suspicious EBDA address: %x\n", address);
-		address = DEFAULT_EBDA_BEGIN;
-	}
-	kprintf("address of EBDA = %x\n", address);
-	return address;
-}
-
-static uint8_t checksum(const void *data, size_t size){
-	const uint8_t *d = (const uint8_t*)data;
-	uint8_t sum = 0;
-	while(size--){
-		sum+=*d;
-		d++;
-	}
-	return sum;
-}
-
-static void *searchString(const char *string, uintptr_t beginAddress, uintptr_t endAddress){
-	uintptr_t a;
-	uintptr_t b = strlen(string);
-	for(a = beginAddress; a + b <= endAddress; a++){
-		if(strncmp(string, (char*)a, b) == 0)
-			return (void*)a;
-	}
-	return NULL;
-}
 
 struct IOAPIC{
 	PIC this;
@@ -269,7 +238,7 @@ uint32_t getLAPICIDByIndex(IOAPIC *ioapic, int index){
 }
 
 static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
-	kprintf("MADT total size = %d\n",madt->header.length);
+	printk("MADT total size = %d\n",madt->header.length);
 	size_t offset;
 	// pass 1: count tables of different types
 	int typeCount[NUMBER_OF_APIC_STRUCT_TYPE];
@@ -334,7 +303,7 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 			}*/
 			break;
 		default:
-			kprintf("unknown interrupt controller of type %d at offset %d in MADT\n",
+			printk("unknown interrupt controller of type %d at offset %d in MADT\n",
 			icsHeader->type, offset - icsHeader->length);
 			break;
 		}
@@ -342,40 +311,26 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	return apic;
 }
 
-static RSDP *searchRSDP(uintptr_t searchBegin, uintptr_t searchEnd){
-	RSDP *rsdp = NULL;
-	while(rsdp == NULL){
-		rsdp = searchString("RSD PTR ", searchBegin, searchEnd);
-		if(rsdp == NULL)
-			break;
-		if(checksum((uint8_t*)rsdp, RSDP_REVISION_0_SIZE) != 0){
-			searchBegin = 1 + (uintptr_t)rsdp;
-			rsdp = NULL;
-		}
-	}
-	return rsdp;
-}
-
 static const RSDT *findRSDT(void){
 	const RSDP *rsdp = NULL;
 	if(rsdp == NULL)
-		rsdp = searchRSDP(findAddressOfEBDA(), EBDA_END);
+		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ", findAddressOfEBDA(), EBDA_END);
 	if(rsdp == NULL)
-		rsdp = searchRSDP(0xe0000, 0x100000);
+		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ", 0xe0000, 0x100000);
 	if(rsdp == NULL){
 		return NULL;
 	}
-	kprintf("found Root System Description Pointer at %x\n", rsdp);
-	kprintf("RSDP version = %d\n", rsdp->revision);
+	printk("found Root System Description Pointer at %x\n", rsdp);
+	printk("RSDP version = %d\n", rsdp->revision);
 	if(rsdp->revision == 2){
-		kprintf("RSDP length = %u, xsdt address = %x:%x\n",
+		printk("RSDP length = %u, xsdt address = %x:%x\n",
 		rsdp->length,
 		rsdp->xsdtAddress_32_64, rsdp->xsdtAddress_0_32);
-		kprintf("warning: long mode and ACPI 2.0 are not supported\n");
+		printk("warning: long mode and ACPI 2.0 are not supported\n");
 	}
 	const RSDT * rsdt = rsdp->rsdtAddress;
 	if(strncmp(rsdt->header.signature, "RSDT", 4) != 0){
-		kprintf("bad RSDT signature\n");
+		printk("bad RSDT signature\n");
 	}
 	if(checksum(rsdt, rsdt->header.length) != 0){
 		panic("bad RSDT checksum");

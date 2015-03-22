@@ -1,14 +1,14 @@
 #include"interrupt/handler.h"
 #include"interrupt.h"
+#include"internalinterrupt.h"
+#include"segment/segment.h"
 #include"controller/pic_private.h"
 #include"common.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
+#include"systemcall.h"
 
-// miss a timer interrupt if 8259 irq 0 is not mapped to vector 32
-#define SPURIOUS_VECTOR (127)
-#define BEGIN_GENERAL_VECTOR (32)
-#define END_GENERAL_VECTOR (127)
+static_assert((SPURIOUS_INTERRUPT & 0xf) == 0xf);
 
 typedef struct{
 	uint16_t handler_0_16;
@@ -17,7 +17,7 @@ typedef struct{
 	uint8_t gateType: 3;
 	uint8_t bit32: 1;
 	uint8_t reserved2: 1;
-	uint8_t privilege: 2;
+	uint8_t privilege: 2; // maximum ring number of caller
 	uint8_t present: 1;
 	uint16_t handler_16_32;
 }InterruptDescriptor;
@@ -65,21 +65,45 @@ static AsmIntEntry *createAsmIntEntries(MemoryManager *m, ProcessorLocal *p){
 	return e;
 }
 
-void defaultInterruptHandler(volatile InterruptParam param){
-	kprintf("unhandled interrupt %d parameter = %x\n", toChar(param.vector), param.argument);
-	kprintf("cs=%u , ds=%u , error=%u, eip=%u, eflags=%x eax=%x\n",
-	param.cs, param.ds, param.errorCode, param.eip, param.eflags, param.eax);
+void defaultInterruptHandler(InterruptParam *param){
+	printk("unhandled interrupt %d parameter = %x\n", toChar(param->vector), param->argument);
+	printk("ds=%u, eax=%x, error=%u, eip=%u, cs=%u, eflags=%x\n",
+	param->regs.ds, param->regs.eax, param->errorCode, param->eip, param->cs, param->eflags.value);
 	panic("unhandled interrupt");
 	sti();
 }
 
-InterruptVector *registerInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg){
+// miss a timer interrupt if 8259 irq 0 is not mapped to vector 32
+InterruptVector *registerGeneralInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg){
 	assert(t->usedCount < t->length && t->usedCount < END_GENERAL_VECTOR);
 	t->asmIntEntry[t->usedCount].handler = handler;
-	t->asmIntEntry[SPURIOUS_VECTOR].arg = arg;
+	t->asmIntEntry[SPURIOUS_INTERRUPT].arg = arg;
 	t->vector[t->usedCount].irq = INVALID_IRQ;
 	t->usedCount++;
 	return t->vector + t->usedCount - 1;
+}
+
+InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
+	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount < END_GENERAL_VECTOR);
+	int i;
+	for(i = 0; i < irqCount; i++){
+		t->vector[t->usedCount + i].irq = irqBegin + i;
+	}
+	t->usedCount += irqCount;
+	return t->vector + t->usedCount - irqCount;
+}
+
+InterruptVector *registerInterrupt(
+	InterruptTable *t,
+	enum ReservedInterruptVector i,
+	InterruptHandler handler,
+	uintptr_t arg
+){
+	assert(((int)i) < t->length);
+	t->vector[i].irq = INVALID_IRQ;
+	t->asmIntEntry[i].handler = handler;
+	t->asmIntEntry[i].arg = arg;
+	return t->vector + i;
 }
 
 void replaceHandler(InterruptVector *vector, InterruptHandler *handler, uintptr_t *arg){
@@ -98,27 +122,16 @@ void setHandler(InterruptVector *vector, InterruptHandler handler, uintptr_t arg
 	replaceHandler(vector, &handler, &arg);
 }
 
-InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
-	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount < END_GENERAL_VECTOR);
-	int i;
-	for(i = 0; i < irqCount; i++){
-		t->vector[t->usedCount + i].irq = irqBegin + i;
-	}
-	t->usedCount += irqCount;
-	return t->vector + t->usedCount - irqCount;
-}
-
 InterruptVector *getVector(InterruptVector *base, int irq){
 	return base + irq;
 }
 
-static_assert((SPURIOUS_VECTOR & 0xf) == 0xf);
-InterruptVector *registerSpuriousInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg){
-	assert(SPURIOUS_VECTOR < t->length);
-	t->vector[SPURIOUS_VECTOR].irq = INVALID_IRQ;
-	t->asmIntEntry[SPURIOUS_VECTOR].handler = handler;
-	t->asmIntEntry[SPURIOUS_VECTOR].arg = arg;
-	return t->vector + SPURIOUS_VECTOR;
+void systemCall(enum SystemCall eax){
+	__asm__(
+	"int $"SYSTEM_CALL_VECTOR_STRING
+	:
+	:"a"(eax)
+	);
 }
 
 uint8_t toChar(InterruptVector *v){
@@ -131,24 +144,24 @@ int getIRQ(InterruptVector *v){
 }
 
 // end of interrupt
-static void noEOI(InterruptVector *v){
-	kprintf("noEOI(vector = %d)\n", toChar(v));
+static void noEOI(InterruptParam *p){
+	printk("noEOI(vector = %d)\n", toChar(p->vector));
 	panic("EOI not registered");
 }
 
-void (*endOfInterrupt)(InterruptVector*) = noEOI;
+void (*endOfInterrupt)(InterruptParam *p) = noEOI;
 
 // segmentdescriptor.h
 uint16_t toShort(SegmentSelector* s);
 
-InterruptTable *initInterruptTable(MemoryManager *m, SegmentSelector *kernelCodeSelector, ProcessorLocal *pl){
+InterruptTable *initInterruptTable(MemoryManager *m, SegmentTable *gdt, ProcessorLocal *pl){
 	struct InterruptTable *NEW(t, m);
 	t->descriptor = allocateAligned(m, numberOfIntEntries * sizeof(InterruptDescriptor), sizeof(InterruptDescriptor));
 	t->vector = allocateFixedSize(m, numberOfIntEntries * sizeof(struct InterruptVector));
 	t->asmIntEntry = createAsmIntEntries(m, pl);
 	t->length = numberOfIntEntries;
 	t->usedCount = BEGIN_GENERAL_VECTOR;
-	kprintf("number of interrupt handlers = %d\n", t->length);
+	printk("number of interrupt handlers = %d\n", t->length);
 
 	int i;
 	for(i = 0; i < t->length; i++){
@@ -163,7 +176,7 @@ InterruptTable *initInterruptTable(MemoryManager *m, SegmentSelector *kernelCode
 
 		d->handler_0_16 =  ((entryAddress >> 0) & 0xffff);
 		d->handler_16_32 = ((entryAddress >> 16) & 0xffff);
-		d->segmentSelector = toShort(kernelCodeSelector);
+		d->segmentSelector = toShort(getKernelCodeSelector(gdt));
 		d->reserved = 0;
 		d->gateType = 6;
 		d->bit32 = 1;
@@ -171,7 +184,16 @@ InterruptTable *initInterruptTable(MemoryManager *m, SegmentSelector *kernelCode
 		d->privilege = 0;
 		d->present = 1;
 	}
+	initInternalInterrupt(t);
 	return t;
+}
+
+void callHandler(InterruptTable *t, uint8_t intNumber, InterruptParam *p){
+	assert(intNumber < t->length);
+	InterruptVector *originalVector = p->vector;
+	p->vector = t->vector + intNumber;
+	t->asmIntEntry[intNumber].handler(p);
+	p->vector = originalVector;
 }
 
 void lidt(InterruptTable *idt){

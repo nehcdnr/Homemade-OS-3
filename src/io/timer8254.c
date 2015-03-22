@@ -17,7 +17,7 @@ void setTimer8254Frequency(unsigned frequency){
 	*/
 	const unsigned period = (1193182 + frequency / 2) / frequency;
 	assert(period < 65536);
-	out(TIMER_COMMAND, 0x34);
-	out(TIMER_DATA0, period & 255);
-	out(TIMER_DATA0, (period / 256) & 255);
+	out8(TIMER_COMMAND, 0x34);
+	out8(TIMER_DATA0, period & 255);
+	out8(TIMER_DATA0, (period / 256) & 255);
 }

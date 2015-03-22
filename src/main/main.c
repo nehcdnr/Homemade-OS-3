@@ -1,6 +1,7 @@
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"interrupt/interrupt.h"
+#include"interrupt/systemcall.h"
 #include"interrupt/controller/pic.h"
 #include"common.h"
 #include"memory/memory.h"
@@ -8,6 +9,7 @@
 #include"task/task.h"
 #include"assembly/assembly.h"
 #include"io/io.h"
+#include"io/bios.h"
 
 void bspEntry(void);
 void apEntry(void);
@@ -18,9 +20,9 @@ static BlockManager *block = NULL;
 void bspEntry(void){
 	// 1. memory
 	memory = initKernelMemoryManager();
-	// 2. kprintf
-	initKernelConsole(memory);
+	// 2. printk
 	block = initKernelBlockManager(memory);
+	initKernelConsole(memory);
 	//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
 	apEntry();
 }
@@ -28,31 +30,31 @@ void bspEntry(void){
 void apEntry(void){
 	ProcessorLocal *NEW(local, memory);
 	// 3. GDT
-	SegmentTable *gdt = createSegmentTable(memory, 4);
-	SegmentSelector *codeSegment, *dataSegment;
-	setSegment0(gdt);
-	codeSegment = addSegment(gdt, 0, 0xffffffff, KERNEL_CODE);
-	dataSegment = addSegment(gdt, 0, 0xffffffff, KERNEL_DATA);
-	// 4. task
-	local->taskManager = createTaskManager(memory, block, gdt, dataSegment, getEBP());
-	loadgdt(gdt, codeSegment, dataSegment);
-	loadTaskRegister(local->taskManager);
-	// 5. IDT
-	InterruptTable *idt = initInterruptTable(memory, codeSegment, local);
-	lidt(idt);
-	// 6. PIC
-	initPIC(memory, idt, createTimer(memory));
+	SegmentTable *gdt = createSegmentTable(memory);
+	loadgdt(gdt);
+	// 4. IDT
+	local->idt = initInterruptTable(memory, gdt, local);
+	lidt(local->idt);
+	// 5. system call & exception
+	SystemCallTable *systemCall = initSystemCall(memory, local->idt);
+	// 6. task
+	local->taskManager = createTaskManager(memory, systemCall, block, gdt);
+	initBIOSTask(memory, local->taskManager);
+	// 7. PIC
+	initPIC(memory, local->idt, createTimer(memory), local);
 	//initMultiprocessor();
-kprintf("kernel memory usage: %u\n", getAllocatedSize(memory));
-kprintf("start accepting interrupt...\n");
+printk("kernel memory usage: %u\n", getAllocatedSize(memory));
+printk("start accepting interrupt...\n");
+
 	sti();
-	kprintf("halt...\n");
+	printk("halt...\n");
 	/*
 	kprintf("start sleeping\n");
 	kernelSleep(10000);
 	kprintf("end sleeping\n");
 	*/
 	while(1){
+		//printk("main %d\n", cpuid_getInitialAPICID());
 		hlt();
 	}
 }

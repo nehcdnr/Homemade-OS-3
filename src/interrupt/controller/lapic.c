@@ -6,14 +6,14 @@
 #include"common.h"
 #include"memory/memory.h"
 #include"assembly/assembly.h"
-enum APIC_REGISTER_OFFSET{
-	LVT_TIMER = 0x320,
+enum APICRegisterOffset{
+	LVT_TIMER_VECTOR = 0x320,
 	TIMER_DIVIDE = 0x3e0,
 	TIMER_INITIAL_COUNT = 0x380,
 	TIMER_CURRENT_COUNT = 0x390,
 	END_OF_INTERRUPT = 0x0b0,
-	SPURIOUS_INTERRUPT = 0x0f0,
-	LVT_ERROR = 0x370,
+	SPURIOUS_VECTOR = 0x0f0,
+	LVT_ERROR_VECTOR = 0x370,
 	ICR_LOW = 0x300,
 	ICR_HIGH = 0x310,
 	LAPIC_ID = 0x020,
@@ -31,12 +31,12 @@ int isAPICSupported(void){
 	if(result != 2)
 		return result;
 	if(cpuid_isSupported() == 0){
-		kprintf("processor does not support CPUID");
+		printk("processor does not support CPUID");
 		result = 0;
 		return 0;
 	}
 	if(cpuid_hasAPIC() == 0){
-		kprintf("processor does not support local APIC");
+		printk("processor does not support local APIC");
 		result = 0;
 		return 0;
 	}
@@ -44,54 +44,49 @@ int isAPICSupported(void){
 	return result;
 }
 
-static void apicEOI(__attribute__((__unused__)) InterruptVector *v){
-	MemoryMappedRegister eoi = (MemoryMappedRegister)(apicBase + END_OF_INTERRUPT); //TODO: parameterize
-	*eoi = 0;
-}
-
-static void apicSpuriousHandler(InterruptParam param){
-	kprintf("spurious interrupt on processor %u\n", param.argument);
+static void apicSpuriousHandler(InterruptParam *param){
+	printk("spurious interrupt on processor %u\n", param->argument);
 	// sti();
 	// not eoi
 }
 
 static InterruptVector *registerAPICSpurious(const uintptr_t base, const uint32_t lapicID, InterruptTable *t){
-	MemoryMappedRegister svr = (MemoryMappedRegister)(base + SPURIOUS_INTERRUPT);
-	kprintf("SVR = %x\n", *svr);
+	MemoryMappedRegister svr = (MemoryMappedRegister)(base + SPURIOUS_VECTOR);
+	printk("SVR = %x\n", *svr);
 
-	InterruptVector *vector = registerSpuriousInterrupt(t, apicSpuriousHandler, (uintptr_t)lapicID);
+	InterruptVector *vector = registerInterrupt(t, SPURIOUS_INTERRUPT, apicSpuriousHandler, (uintptr_t)lapicID);
 	if(((*svr) & (1 << 8)) == 0){
-		kprintf("enable APIC in SVR\n");
+		printk("enable APIC in SVR\n");
 	}
 	*svr = (((*svr) & (~0x000001ff)) | 0x00000100 | toChar(vector));
 	return vector;
 }
 
-static void apicErrorHandler(InterruptParam p){
-	kprintf("APIC error on processor %u\n", toChar(p.vector), p.argument);
-	endOfInterrupt(p.vector);
+static void apicErrorHandler(InterruptParam *p){
+	printk("APIC error on processor %u\n", toChar(p->vector), p->argument);
+	endOfInterrupt(p);
 	panic("APIC error");
 	sti();
 }
 
 static InterruptVector *registerAPICError(const uintptr_t base, uint32_t lapicID, InterruptTable *t){
-	MemoryMappedRegister lvt_error = (MemoryMappedRegister)(base + LVT_ERROR);
-	InterruptVector *errorVector = registerInterrupt(t, apicErrorHandler, (uintptr_t)lapicID);
+	MemoryMappedRegister lvt_error = (MemoryMappedRegister)(base + LVT_ERROR_VECTOR);
+	InterruptVector *errorVector = registerGeneralInterrupt(t, apicErrorHandler, (uintptr_t)lapicID);
 	*lvt_error = (((*lvt_error) & (~0x000100ff)) /*| 0x00010000*/ | toChar(errorVector));
 	return errorVector;
 }
 
 static volatile uint32_t sleepTicks;
-static void tempSleepHandler(InterruptParam p){
+static void tempSleepHandler(InterruptParam *p){
 	sleepTicks++;
-	endOfInterrupt(p.vector);
+	endOfInterrupt(p);
 	//sti();
 }
 
 static InterruptVector *registerAPICTimer(const uintptr_t base, InterruptTable *t){
-	MemoryMappedRegister lvt_timer = (MemoryMappedRegister)(base + LVT_TIMER);
+	MemoryMappedRegister lvt_timer = (MemoryMappedRegister)(base + LVT_TIMER_VECTOR);
 	// mask timer interrupt and set vector
-	InterruptVector *timerVector = registerInterrupt(t, defaultInterruptHandler, 0);
+	InterruptVector *timerVector = registerGeneralInterrupt(t, defaultInterruptHandler, 0);
 	*lvt_timer = (((*lvt_timer) & (~0x000700ff)) | 0x00020000 | toChar(timerVector));
 	return timerVector;
 }
@@ -184,7 +179,7 @@ static uint32_t testLAPICTimerFrequency(const uintptr_t base, const uint32_t tic
 
 void testAndResetLAPICTimer(LAPIC *lapic, IOAPIC *ioapic){
 	MemoryMappedRegister
-	lvt_timer = (MemoryMappedRegister)(lapic->base + LVT_TIMER),
+	lvt_timer = (MemoryMappedRegister)(lapic->base + LVT_TIMER_VECTOR),
 	timer_divide = (MemoryMappedRegister)(lapic->base + TIMER_DIVIDE),
 	timer_initialCnt = (MemoryMappedRegister)(lapic->base + TIMER_INITIAL_COUNT);
 	// 1. mask timer interrupt
@@ -224,20 +219,26 @@ void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entry
 	deliverIPI(lapic->base, targetLAPICID, STARTUP, (entryAddress >> 12));
 }
 
-LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t){
+static void apicEOI(InterruptParam *p){
+	MemoryMappedRegister eoi =
+	(MemoryMappedRegister)(p->processorLocal->lapic->base + END_OF_INTERRUPT);
+	*eoi = 0;
+}
+
+LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t, ProcessorLocal *pl){
 	LAPIC *NEW(lapic, m);
 
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);
-	kprintf("IA32_APIC_BASE MSR = %x:%x\n", edx, eax);
+	printk("IA32_APIC_BASE MSR = %x:%x\n", edx, eax);
 	if((edx & 0xf) != 0 || (eax & 0xfffff000) != apicBase){
-		kprintf("relocate apic base address to %x", apicBase);
+		printk("relocate apic base address to %x", apicBase);
 		edx = (edx & ~0xf);
 		eax = ((eax & ~0xfffff000) | apicBase);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
 	if(((eax >> 11) & 1) == 0){ // is APIC enabled
-		kprintf("enable APIC\n");
+		printk("enable APIC\n");
 		eax |= (1 << 11);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
@@ -250,5 +251,7 @@ LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t){
 	lapic->spuriousVector = registerAPICSpurious(lapic->base, lapic->lapicID, t);
 	lapic->errorVector = registerAPICError(lapic->base, lapic->lapicID, t);
 	lapic->timerVector = registerAPICTimer(lapic->base, t);
+
+	pl->lapic = lapic;
 	return lapic;
 }

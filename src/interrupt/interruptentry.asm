@@ -40,7 +40,7 @@ nestLevel:
 %assign n 0
 %rep NUMBER_OF_HANDLERS
 entry%[n]:
-%if n!=8 && n!=10 && n!=11 && n!=13 && n!=14 && n!=17
+%if n!=8 && n!=10 && n!=11 && n!=12 && n!=13 && n!=14 && n!=17
 	push DWORD 0 ; for interrupt without error code
 %endif
 	push eax
@@ -52,7 +52,7 @@ entry%[n]:
 getBase:
 	db 0xba ; opcode: mov edx, ...
 baseAddressData:
-	dd 0x90909090 ; operand: ... 0x90909090
+	dd intEntrySetBegin ; operand: ... intEntrySetBegin
 	ret
 
 generalEntry:
@@ -70,6 +70,11 @@ generalEntry:
 	; mov WORD [esp + 2], 0
 	push gs
 	; mov WORD [esp + 2], 0
+	mov bx, ss
+	mov ds, bx
+	mov es, bx
+	mov fs, bx
+	mov gs, bx
 
 	call getBase
 	add eax, edx
@@ -78,14 +83,17 @@ generalEntry:
 	push DWORD [edx + processorLocal - intEntrySetBegin]
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
-
+	mov edx, esp
+	push edx ; & InterruptParam
 	call [eax + 4] ; handler
-
-	add esp, 16
 
 	call getBase
 	cli
 	sub DWORD [edx + nestLevel - intEntrySetBegin], 1
+; see task.h
+global _startVirtual8086Mode
+_startVirtual8086Mode:
+	add esp, 20
 	pop gs
 	pop fs
 	pop es

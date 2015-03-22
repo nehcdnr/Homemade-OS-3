@@ -1,4 +1,5 @@
 #include"interrupt/handler.h"
+#include"multiprocessor/processorlocal.h"
 
 // interruptdescriptor.c
 InterruptVector *getVector(InterruptVector *base, int irq);
@@ -30,7 +31,7 @@ PIC *castAPIC(IOAPIC *apic);
 
 // local APIC
 typedef struct LAPIC LAPIC;
-LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t);
+LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t, ProcessorLocal *pl);
 InterruptVector *getTimerVector(LAPIC *lapic);
 int isBSP(LAPIC *lapic);
 uint32_t getLAPICID(LAPIC *lapic);

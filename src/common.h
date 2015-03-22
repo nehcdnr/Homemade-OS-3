@@ -12,10 +12,17 @@ int strncmp(const char *s1, const char *s2, int n);
 
 // assert.h
 void printAndHalt(const char *condition, const char *file, int line);
-#define TO_STRING(A) #A
+#define _TO_STRING(A) #A
+#define TO_STRING(A) _TO_STRING(A)
 #define _STRCAT(A,B) A##B
 #define STRCAT(A,B) _STRCAT(A,B)
-#define panic(A) printAndHalt((A), __FILE__, __LINE__)
+
+// eclipse error
+#ifndef __BASE_FILE__
+#define __BASE_FILE__ ""
+#endif
+
+#define panic(A) printAndHalt((A), __BASE_FILE__, __LINE__)
 #ifndef NDEBUG
 	#define assert(A) do{if(!(A)){panic(TO_STRING(A));}}while(0)
 #else
@@ -26,4 +33,4 @@ void printAndHalt(const char *condition, const char *file, int line);
 
 // other
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
-int kprintf(const char *format, ...);
+int printk(const char *format, ...);

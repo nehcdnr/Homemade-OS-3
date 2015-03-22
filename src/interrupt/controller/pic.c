@@ -42,34 +42,32 @@ static void wakeupOtherProcessors(MemoryManager *m, LAPIC *lapic, IOAPIC *ioapic
 	}
 }
 
-static void initIOInterrupt(PIC *pic){
-	replaceKeyboardHandler(irqToVector(pic, KEYBOARD_IRQ));
-	setPICMask(pic, KEYBOARD_IRQ, 0);
-
-	replaceMouseHandler(irqToVector(pic, MOUSE_IRQ));
+static void initIOInterrupt(PIC *pic, MemoryManager *m, TaskManager *tm){
+	initPS2Driver(irqToVector(pic, KEYBOARD_IRQ), irqToVector(pic, MOUSE_IRQ), m, tm);
 	setPICMask(pic, MOUSE_IRQ, 0);
+	setPICMask(pic, KEYBOARD_IRQ, 0);
 }
 
-PIC *initPIC(MemoryManager *m, InterruptTable *t, TimerEventList *timer){
-	if(isAPICSupported() == 0||1){//XXX
+PIC *initPIC(MemoryManager *m, InterruptTable *t, TimerEventList *timer, ProcessorLocal *pl){
+	if(isAPICSupported() == 0){
 		PIC8259 *pic8259 = initPIC8259(m, t);
 		PIC *pic = castPIC8259(pic8259);
 		setTimer8254Frequency(TIMER_FREQUENCY);
 		replaceTimerHandler(timer, irqToVector(pic, TIMER_IRQ));
-		initIOInterrupt(pic);
+		initIOInterrupt(pic, m, pl->taskManager);
 		setPICMask(pic, TIMER_IRQ, 0);
 		return pic;
 	}
 
-	LAPIC *lapic = initLocalAPIC(m, t);
+	LAPIC *lapic = initLocalAPIC(m, t, pl);
 	if(isBSP(lapic)){
 		disablePIC8259();
 		IOAPIC *ioapic = initAPIC(m, t);
 		PIC *pic = castAPIC(ioapic);
-		kprintf("number of processors = %d\n", getNumberOfLAPIC(ioapic));
+		printk("number of processors = %d\n", getNumberOfLAPIC(ioapic));
 		testAndResetLAPICTimer(lapic, ioapic);
 		replaceTimerHandler(timer, getTimerVector(lapic));
-		initIOInterrupt(pic);
+		initIOInterrupt(pic, m, pl->taskManager);
 		wakeupOtherProcessors(m, lapic, ioapic, timer);
 		return pic;
 	}
