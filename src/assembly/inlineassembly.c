@@ -57,31 +57,35 @@ void setCR0(uint32_t value){
 	);
 }
 
-uint8_t in8(uint16_t port){
-	unsigned char value;
-	__asm__(
-	"in %1, %0\n"
-	:"=a"(value)
-	:"d"(port)
-	);
-	return value;
+#define IN(TYPE, FUNC) \
+TYPE FUNC(uint16_t port){\
+	TYPE value;\
+	__asm__(\
+	"in %1, %0\n"\
+	:"=a"(value)\
+	:"d"(port)\
+	);\
+	return value;\
 }
 
-void out8(uint16_t port, uint8_t value){
-	__asm__(
-	"out %1, %0\n"
-	:
-	:"d"(port), "a"(value)
-	);
+IN(uint8_t, in8);
+IN(uint16_t, in16);
+IN(uint32_t, in32);
+#undef IN
+
+#define OUT(TYPE, FUNC) \
+void FUNC(uint16_t port, TYPE value){\
+	__asm__(\
+	"out %1, %0\n"\
+	:\
+	:"d"(port), "a"(value)\
+	);\
 }
 
-void out16(uint16_t port, uint16_t value){
-	__asm__(
-	"out %1, %0"
-	:
-	:"d"(port), "a"(value)
-	);
-}
+OUT(uint8_t, out8);
+OUT(uint16_t, out16);
+OUT(uint32_t, out32);
+#undef OUT
 
 static void cpuid(uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx){
 	__asm__(

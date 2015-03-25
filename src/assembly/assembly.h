@@ -17,8 +17,11 @@ void setCR3(uint32_t value);
 uint32_t getCR0(void);
 void setCR0(uint32_t value);
 uint8_t in8(uint16_t port);
+uint16_t in16(uint16_t port);
+uint32_t in32(uint16_t port);
 void out8(uint16_t port, uint8_t value);
 void out16(uint16_t port, uint16_t value);
+void out32(uint16_t port, uint32_t value);
 uint32_t xchg(volatile uint32_t *a, uint32_t b);
 
 typedef union EFlags{
@@ -39,17 +42,17 @@ typedef union EFlags{
 		interrupt: 1,
 		direction: 1,
 		overflow: 1,
-    // 12
+		// 12
 		ioPrivilege: 2,
 		nestedTask: 1,
 		reserved0_2: 1,
-		resume: 1,
 		// 16
+		resume: 1,
 		virtual8086: 1,
 		alignmentCheck: 1,
 		virtualInterrupt: 1,
+		// 20
 		virtualInterruptPending: 1,
-    // 20
 		id: 1,
 		reserved0_3: 10;
 	}bit;

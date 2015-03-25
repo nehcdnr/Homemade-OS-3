@@ -23,17 +23,27 @@ void writeFIFO(FIFO *fifo, uintptr_t data){
 	releaseLock(fifo->lock);
 }
 
-int readFIFO(FIFO *fifo, uintptr_t *data){
+static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
 	uintptr_t r;
 	acquireLock(fifo->lock);
 	r = (fifo->dataLength != 0);
 	if(r){
 		*data = fifo->buffer[fifo->begin];
-		fifo->begin = ((fifo->begin + 1) & (fifo->bufferLength - 1));
-		fifo->dataLength--;
+		if(readFlag){
+			fifo->begin = ((fifo->begin + 1) & (fifo->bufferLength - 1));
+			fifo->dataLength--;
+		}
 	}
 	releaseLock(fifo->lock);
 	return r;
+}
+
+int peekFIFO(FIFO *fifo, uintptr_t *data){
+	return peekOrReadFIFO(fifo, data, 0);
+}
+
+int readFIFO(FIFO *fifo, uintptr_t *data){
+	return peekOrReadFIFO(fifo, data, 1);
 }
 
 FIFO *createFIFO(MemoryManager *m, int length){

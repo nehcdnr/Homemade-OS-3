@@ -7,9 +7,10 @@ typedef struct ProcessorLocal ProcessorLocal;
 typedef struct InterruptVector InterruptVector;
 // handler parameter, see interruptentry.asm
 
-typedef struct GeneralRegisters{
+typedef struct{
+	const uint32_t
+	gs, fs, es, ds;
 	uint32_t
-	gs, fs, es, ds,
 	edi, esi, ebp,
 	ebx, edx, ecx, eax;
 }GeneralRegisters;

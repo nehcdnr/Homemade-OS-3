@@ -36,10 +36,10 @@ static uintptr_t findMaxAddress(void){
 	for(i = 0; i < addressRangeCount; i++){
 		const struct AddressRange *ar = addressRange + i;
 		/*
-		kprintf("type: %d base: %x %x size: %x %x\n", ar->type,
+		printk("type: %d base: %x %x size: %x %x\n", ar->type,
 		(uint32_t)(ar->base >> 32), (uint32_t)(ar->base & 0xffffffff),
 		(uint32_t)(ar->size >> 32), (uint32_t)(ar->size & 0xffffffff));
-		*/
+		 */
 		if(ar->type == USABLE && ar->size != 0 &&
 			maxAddr < ar->base + ar->size - 1){
 			maxAddr = ar->base + ar->size - 1;

@@ -53,36 +53,3 @@ void *searchStructure(
 	}
 	return s;
 }
-
-
-static FIFO *biosFIFO = NULL;
-
-void callBIOS(void);
-static void videoBIOSLoop(void){
-	startVirtual8086Task(callBIOS, 0x4000);
-}
-
-static void setBIOSParameter(InterruptParam *p){
-	/*
-	uintptr_t data;
-	while(readFIFO(biosFIFO, &data) == 0){
-		systemCall(SYSCALL_SUSPEND);
-	}
-	GeneralRegisters *biosParam = (GeneralRegisters*)data;
-	p->regs = *biosParam;
-*/
-	p->regs.eax =0x3333;
-	//mov [ds:bx], ax
-}
-
-void initBIOSTask(MemoryManager *m, TaskManager *tm){
-	static int needInit =1;
-	if(needInit){
-		needInit = 0;
-		biosFIFO = createFIFO(m, 32);
-		Task *t = createKernelTask(tm, videoBIOSLoop);
-		setTaskSystemCall(t, setBIOSParameter);
-		resume(t);
-	}
-}
-
