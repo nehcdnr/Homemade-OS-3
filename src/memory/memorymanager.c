@@ -4,7 +4,7 @@
 #include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"
 
-// AddressRange functions
+// BIOS address range functions
 
 enum AddressRangeType{
 	USABLE = 1,
@@ -76,58 +76,38 @@ static uintptr_t findFirstUsableMemory(const size_t manageSize){
 
 #define PADDING_SIZE(VALUE, ALIGN) ((VALUE) % (ALIGN) == 0? 0: (ALIGN) - (VALUE) % (ALIGN))
 
-struct MemoryManager{
+typedef struct MemoryManager{
 	uintptr_t base;
 	size_t size;
 	size_t usedSize;
-	Spinlock *lock;
-};
+	Spinlock lock;
+}MemoryManager;
 
-static MemoryManager *createNoLockMemoryManager(uintptr_t base, size_t size){
+static MemoryManager *createMemoryManager(uintptr_t base, size_t size){
 	MemoryManager *m = (MemoryManager*)base;
 	m->base = base;
 	m->size = size;
 	m->usedSize = sizeof(MemoryManager);
-	m->lock = nullSpinlock;
+	m->lock = initialSpinlock;
 	return m;
 }
 
-MemoryManager *createMemoryManager(uintptr_t base, size_t size){
-	MemoryManager *m = createNoLockMemoryManager(base, size);
-	m->lock = createSpinlock(m);
-	return m;
-}
-
-
-MemoryManager *initKernelMemoryManager(void){
-	// find first usable memory address >= 1MB
-	size_t manageSize = (15 << 20);
-	uintptr_t manageBase = findFirstUsableMemory(manageSize);
-	MemoryManager *m = createMemoryManager(manageBase, manageSize);
-	return m;
-}
-
-void *allocateAligned(MemoryManager *m, size_t size, size_t align){
+static void *_allocateAligned(MemoryManager *m, size_t size, size_t align){
 	const size_t padSize = PADDING_SIZE(m->base + m->usedSize, align);
 	void *address = NULL;
-	acquireLock(m->lock);
+	acquireLock(&m->lock);
 	if(size <= m->size - padSize - m->usedSize){
 		address = (void*)(m->base + m->usedSize + padSize);
 		m->usedSize += size + padSize;
 	}
-	releaseLock(m->lock);
+	releaseLock(&m->lock);
 	assert(address != NULL);
 	return address;
 }
 
 #define DEFAULT_ALIGN ((size_t)4)
-
-void *allocateFixedSize(MemoryManager *m, size_t size){
-	return allocateAligned(m, size, DEFAULT_ALIGN);
-}
-
-size_t getAllocatedSize(MemoryManager *m){
-	return m->usedSize;
+static void *_allocateFixed(MemoryManager *m, size_t size){
+	return _allocateAligned(m, size, DEFAULT_ALIGN);
 }
 
 // BlockManager functions
@@ -138,13 +118,13 @@ typedef struct MemoryBlock{
 }MemoryBlock;
 
 #define PAGE_UNIT_SIZE MIN_BLOCK_SIZE
-struct BlockManager{
+typedef struct MemoryBlockManager{
 	int blockCount;
 	size_t freeSize;
-	Spinlock *lock;
+	Spinlock lock;
 	MemoryBlock *freeBlock[MAX_BLOCK_ORDER - MIN_BLOCK_ORDER + 1];
 	MemoryBlock *block;
-};
+}MemoryBlockManager;
 
 static void initMemoryBlock(MemoryBlock *mb){
 	mb->sizeOrder = MIN_BLOCK_ORDER;
@@ -152,11 +132,11 @@ static void initMemoryBlock(MemoryBlock *mb){
 	mb->prev = NULL;
 }
 
-static uintptr_t getAddress(BlockManager *m, MemoryBlock *mb){
+static uintptr_t getAddress(MemoryBlockManager *m, MemoryBlock *mb){
 	return ((uintptr_t)(mb - (m->block))) << MIN_BLOCK_ORDER;
 }
 
-static MemoryBlock *getBlock(BlockManager *m, uintptr_t address){
+static MemoryBlock *getBlock(MemoryBlockManager *m, uintptr_t address){
 	assert(address % MIN_BLOCK_SIZE == 0);
 	int i = address / MIN_BLOCK_SIZE;
 	assert(i > 0 && i < m->blockCount);
@@ -167,7 +147,7 @@ static int isInList(MemoryBlock *mb){
 	return mb->prev != NULL;
 }
 
-static MemoryBlock *getBuddy(BlockManager *m, MemoryBlock *b){
+static MemoryBlock *getBuddy(MemoryBlockManager *m, MemoryBlock *b){
 	int index = (b - m->block);
 	int buddy = (index ^ (1 << (b->sizeOrder - MIN_BLOCK_ORDER)));
 	if(buddy >= m->blockCount){
@@ -194,9 +174,9 @@ static void addToList(MemoryBlock *b, MemoryBlock **previous){
 	*(b->prev) = b;
 }
 
-void *allocateBlock(BlockManager *m, size_t size){
+static void *_allocateBlock(MemoryBlockManager *m, size_t size){
 	void *r = NULL;
-	acquireLock(m->lock);
+	acquireLock(&m->lock);
 	if(size > MAX_BLOCK_SIZE){
 		goto allocateBlock_retuen;
 	}
@@ -223,13 +203,13 @@ void *allocateBlock(BlockManager *m, size_t size){
 	m->freeSize -= (1 << i);
 	r = (void*)getAddress(m, b);
 	allocateBlock_retuen:
-	releaseLock(m->lock);
+	releaseLock(&m->lock);
 	return r;
 }
 
 
-void freeBlock(BlockManager *m, void *address){
-	acquireLock(m->lock);
+static void _freeBlock(MemoryBlockManager *m, void *address){
+	acquireLock(&m->lock);
 	MemoryBlock *b = getBlock(m, (uintptr_t)address);
 	m->freeSize += (1 << b->sizeOrder);
 	assert(isInList(b) == 0);
@@ -248,34 +228,50 @@ void freeBlock(BlockManager *m, void *address){
 		b->sizeOrder++;
 	}
 	addToList(b, &m->freeBlock[b->sizeOrder - MIN_BLOCK_ORDER]);
-	releaseLock(m->lock);
+	releaseLock(&m->lock);
 }
 
-BlockManager *initKernelBlockManager(MemoryManager *m){
-	BlockManager *NEW(bm, m);
-	bm->lock = createSpinlock(m);
-	uintptr_t maxAddr = findMaxAddress();
+static MemoryBlockManager *createMemoryBlockManager(MemoryManager *m, uintptr_t maxAddr){
+	MemoryBlockManager *bm = _allocateFixed(m, sizeof(*bm));
+	bm->lock = initialSpinlock;
 	bm->blockCount = maxAddr / MIN_BLOCK_SIZE;
 	bm->freeSize = 0;
-	NEW_ARRAY(bm->block, m, bm->blockCount);
+	bm->block = _allocateFixed(m, bm->blockCount * sizeof(*bm->block));
 	int b;
 	for(b = 0; b < bm->blockCount; b++){
-		// all blocks are using in the beginning
-		initMemoryBlock(&bm->block[b]);
+		initMemoryBlock(&bm->block[b]); // all blocks are using in the beginning
 	}
 	for(b = 0; b <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; b++){
 		bm->freeBlock[b] = NULL;
 	}
+	return bm;
+}
+
+static MemoryBlockManager *kbm = NULL;
+
+void *allocateBlock(size_t size){
+	assert(kbm != NULL);
+	return _allocateBlock(kbm, size);
+}
+
+void freeBlock(void *address){
+	assert(kbm != NULL);
+	_freeBlock(kbm, address);
+}
+
+static void initKernelMemoryBlock(MemoryManager *m){
+	kbm = createMemoryBlockManager(m, findMaxAddress());
 	AddressRange extraAR[2] = {
 		{m->base, m->size, RESERVED, 0},
 		{0, 1 << 20, RESERVED, 0}
 	};
-	for(b = 0; b < bm->blockCount; b++){
+	int b;
+	for(b = 0; b < kbm->blockCount; b++){
 		int isFreeBlock = 1;
 		uintptr_t blockBegin = b * MIN_BLOCK_SIZE;
 		assert(blockBegin + MIN_BLOCK_SIZE > blockBegin);
 		int i;
-		for(i = 0; isFreeBlock && i < addressRangeCount + 2; i++){
+		for(i = 0; isFreeBlock && i < addressRangeCount + (int)LENGTH_OF(extraAR); i++){
 			const AddressRange *ar = (i < addressRangeCount?
 				addressRange + i:
 				extraAR + (i - addressRangeCount)
@@ -287,10 +283,35 @@ BlockManager *initKernelBlockManager(MemoryManager *m){
 			}
 		}
 		if(isFreeBlock){
-			freeBlock(bm, (void*)blockBegin);
+			_freeBlock(kbm, (void*)blockBegin);
 		}
 	}
-	return bm;
+}
+
+// global memory manager
+static MemoryManager *km = NULL;
+
+size_t getAllocatedSize(void){
+	return km->usedSize;
+}
+
+void *allocateAligned(size_t size, size_t align){
+	assert(km != NULL);
+	return _allocateAligned(km, size, align);
+}
+
+void *allocateFixed(size_t size){
+	assert(km != NULL);
+	return _allocateFixed(km, size);
+}
+
+void initKernelMemory(void){
+	// find first usable memory address >= 1MB
+	assert(km == NULL);
+	size_t manageSize = (15 << 20);
+	uintptr_t manageBase = findFirstUsableMemory(manageSize);
+	km = createMemoryManager(manageBase, manageSize);
+	initKernelMemoryBlock(km);
 }
 
 /*

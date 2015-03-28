@@ -54,8 +54,8 @@ struct InterruptTable{
 	InterruptDescriptor *descriptor;
 };
 
-static AsmIntEntry *createAsmIntEntries(MemoryManager *m, ProcessorLocal *p){
-	AsmIntEntry *e = allocateFixedSize(m, sizeOfIntEntries);
+static AsmIntEntry *createAsmIntEntries(ProcessorLocal *p){
+	AsmIntEntry *e = allocateFixed(sizeOfIntEntries);
 	memcpy(e, intEntriesTemplate, sizeOfIntEntries);
 
 	uintptr_t *inst = (uintptr_t*)(intEntryBaseOffset + (uintptr_t)e);
@@ -154,11 +154,11 @@ void (*endOfInterrupt)(InterruptParam *p) = noEOI;
 // segmentdescriptor.h
 uint16_t toShort(SegmentSelector* s);
 
-InterruptTable *initInterruptTable(MemoryManager *m, SegmentTable *gdt, ProcessorLocal *pl){
-	struct InterruptTable *NEW(t, m);
-	t->descriptor = allocateAligned(m, numberOfIntEntries * sizeof(InterruptDescriptor), sizeof(InterruptDescriptor));
-	t->vector = allocateFixedSize(m, numberOfIntEntries * sizeof(struct InterruptVector));
-	t->asmIntEntry = createAsmIntEntries(m, pl);
+InterruptTable *initInterruptTable(SegmentTable *gdt, ProcessorLocal *pl){
+	struct InterruptTable *NEW(t);
+	t->descriptor = allocateAligned(numberOfIntEntries * sizeof(InterruptDescriptor), sizeof(InterruptDescriptor));
+	t->vector = allocateFixed(numberOfIntEntries * sizeof(struct InterruptVector));
+	t->asmIntEntry = createAsmIntEntries(pl);
 	t->length = numberOfIntEntries;
 	t->usedCount = BEGIN_GENERAL_VECTOR;
 	printk("number of interrupt handlers = %d\n", t->length);

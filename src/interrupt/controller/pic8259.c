@@ -76,8 +76,8 @@ void disablePIC8259(void){
 	resetPIC8259(0);
 }
 
-PIC8259 *initPIC8259(struct MemoryManager *m, InterruptTable *t){
-	PIC8259 *NEW(pic, m);
+PIC8259 *initPIC8259(InterruptTable *t){
+	PIC8259 *NEW(pic);
 	pic->this.pic8259 = pic;
 	pic->interruptTable = t;
 	pic->vectorBase = registerIRQs(t, 0, 16);

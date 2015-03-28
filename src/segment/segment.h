@@ -4,7 +4,7 @@ typedef struct SegmentTable SegmentTable;
 typedef struct SegmentSelector SegmentSelector;
 uint16_t toShort(SegmentSelector* s);
 
-SegmentTable *createSegmentTable(MemoryManager *m);
+SegmentTable *createSegmentTable(void);
 SegmentSelector *getKernelCodeSelector(SegmentTable *t);
 void setTSSKernelStack(SegmentTable *t, uint32_t esp0);
 void loadgdt(SegmentTable *gdt);

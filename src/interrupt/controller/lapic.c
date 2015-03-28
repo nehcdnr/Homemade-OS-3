@@ -225,8 +225,8 @@ static void apicEOI(InterruptParam *p){
 	*eoi = 0;
 }
 
-LAPIC *initLocalAPIC(MemoryManager *m, InterruptTable *t, ProcessorLocal *pl){
-	LAPIC *NEW(lapic, m);
+LAPIC *initLocalAPIC(InterruptTable *t, ProcessorLocal *pl){
+	LAPIC *NEW(lapic);
 
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);

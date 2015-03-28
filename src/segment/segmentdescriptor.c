@@ -88,17 +88,17 @@ enum{
 	GDT_TSS_INDEX,
 	GDT_LENGTH
 };
-SegmentTable *createSegmentTable(MemoryManager *m){
+SegmentTable *createSegmentTable(void){
 	const int length = GDT_LENGTH;
-	SegmentTable *NEW(t, m);
-	NEW_ARRAY(t->selector, m, length);
-	t->descriptor = allocateAligned(m, length * sizeof(SegmentDescriptor), sizeof(SegmentDescriptor));
+	SegmentTable *NEW(t);
+	NEW_ARRAY(t->selector, length);
+	t->descriptor = allocateAligned(length * sizeof(SegmentDescriptor), sizeof(SegmentDescriptor));
 	t->length = length;
 	MEMSET0(t->descriptor + 0);
 	setSegment(t, GDT_KERNEL_CODE_INDEX, 0, 0xffffffff, KERNEL_CODE);
 	setSegment(t, GDT_KERNEL_DATA_INDEX, 0, 0xffffffff, KERNEL_DATA);
 	{
-		TSS *NEW(tss, m);
+		TSS *NEW(tss);
 		MEMSET0(tss);
 		tss->ss0 = toShort(t->selector + GDT_KERNEL_DATA_INDEX);
 		tss->esp0 = 0;

@@ -13,7 +13,4 @@ void *searchStructure(
 	uintptr_t searchEnd
 );
 
-typedef struct TaskManager TaskManager;
-typedef struct MemoryManager MemoryManager;
-
-void initBIOSTask(MemoryManager *m, TaskManager *tm);
+void initVideoTask(void);

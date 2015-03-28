@@ -16,8 +16,7 @@ typedef struct SystemCallTable SystemCallTable;
 
 void registerSystemCall(SystemCallTable *s, enum SystemCall systemCall, SystemCallFunction f);
 
-typedef struct MemoryManager MemoryManager;
 typedef struct InterruptTable InterruptTable;
-SystemCallTable *initSystemCall(MemoryManager *m, InterruptTable *t);
+SystemCallTable *initSystemCall(InterruptTable *t);
 
 #endif

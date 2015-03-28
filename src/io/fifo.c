@@ -6,12 +6,12 @@
 struct FIFO{
 	int begin, dataLength;
 	int bufferLength;
-	Spinlock *lock;
+	Spinlock lock;
 	uintptr_t *buffer;
 };
 
 void writeFIFO(FIFO *fifo, uintptr_t data){
-	acquireLock(fifo->lock);
+	acquireLock(&fifo->lock);
 	if(fifo->dataLength == fifo->bufferLength){
 		printk("warning: fifo %x is full\n", fifo);
 	}
@@ -20,12 +20,12 @@ void writeFIFO(FIFO *fifo, uintptr_t data){
 		fifo->buffer[i] = data;
 		fifo->dataLength++;
 	}
-	releaseLock(fifo->lock);
+	releaseLock(&fifo->lock);
 }
 
 static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
 	uintptr_t r;
-	acquireLock(fifo->lock);
+	acquireLock(&fifo->lock);
 	r = (fifo->dataLength != 0);
 	if(r){
 		*data = fifo->buffer[fifo->begin];
@@ -34,7 +34,7 @@ static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
 			fifo->dataLength--;
 		}
 	}
-	releaseLock(fifo->lock);
+	releaseLock(&fifo->lock);
 	return r;
 }
 
@@ -46,11 +46,11 @@ int readFIFO(FIFO *fifo, uintptr_t *data){
 	return peekOrReadFIFO(fifo, data, 1);
 }
 
-FIFO *createFIFO(MemoryManager *m, int length){
+FIFO *createFIFO(int length){
 	assert((length & (length - 1)) == 0);
-	FIFO *NEW(fifo, m);
-	NEW_ARRAY(fifo->buffer, m, length);
-	fifo->lock = createSpinlock(m);
+	FIFO *NEW(fifo);
+	NEW_ARRAY(fifo->buffer, length);
+	fifo->lock = initialSpinlock;
 	fifo->bufferLength = length;
 	fifo->begin = 0;
 	fifo->dataLength = 0;

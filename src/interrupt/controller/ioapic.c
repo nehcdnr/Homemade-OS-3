@@ -237,7 +237,7 @@ uint32_t getLAPICIDByIndex(IOAPIC *ioapic, int index){
 	return ioapic->local[index]->apicID;
 }
 
-static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
+static IOAPIC *parseMADT(const MADT *madt, InterruptTable *t){
 	printk("MADT total size = %d\n",madt->header.length);
 	size_t offset;
 	// pass 1: count tables of different types
@@ -256,14 +256,14 @@ static IOAPIC *parseMADT(MemoryManager* m, const MADT *madt, InterruptTable *t){
 	if(offset != madt->header.length){
 		panic("parsing MADT error");
 	}
-	IOAPIC *NEW(apic, m);
+	IOAPIC *NEW(apic);
 	apic->this.apic = apic;
 	apic->localCount = typeCount[LOCAL_APIC];
 	apic->ioCount = typeCount[IO_APIC];
 	apic->overrideCount = typeCount[SOURCE_OVERRIDE];
-	NEW_ARRAY(apic->local, m, typeCount[LOCAL_APIC]);
-	NEW_ARRAY(apic->io, m, typeCount[IO_APIC]);
-	NEW_ARRAY(apic->override, m, typeCount[SOURCE_OVERRIDE]);
+	NEW_ARRAY(apic->local, typeCount[LOCAL_APIC]);
+	NEW_ARRAY(apic->io, typeCount[IO_APIC]);
+	NEW_ARRAY(apic->override, typeCount[SOURCE_OVERRIDE]);
 
 	// pass 2: parse tables
 	for(typeIndex = 0; typeIndex < NUMBER_OF_APIC_STRUCT_TYPE; typeIndex++){
@@ -339,7 +339,7 @@ static const RSDT *findRSDT(void){
 	return rsdt;
 }
 
-IOAPIC *initAPIC(MemoryManager* m, InterruptTable *t){
+IOAPIC *initAPIC(InterruptTable *t){
 	IOAPIC *apic = NULL;
 	const RSDT *rsdt = findRSDT();
 	assert(rsdt != NULL);
@@ -356,7 +356,7 @@ IOAPIC *initAPIC(MemoryManager* m, InterruptTable *t){
 		if(apic != NULL){
 			panic("found more than 1 MADTs");
 		}
-		apic = parseMADT(m, (const MADT*)(rsdt->entry[i]), t);
+		apic = parseMADT((const MADT*)(rsdt->entry[i]), t);
 	}
 	setPICMask = setIOAPICMask;
 	irqToVector = apicIRQToVector;

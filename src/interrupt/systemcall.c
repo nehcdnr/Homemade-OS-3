@@ -22,11 +22,11 @@ static void systemCallHandler(InterruptParam *p){
 	sti();
 }
 
-SystemCallTable *initSystemCall(MemoryManager *m, InterruptTable *t){
+SystemCallTable *initSystemCall(InterruptTable *t){
 	static int needInit = 1;
 	if(needInit){
 		needInit = 0;
-		NEW(systemCallTable, m);
+		NEW(systemCallTable);
 		int i;
 		for(i = 0; i < NUMBER_OF_SYSTEM_CALLS; i++){
 			systemCallTable->call[i] = NULL;

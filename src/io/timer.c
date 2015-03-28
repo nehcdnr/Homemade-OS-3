@@ -67,8 +67,8 @@ static void timerHandler(InterruptParam *p){
 	sti();
 }
 
-TimerEventList *createTimer(MemoryManager *m){
-	TimerEventList *NEW(tel, m);
+TimerEventList *createTimer(){
+	TimerEventList *NEW(tel);
 	tel->head = NULL;
 	return tel;
 }

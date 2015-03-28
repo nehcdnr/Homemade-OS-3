@@ -14,36 +14,32 @@
 void bspEntry(void);
 void apEntry(void);
 
-static MemoryManager *memory = NULL;
-static BlockManager *block = NULL;
-
 void bspEntry(void){
 	// 1. memory
-	memory = initKernelMemoryManager();
+	initKernelMemory();
 	// 2. printk
-	block = initKernelBlockManager(memory);
-	initKernelConsole(memory);
+	initKernelConsole();
 	//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
 	apEntry();
 }
 
 void apEntry(void){
-	ProcessorLocal *NEW(local, memory);
+	ProcessorLocal *NEW(local);
 	// 3. GDT
-	SegmentTable *gdt = createSegmentTable(memory);
+	SegmentTable *gdt = createSegmentTable();
 	loadgdt(gdt);
 	// 4. IDT
-	local->idt = initInterruptTable(memory, gdt, local);
+	local->idt = initInterruptTable(gdt, local);
 	lidt(local->idt);
 	// 5. system call & exception
-	SystemCallTable *systemCall = initSystemCall(memory, local->idt);
+	SystemCallTable *systemCall = initSystemCall(local->idt);
 	// 6. task
-	local->taskManager = createTaskManager(memory, systemCall, block, gdt);
-	initBIOSTask(memory, local->taskManager);
+	local->taskManager = createTaskManager(systemCall, gdt);
+	initVideoTask();
 	// 7. PIC
-	initPIC(memory, local->idt, createTimer(memory), local);
+	initPIC(local->idt, createTimer(), local);
 	//initMultiprocessor();
-printk("kernel memory usage: %u\n", getAllocatedSize(memory));
+printk("kernel memory usage: %u\n", getAllocatedSize());
 printk("start accepting interrupt...\n");
 
 	sti();

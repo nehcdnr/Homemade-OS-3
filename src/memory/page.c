@@ -45,16 +45,16 @@ static_assert(sizeof(PageDirectory) == PAGE_TABLE_SIZE);
 static_assert(sizeof(PageTable) == PAGE_TABLE_SIZE);
 static_assert(PAGE_TABLE_SIZE % MIN_BLOCK_SIZE == 0);
 
-PageDirectory *createPageDirectory(BlockManager *p){
-	PageDirectory *pd = allocateBlock(p, sizeof(PageDirectory));
+PageDirectory *createPageDirectory(void){
+	PageDirectory *pd = allocateBlock(sizeof(PageDirectory));
 	if(pd == NULL)
 		return NULL;
 	MEMSET0(pd);
 	return pd;
 }
 
-static PageTable *createPageTable(BlockManager *p){
-	PageTable *pt = allocateBlock(p, sizeof(PageTable));
+static PageTable *createPageTable(void){
+	PageTable *pt = allocateBlock(sizeof(PageTable));
 	if(pt == NULL)
 		return NULL;
 	MEMSET0(pt);
@@ -64,7 +64,7 @@ static PageTable *createPageTable(BlockManager *p){
 #define SET_ENTRY_ADDRESS(E, A) ((*(uint32_t*)(E)) = (((*(uint32_t*)(E)) & (4095)) | ((uint32_t)(A))))
 #define GET_ENTRY_ADDRESS(E) ((void*)((*(uint32_t*)(E)) & (~4095)))
 
-void map4KBKernelPage(BlockManager *m, PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress){
+void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress){
 	assert((physicalAddress & 4095) == 0 && (linearAddress & 4095) == 0);
 	uintptr_t i1 = ((linearAddress >> 22) & (PAGE_TABLE_LENGTH - 1));
 	uintptr_t i2 = ((linearAddress >> 12) & (PAGE_TABLE_LENGTH - 1));
@@ -72,7 +72,7 @@ void map4KBKernelPage(BlockManager *m, PageDirectory *pd, uintptr_t linearAddres
 	PageTable *pt;
 	struct PageTableEntry *pte;
 	if(pde->present == 0){
-		pt = createPageTable(m);
+		pt = createPageTable();
 	}
 	else{
 		pt = GET_ENTRY_ADDRESS(pde);

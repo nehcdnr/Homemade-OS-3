@@ -34,14 +34,13 @@ typedef struct TaskQueue{
 	Task *head[NUMBER_OF_PRIORITY];
 }TaskQueue;
 static TaskQueue *globalQueue = NULL;
-static Spinlock *globalQueueLock = NULL;
+static Spinlock globalQueueLock = INITIAL_SPINLOCK;
 static int totalBlockCount = 0;
 
 struct TaskManager{
 	Task *current;
 	SegmentTable *gdt;
 	// TaskQueue *taskQueue;
-	BlockManager *blockManager;
 };
 
 static void pushQueue(struct TaskQueue *q, Task *t){
@@ -82,7 +81,7 @@ void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0);
 
 void schedule(TaskManager *tm){
 	struct Task *oldTask = tm->current;
-	int tryCount = acquireLock(globalQueueLock);
+	int tryCount = acquireLock(&globalQueueLock);
 	totalBlockCount += tryCount;
 	if(oldTask->state == READY){
 		pushQueue(globalQueue, oldTask);
@@ -93,12 +92,12 @@ void schedule(TaskManager *tm){
 		contextSwitch(&oldTask->esp0, tm->current->esp0);
 		// may go to startTask or return here
 	}
-	releaseLock(globalQueueLock);
+	releaseLock(&globalQueueLock);
 }
 // see taskswitch.asm
 void startTask(void);
 void startTask(void){
-	releaseLock(globalQueueLock); // after contextSwitch in schedule
+	releaseLock(&globalQueueLock); // after contextSwitch in schedule
 	sti(); // acquireLock
 	// return to eip assigned in initTaskStack
 	// TODO: application loader
@@ -151,11 +150,10 @@ static void undefinedSystemCall(InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip0, uint32_t esp0);
 
 static Task *createTask(
-	BlockManager *p,
 	void (*eip0)(void),
 	int priority
 ){
-	uintptr_t esp0 = (uintptr_t)allocateBlock(p, MIN_BLOCK_SIZE);
+	uintptr_t esp0 = (uintptr_t)allocateBlock(MIN_BLOCK_SIZE);
 	esp0 += MIN_BLOCK_SIZE;
 	esp0 -= sizeof(Task);
 	esp0 -= esp0 % 4;
@@ -173,8 +171,8 @@ static Task *createTask(
 	return t;
 }
 
-Task *createKernelTask(TaskManager *tm, void (*eip0)(void)){
-	Task *t = createTask(tm->blockManager, eip0, 0);
+Task *createKernelTask(void (*eip0)(void)){
+	Task *t = createTask(eip0, 0);
 	return t;
 }
 
@@ -183,12 +181,12 @@ void setTaskSystemCall(Task *t, SystemCallFunction f){
 }
 
 void resume(/*TaskManager *tm, */Task *t){
-	acquireLock(globalQueueLock);
+	acquireLock(&globalQueueLock);
 	if(t->state == SUSPENDED){
 		t->state = READY;
 		pushQueue(globalQueue, t);
 	}
-	releaseLock(globalQueueLock);
+	releaseLock(&globalQueueLock);
 }
 
 static void syscallSuspend(InterruptParam *p){
@@ -203,22 +201,19 @@ static void syscallTaskDefined(InterruptParam *p){
 }
 
 TaskManager *createTaskManager(
-	MemoryManager *m,
 	SystemCallTable *systemCallTable,
-	BlockManager *b,
 	SegmentTable *gdt
 ){
 	static int needInit = 1;
-	TaskManager *NEW(tm, m);
+	TaskManager *NEW(tm);
 	// create a task for this, eip and esp are irrelevant
-	tm->current = createTask(b, testTask, 0);
+	tm->current = createTask(testTask, 0);
 	tm->current->state = READY;
-	tm->blockManager = b;
 	tm->gdt = gdt;
 	if(needInit){
 		needInit = 0;
-		NEW(globalQueue, m);
-		globalQueueLock = createSpinlock(m);
+		NEW(globalQueue);
+		globalQueueLock = initialSpinlock;
 		int t;
 		for(t = 0; t < NUMBER_OF_PRIORITY; t++){
 			globalQueue->head[t] = NULL;

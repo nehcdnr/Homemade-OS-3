@@ -11,7 +11,7 @@ struct ConsoleDisplay{
 	int cursor;
 	int maxRow, maxColumn;
 	volatile uint16_t *video;
-	Spinlock *lock;
+	Spinlock lock;
 };
 
 #define DEFAULT_TEXT_VIDEO_ADDRESS ((volatile uint16_t*)0xb8000)
@@ -19,7 +19,7 @@ ConsoleDisplay kernelConsole = {
 	0,
 	25, 80,
 	DEFAULT_TEXT_VIDEO_ADDRESS,
-	nullSpinlock
+	NULL_SPINLOCK
 };
 
 static void updateVideoAddress(ConsoleDisplay *cd){
@@ -47,9 +47,9 @@ static void updateCursor(ConsoleDisplay *cd){
 int printString(const char *s);
 int printString(const char *s){
 	int a;
-	acquireLock(kernelConsole.lock); //TODO: 1 lock&unlock per kprintf
+	acquireLock(&kernelConsole.lock); //TODO: 1 lock&unlock per kprintf
 	a = printConsole(&kernelConsole, s);
-	releaseLock(kernelConsole.lock);
+	releaseLock(&kernelConsole.lock);
 	return a;
 }
 
@@ -105,7 +105,7 @@ int printConsole(ConsoleDisplay *cd, const char *s){
 	return a;
 }
 
-ConsoleDisplay *initKernelConsole(MemoryManager *m){
+ConsoleDisplay *initKernelConsole(void){
 	static int needInit = 1;
 	ConsoleDisplay *cd = &kernelConsole;
 	if(needInit){
@@ -114,7 +114,7 @@ ConsoleDisplay *initKernelConsole(MemoryManager *m){
 		cd->maxRow = 25;
 		cd->maxColumn = 80;
 		cd->video = DEFAULT_TEXT_VIDEO_ADDRESS;
-		cd->lock = createSpinlock(m);
+		cd->lock = initialSpinlock;
 		updateVideoAddress(cd);
 		updateCursor(cd);
 		int c = 0;
@@ -376,15 +376,15 @@ static void setVBEParameter(InterruptParam *p){
 	}
 }
 
-void initBIOSTask(MemoryManager *m, TaskManager *tm){
+void initVideoTask(void){
 	static int needInit =1;
 	if(needInit == 0){
 		return;
 		panic("initBIOSTask");
 	}
 	needInit = 0;
-	biosFIFO = createFIFO(m, 32);
-	Task *t = createKernelTask(tm, startVBETask);
+	biosFIFO = createFIFO(32);
+	Task *t = createKernelTask(startVBETask);
 	setTaskSystemCall(t, setVBEParameter);
 	writeFIFO(biosFIFO, GET_VBE_INFO);
 	writeFIFO(biosFIFO, GET_VBE_MODE_INFO);

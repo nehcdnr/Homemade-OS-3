@@ -2,60 +2,54 @@
 #include"common.h"
 #include"assembly/assembly.h"
 #include"spinlock.h"
-#include"memory/memory.h"
 
-struct Spinlock{
-	volatile uint32_t acquirable;
-	int interruptFlag;
-};
+#define NOT_ACQUIRABLE (0)
+#define ACQUIRABLE (1)
+#define IGNORED (2)
 
-Spinlock *createSpinlock(MemoryManager *m){
-	Spinlock *NEW(s, m);
-	s->acquirable = 1;
-	s->interruptFlag = 0;
-	return s;
-}
+const Spinlock initialSpinlock = {acquirable: ACQUIRABLE, interruptFlag: 0};
+const Spinlock nullSpinlock = {acquirable: IGNORED, interruptFlag: 0};
 
 int isAcquirable(Spinlock *spinlock){
-	if(spinlock == nullSpinlock)
+	if(spinlock->acquirable == IGNORED)
 		return 1;
-	return spinlock->acquirable;
+	return spinlock->acquirable != NOT_ACQUIRABLE;
 }
 
 int acquireLock(Spinlock *spinlock){
-	if(spinlock == nullSpinlock){
+	if(spinlock->acquirable == IGNORED){
 		return 0;
 	}
 	spinlock->interruptFlag = (getEFlags().bit.interrupt);
 	int tryCount = 0;
 	while(1){
 		cli();
-		int acquired = xchg(&spinlock->acquirable, 0);
-		if(acquired)
+		int acquired = xchg(&spinlock->acquirable, NOT_ACQUIRABLE);
+		if(acquired == ACQUIRABLE)
 			return tryCount;
 		if(spinlock->interruptFlag)
 			sti();
 		do{
 			tryCount++;
 			__asm__("pause\n");
-		}while(spinlock->acquirable == 0);
+		}while(spinlock->acquirable == NOT_ACQUIRABLE);
 	}
 }
 
 void releaseLock(Spinlock *spinlock){
-	if(spinlock == nullSpinlock){
+	if(spinlock->acquirable == IGNORED){
 		return;
 	}
-	xchg(&spinlock->acquirable, 1);
+	xchg(&spinlock->acquirable, ACQUIRABLE);
 	if(spinlock->interruptFlag){
 		sti();
 	}
 }
 
-void initMultiprocessor(){
+void initMultiprocessor(void){
 	#ifndef NDEBUG
 	{
-		Spinlock s = {1, 0};
+		Spinlock s = initialSpinlock;
 		acquireLock(&s);
 		assert(isAcquirable(&s) == 0);
 		releaseLock(&s);
