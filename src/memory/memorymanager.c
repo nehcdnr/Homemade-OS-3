@@ -207,7 +207,6 @@ static void *_allocateBlock(MemoryBlockManager *m, size_t size){
 	return r;
 }
 
-
 static void _freeBlock(MemoryBlockManager *m, void *address){
 	acquireLock(&m->lock);
 	MemoryBlock *b = getBlock(m, (uintptr_t)address);
@@ -247,6 +246,7 @@ static MemoryBlockManager *createMemoryBlockManager(MemoryManager *m, uintptr_t 
 	return bm;
 }
 
+// kernel MemoryBlockManager
 static MemoryBlockManager *kbm = NULL;
 
 void *allocateBlock(size_t size){

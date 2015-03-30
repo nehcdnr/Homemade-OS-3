@@ -13,4 +13,4 @@ void *searchStructure(
 	uintptr_t searchEnd
 );
 
-void initVideoTask(void);
+void initVideoDriver(void);

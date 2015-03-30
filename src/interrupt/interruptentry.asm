@@ -34,8 +34,6 @@ interruptEntry%[n]:
 %endrep
 processorLocal:
 	dd 0
-nestLevel:
-	dd 0
 
 %assign n 0
 %rep NUMBER_OF_HANDLERS
@@ -78,22 +76,19 @@ generalEntry:
 
 	call getBase
 	add eax, edx
-	push DWORD [edx + nestLevel - intEntrySetBegin]
-	add DWORD [edx + nestLevel - intEntrySetBegin], 1
 	push DWORD [edx + processorLocal - intEntrySetBegin]
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
 	mov edx, esp
-	push edx ; & InterruptParam
+	push edx ; &InterruptParam
 	call [eax + 4] ; handler
 
 	call getBase
 	cli
-	sub DWORD [edx + nestLevel - intEntrySetBegin], 1
 ; see task.h
 global _startVirtual8086Mode
 _startVirtual8086Mode:
-	add esp, 20
+	add esp, 16
 	pop gs
 	pop fs
 	pop es

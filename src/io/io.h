@@ -1,5 +1,4 @@
 // timer8254.c
-typedef union PIC PIC;
 void setTimer8254Frequency(unsigned frequency);
 
 // timer.c
@@ -17,8 +16,5 @@ int printConsole(ConsoleDisplay *cd, const char *s);
 ConsoleDisplay *initKernelConsole(void);
 
 // keyboard.c
-typedef struct TaskManager TaskManager;
-void initPS2Driver(
-	InterruptVector *keyboardVector,
-	InterruptVector *mouseVector
-);
+typedef struct InterruptController PIC;
+void initPS2Driver(PIC *pic);

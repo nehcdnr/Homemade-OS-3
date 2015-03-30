@@ -14,6 +14,11 @@
 void bspEntry(void);
 void apEntry(void);
 
+static void initService(PIC *pic){
+	initPS2Driver(pic);
+	initVideoDriver();
+}
+
 void bspEntry(void){
 	// 1. memory
 	initKernelMemory();
@@ -35,20 +40,23 @@ void apEntry(void){
 	SystemCallTable *systemCall = initSystemCall(local->idt);
 	// 6. task
 	local->taskManager = createTaskManager(systemCall, gdt);
-	initVideoTask();
 	// 7. PIC
-	initPIC(local->idt, createTimer(), local);
+	local->pic = initPIC(local->idt);
+	// 8. driver
+	static int first = 1;
+	if(first){
+		first = 0;
+		initService(local->pic);
+	}
+	initLocalTimer(local->pic, createTimer());
+
 	//initMultiprocessor();
 printk("kernel memory usage: %u\n", getAllocatedSize());
 printk("start accepting interrupt...\n");
 
 	sti();
 	printk("halt...\n");
-	/*
-	kprintf("start sleeping\n");
-	kernelSleep(10000);
-	kprintf("end sleeping\n");
-	*/
+
 	while(1){
 		//printk("main %d\n", cpuid_getInitialAPICID());
 		hlt();

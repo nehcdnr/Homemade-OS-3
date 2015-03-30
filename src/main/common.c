@@ -33,8 +33,8 @@ int strlen(const char *s){
 	return len;
 }
 
-static int strcmp2(const char *s1, const char *s2, int n, int ncmp){
-	int i = 0;
+static int strcmp2(const char *s1, const char *s2, size_t n, int ncmp){
+	size_t i = 0;
 	for(i = 0; ncmp == 0 || i < n ; i++){
 		if(s1[i] != s2[i])
 			return s1[i] > s2[i]? 1: -1;
@@ -44,12 +44,23 @@ static int strcmp2(const char *s1, const char *s2, int n, int ncmp){
 	return 0;
 }
 
-int strncmp(const char *s1, const char *s2, int n){
+int strncmp(const char *s1, const char *s2, size_t n){
 	return strcmp2(s1, s2, n, 1);
 }
 
 int strcmp(const char *s1, const char *s2){
 	return strcmp2(s1, s2, 0, 0);
+}
+
+char *strncpy(char *dst, const char *src, size_t n){
+	size_t a;
+	for(a = 0; a < n; a++){
+		dst[a] = src[a];
+		if(dst[a] == '\0'){
+			break;
+		}
+	}
+	return dst;
 }
 
 int printString(const char *s);

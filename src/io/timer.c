@@ -4,6 +4,7 @@
 #include"memory/memory.h"
 #include"common.h"
 #include"interrupt/handler.h"
+#include"interrupt/controller/pic.h"
 #include"assembly/assembly.h"
 
 typedef struct TimerEvent TimerEvent;
@@ -50,7 +51,7 @@ void kernelSleep(TimerEventList *tel, unsigned millisecond){
 
 static void timerHandler(InterruptParam *p){
 	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
-	endOfInterrupt(p);
+	p->processorLocal->pic->endOfInterrupt(p);
 	volatile TimerEvent *volatile *prev = &(((TimerEventList*)p->argument)->head);
 	while(*prev != NULL){
 		volatile TimerEvent *curr = *prev;

@@ -4,8 +4,7 @@
 typedef struct ProcessorLocal{
 	struct TaskManager *taskManager;
 	struct InterruptTable *idt;
-	// optional
-	struct LAPIC *lapic;
+	struct InterruptController *pic;
 }ProcessorLocal;
 
 #endif /* PROCESSORLOCAL_H_ */

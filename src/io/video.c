@@ -327,7 +327,7 @@ static const struct{
 	{NO_FUNCTION, noVBEFunction, noVBEFunction}
 };
 
-static void setVBEParameter(InterruptParam *p){
+static void setVBEArgument(InterruptParam *p){
 	p->regs.eax = (p->regs.ebx >> 16);
 	p->regs.ebx &= 0xffff;
 	// read last result
@@ -376,16 +376,13 @@ static void setVBEParameter(InterruptParam *p){
 	}
 }
 
-void initVideoTask(void){
-	static int needInit =1;
-	if(needInit == 0){
-		return;
-		panic("initBIOSTask");
-	}
-	needInit = 0;
+
+const int syscall_setVBEArgument = SYSCALL_TASK_DEFINED;
+
+void initVideoDriver(void){
 	biosFIFO = createFIFO(32);
 	Task *t = createKernelTask(startVBETask);
-	setTaskSystemCall(t, setVBEParameter);
+	setTaskSystemCall(t, setVBEArgument);
 	writeFIFO(biosFIFO, GET_VBE_INFO);
 	writeFIFO(biosFIFO, GET_VBE_MODE_INFO);
 	writeFIFO(biosFIFO, SET_VBE_MODE);

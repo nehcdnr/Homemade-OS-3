@@ -19,7 +19,6 @@ typedef struct InterruptParam{
 	uintptr_t argument; // pushed by os
 	InterruptVector *vector;
 	ProcessorLocal *processorLocal;
-	uint32_t nestLevel;
 	GeneralRegisters regs;
 	uint32_t
 	errorCode, // pushed by cpu or os
@@ -80,8 +79,6 @@ InterruptVector *registerInterrupt(
 void replaceHandler(InterruptVector *v, InterruptHandler *handler, uintptr_t *arg);
 void setHandler(InterruptVector *v, InterruptHandler handler, uintptr_t arg);
 
-extern void (*endOfInterrupt)(InterruptParam *p);
-
 uint8_t toChar(InterruptVector *v);
 int getIRQ(InterruptVector *v);
 
@@ -92,8 +89,5 @@ enum IRQ{
 	FLOPPY_IRQ = 6,
 	MOUSE_IRQ = 12
 };
-typedef union PIC PIC;
-extern InterruptVector *(*irqToVector)(PIC *pic, enum IRQ irq);
-extern void (*setPICMask)(PIC *pic, enum IRQ irq, int setMask);
 
 #endif

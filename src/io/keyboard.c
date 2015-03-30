@@ -1,6 +1,8 @@
 #include"interrupt/handler.h"
 #include"assembly/assembly.h"
 #include"interrupt/systemcall.h"
+#include"interrupt/controller/pic.h"
+#include"multiprocessor/processorlocal.h"
 #include"io.h"
 #include"task/task.h"
 #include"common.h"
@@ -179,7 +181,7 @@ static void ps2Handler(InterruptParam *p){
 		writeFIFO(fifo, (status | (data << 8)));
 	}
 	resume(ps2Param.driver);
-	endOfInterrupt(p);
+	p->processorLocal->pic->endOfInterrupt(p);
 	sti();
 }
 
@@ -232,19 +234,17 @@ static void initKeyboard(void){
 	}
 }
 
-void initPS2Driver(
-	InterruptVector *keyboardVector,
-	InterruptVector *mouseVector
-){
-	static int needInit = 1;
-	if(needInit){
-		needInit = 0;
-		initMouse();
-		initKeyboard();
-		ps2Param.fifo = createFIFO(64);
-		ps2Param.driver = createKernelTask(ps2Driver);
-		resume(ps2Param.driver);
-	}
+void initPS2Driver(PIC* pic){
+	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);
+	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
+	initMouse();
+	initKeyboard();
+	ps2Param.fifo = createFIFO(64);
+	ps2Param.driver = createKernelTask(ps2Driver);
+	resume(ps2Param.driver);
+
 	setHandler(mouseVector, ps2Handler, (uintptr_t)ps2Param.fifo);
 	setHandler(keyboardVector, ps2Handler, (uintptr_t)ps2Param.fifo);
+	pic->setPICMask(pic, MOUSE_IRQ, 0);
+	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 }

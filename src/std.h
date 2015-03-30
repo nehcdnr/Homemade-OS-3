@@ -1,5 +1,6 @@
-#ifndef STD_H_
-#define STD_H_
+#ifndef STD_H_INCLUDED
+#define STD_H_INCLUDED
+
 // stdint.h
 typedef char int8_t;
 typedef unsigned char uint8_t;

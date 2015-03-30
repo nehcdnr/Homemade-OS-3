@@ -1,4 +1,3 @@
-#include"pic.h"
 #include"pic_private.h"
 #include"interrupt/interrupt.h"
 #include"memory/memory.h"
@@ -22,7 +21,7 @@ enum{
 	S_OCW2 = 0xa0,
 };
 
-static void eoi8259(InterruptParam *p){
+static void pic8259_endOfInterrupt(InterruptParam *p){
 	int irq = getIRQ(p->vector);
 	assert(irq >= 0 && irq < 16);
 	if(irq >= 8)
@@ -37,7 +36,7 @@ typedef struct PIC8259{
 	uint8_t masterMask, slaveMask;
 }PIC8259;
 
-static void setPIC8259Mask(PIC *pic, enum IRQ irq, int setMask){
+static void pic8259_setPICMask(PIC *pic, enum IRQ irq, int setMask){
 	PIC8259 *pic8259 = pic->pic8259;
 	int i = (irq < 8? irq: irq - 8);
 	uint8_t *mask = (irq < 8? &pic8259->masterMask: &pic8259->slaveMask);
@@ -48,7 +47,7 @@ static void setPIC8259Mask(PIC *pic, enum IRQ irq, int setMask){
 	out8((irq < 8? M_OCW1: S_OCW1), *mask);
 }
 
-static InterruptVector *PIC8259IRQToVector(PIC *pic, enum IRQ irq){
+static InterruptVector *pic8259_irqToVector(PIC *pic, enum IRQ irq){
 	PIC8259 *pic8259 = pic->pic8259;
 	return getVector(pic8259->vectorBase, irq);
 }
@@ -79,15 +78,15 @@ void disablePIC8259(void){
 PIC8259 *initPIC8259(InterruptTable *t){
 	PIC8259 *NEW(pic);
 	pic->this.pic8259 = pic;
+	pic->this.endOfInterrupt = pic8259_endOfInterrupt;
+	pic->this.irqToVector = pic8259_irqToVector;
+	pic->this.setPICMask = pic8259_setPICMask;
 	pic->interruptTable = t;
 	pic->vectorBase = registerIRQs(t, 0, 16);
 	pic->masterMask = 0xff;
 	pic->slaveMask = 0xff;
 	resetPIC8259(toChar(pic->vectorBase));
-	irqToVector = PIC8259IRQToVector;
-	setPICMask = setPIC8259Mask;
 
-	endOfInterrupt = eoi8259;
 	printk("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
 	return pic;
 }

@@ -1,4 +1,4 @@
-#include "std.h"
+#include<std.h>
 
 // memory.h
 void *memset(void *ptr, unsigned char value, size_t size);
@@ -8,7 +8,8 @@ void *memcpy(void *dst, const void *src, size_t size);
 // string.h
 int strlen(const char *s);
 int strcmp(const char *s1, const char *s2);
-int strncmp(const char *s1, const char *s2, int n);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strncpy(char *dst, const char* src, size_t n);
 
 // assert.h
 void printAndHalt(const char *condition, const char *file, int line);
@@ -35,3 +36,4 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
 int printk(const char *format, ...);
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
+#define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))

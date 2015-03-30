@@ -1,5 +1,4 @@
-#include <io/bios.h>
-#include"pic.h"
+#include"io/bios.h"
 #include"pic_private.h"
 #include"interrupt/interrupt.h"
 #include"common.h"
@@ -115,9 +114,6 @@ static_assert((size_t)(&((LocalNonMaskableStruct*)0)->localAPICLINT) == 5);
 static_assert(sizeof(enum APICStructureType) == 1);
 
 struct IOAPIC{
-	PIC this;
-
-	PIC8259 *legacyPIC;
 
 	int localCount;
 	LocalAPICStruct **local;
@@ -210,8 +206,8 @@ static struct IOAPICProfile *getIOAPICProfile(IOAPIC *apic, int *irq){
 	return NULL;
 }
 
-static void setIOAPICMask(PIC *pic, enum IRQ irq, int setMask){
-	IOAPIC *apic = pic->apic;
+void apic_setPICMask(PIC *pic, enum IRQ irq, int setMask){
+	IOAPIC *apic = pic->apic->ioapic;
 	int i = irq;
 	struct IOAPICProfile *iap = getIOAPICProfile(apic, &i);
 	uint32_t r = readIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i));
@@ -222,8 +218,8 @@ static void setIOAPICMask(PIC *pic, enum IRQ irq, int setMask){
 	writeIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i), r);
 }
 
-static InterruptVector *apicIRQToVector(PIC *pic, enum IRQ irq){
-	IOAPIC *apic = pic->apic;
+InterruptVector *apic_irqToVector(PIC *pic, enum IRQ irq){
+	IOAPIC *apic = pic->apic->ioapic;
 	int i = irq;
 	struct IOAPICProfile *iap = getIOAPICProfile(apic, &i);
 	return getVector(iap->vectorBase, i);
@@ -257,7 +253,6 @@ static IOAPIC *parseMADT(const MADT *madt, InterruptTable *t){
 		panic("parsing MADT error");
 	}
 	IOAPIC *NEW(apic);
-	apic->this.apic = apic;
 	apic->localCount = typeCount[LOCAL_APIC];
 	apic->ioCount = typeCount[IO_APIC];
 	apic->overrideCount = typeCount[SOURCE_OVERRIDE];
@@ -358,12 +353,5 @@ IOAPIC *initAPIC(InterruptTable *t){
 		}
 		apic = parseMADT((const MADT*)(rsdt->entry[i]), t);
 	}
-	setPICMask = setIOAPICMask;
-	irqToVector = apicIRQToVector;
-
 	return apic;
-}
-
-PIC *castAPIC(IOAPIC *apic){
-	return &apic->this;
 }
