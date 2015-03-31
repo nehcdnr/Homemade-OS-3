@@ -8,7 +8,7 @@ typedef struct InterruptVector InterruptVector;
 // handler parameter, see interruptentry.asm
 
 typedef struct{
-	const uint32_t
+	/*const */uint32_t
 	gs, fs, es, ds;
 	uint32_t
 	edi, esi, ebp,

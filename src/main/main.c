@@ -14,8 +14,8 @@
 void bspEntry(void);
 void apEntry(void);
 
-static void initService(PIC *pic){
-	initPS2Driver(pic);
+static void initService(PIC *pic, SystemCallTable *syscallTable){
+	initPS2Driver(pic, syscallTable);
 	initVideoDriver();
 }
 
@@ -37,19 +37,18 @@ void apEntry(void){
 	local->idt = initInterruptTable(gdt, local);
 	lidt(local->idt);
 	// 5. system call & exception
-	SystemCallTable *systemCall = initSystemCall(local->idt);
+	SystemCallTable *syscall = initSystemCall(local->idt);
 	// 6. task
-	local->taskManager = createTaskManager(systemCall, gdt);
+	local->taskManager = createTaskManager(syscall, gdt);
 	// 7. PIC
 	local->pic = initPIC(local->idt);
 	// 8. driver
 	static int first = 1;
 	if(first){
 		first = 0;
-		initService(local->pic);
+		initService(local->pic, syscall);
 	}
 	initLocalTimer(local->pic, createTimer());
-
 	//initMultiprocessor();
 printk("kernel memory usage: %u\n", getAllocatedSize());
 printk("start accepting interrupt...\n");

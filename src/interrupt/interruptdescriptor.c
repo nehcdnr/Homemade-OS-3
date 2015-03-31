@@ -66,7 +66,7 @@ static AsmIntEntry *createAsmIntEntries(ProcessorLocal *p){
 }
 
 void defaultInterruptHandler(InterruptParam *param){
-	printk("unhandled interrupt %d parameter = %x\n", toChar(param->vector), param->argument);
+	printk("unhandled interrupt %d; argument = %x\n", toChar(param->vector), param->argument);
 	printk("ds=%u, eax=%x, error=%u, eip=%u, cs=%u, eflags=%x\n",
 	param->regs.ds, param->regs.eax, param->errorCode, param->eip, param->cs, param->eflags.value);
 	panic("unhandled interrupt");
@@ -126,7 +126,7 @@ InterruptVector *getVector(InterruptVector *base, int irq){
 	return base + irq;
 }
 
-void systemCall(enum SystemCall eax){
+void systemCall(int eax){
 	__asm__(
 	"int $"SYSTEM_CALL_VECTOR_STRING
 	:
@@ -191,8 +191,11 @@ InterruptTable *initInterruptTable(SegmentTable *gdt, ProcessorLocal *pl){
 void callHandler(InterruptTable *t, uint8_t intNumber, InterruptParam *p){
 	assert(intNumber < t->length);
 	InterruptVector *originalVector = p->vector;
+	uintptr_t originalArgument = p->argument;
 	p->vector = t->vector + intNumber;
+	p->argument = t->asmIntEntry[intNumber].arg;
 	t->asmIntEntry[intNumber].handler(p);
+	p->argument = originalArgument;
 	p->vector = originalVector;
 }
 

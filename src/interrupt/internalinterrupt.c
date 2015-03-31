@@ -80,7 +80,7 @@ static void v8086Monitor(InterruptParam *p){
 	case 0xcd: // int BYTE n
 		p->eip++;
 		if(instruction[1] == 0x10){ // BIOS
-			const uint16_t (*const v8086IntTable)[2] = ((uint16_t)0);
+			const uint16_t (*const v8086IntTable)[2] = 0;
 			v8086Push(p, p->eflags.value);
 			v8086Push(p, p->cs);
 			v8086Push(p, p->eip);

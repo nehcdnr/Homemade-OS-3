@@ -376,9 +376,6 @@ static void setVBEArgument(InterruptParam *p){
 	}
 }
 
-
-const int syscall_setVBEArgument = SYSCALL_TASK_DEFINED;
-
 void initVideoDriver(void){
 	biosFIFO = createFIFO(32);
 	Task *t = createKernelTask(startVBETask);

@@ -171,7 +171,7 @@ static void writeData(uint16_t port, uint8_t data){
 struct{
 	FIFO *fifo;
 	Task *driver;
-}ps2Param = {NULL, NULL};
+}ps2IntParam = {NULL, NULL};
 
 static void ps2Handler(InterruptParam *p){
 	uintptr_t status = in8(PS2_CMD_PORT);
@@ -180,7 +180,7 @@ static void ps2Handler(InterruptParam *p){
 		FIFO *fifo = (FIFO*)(p->argument);
 		writeFIFO(fifo, (status | (data << 8)));
 	}
-	resume(ps2Param.driver);
+	resume(ps2IntParam.driver);
 	p->processorLocal->pic->endOfInterrupt(p);
 	sti();
 }
@@ -189,7 +189,7 @@ static void ps2Driver(void){
 	while(1){
 		uintptr_t ds;
 		uint8_t data, status;
-		while(readFIFO(ps2Param.fifo, &ds) == 0){
+		while(readFIFO(ps2IntParam.fifo, &ds) == 0){
 			systemCall(SYSCALL_SUSPEND);
 		}
 		data = ((ds >> 8) & 0xff);
@@ -201,6 +201,14 @@ static void ps2Driver(void){
 			keyboardInput(data);
 		}
 	}
+}
+
+static void syscall_keyboard(InterruptParam *p){
+	printk("%d\n",p->regs.eax);
+}
+
+static void syscall_mouse(InterruptParam *p){
+	printk("%d\n",p->regs.eax);
 }
 
 static void initMouse(void){
@@ -234,17 +242,21 @@ static void initKeyboard(void){
 	}
 }
 
-void initPS2Driver(PIC* pic){
+void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
+	// interrupt
 	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);
 	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
 	initMouse();
 	initKeyboard();
-	ps2Param.fifo = createFIFO(64);
-	ps2Param.driver = createKernelTask(ps2Driver);
-	resume(ps2Param.driver);
+	ps2IntParam.fifo = createFIFO(64);
+	ps2IntParam.driver = createKernelTask(ps2Driver);
+	resume(ps2IntParam.driver);
 
-	setHandler(mouseVector, ps2Handler, (uintptr_t)ps2Param.fifo);
-	setHandler(keyboardVector, ps2Handler, (uintptr_t)ps2Param.fifo);
+	setHandler(mouseVector, ps2Handler, (uintptr_t)ps2IntParam.fifo);
+	setHandler(keyboardVector, ps2Handler, (uintptr_t)ps2IntParam.fifo);
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
+	// system call
+	registerSystemService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard);
+	registerSystemService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse);
 }

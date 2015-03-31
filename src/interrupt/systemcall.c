@@ -2,36 +2,117 @@
 #include<std.h>
 #include<common.h>
 #include"handler.h"
+#include"multiprocessor/spinlock.h"
 #include"memory/memory.h"
 
 struct SystemCallTable{
-	SystemCallFunction call[NUMBER_OF_SYSTEM_CALLS];
+	Spinlock lock;
+	unsigned int usedCount;
+	struct SystemCallEntry{
+		char name[MAX_NAME_LENGTH];
+		unsigned int number;
+		SystemCallFunction call;
+	}entry[NUMBER_OF_SYSTEM_CALLS];
 };
 
 void registerSystemCall(SystemCallTable *s, enum SystemCall systemCall, SystemCallFunction f){
-	assert(s->call[systemCall] == NULL);
-	s->call[systemCall] = f;
+	assert(s->entry[systemCall].call == NULL);
+	assert(systemCall < NUMBER_OF_RESERVED_SYSTEM_CALLS && systemCall >= 0);
+	acquireLock(&s->lock);
+	s->entry[systemCall].name[0] = '\0';
+	s->entry[systemCall].number = systemCall;
+	s->entry[systemCall].call = f;
+	releaseLock(&s->lock);
 }
 
-static SystemCallTable *systemCallTable = NULL;
+static int _querySystemService(struct SystemCallTable *s, const char *name){
+	unsigned int i;
+	for(i = SYSCALL_SERVICE_BEGIN; i < s->usedCount; i++){
+		if(strncmp(name, s->entry[i].name, MAX_NAME_LENGTH) == 0){
+			return s->entry[i].number;
+		}
+	}
+	return NUMBER_OF_SYSTEM_CALLS;
+}
+
+static int isValidName(const char *name){
+	int a;
+	for(a = 0; a < MAX_NAME_LENGTH - 1 && name[a] != '\0'; a++);
+	if(name[a] != '\0' || name[0] == '\0'){
+		return 0;
+	}
+	return 1;
+}
+
+enum ServiceNameError registerSystemService(SystemCallTable *systemCallTable, const char *name, SystemCallFunction f){
+	if(isValidName(name) == 0){
+		return INVALID_NAME;
+	}
+	enum ServiceNameError r = SUCCESS;
+	acquireLock(&systemCallTable->lock);
+	if(_querySystemService(systemCallTable, name) < NUMBER_OF_SYSTEM_CALLS){
+		r = SERVICE_EXISTING;
+	}
+	else{
+		unsigned int u = systemCallTable->usedCount;
+		if(u == NUMBER_OF_SYSTEM_CALLS){
+			r = TOO_MANY_SERVICE;
+		}
+		else{
+			systemCallTable->usedCount++;
+			struct SystemCallEntry *e = systemCallTable->entry + u;
+			strncpy(e->name, name, MAX_NAME_LENGTH);
+			e->number = u;
+			e->call = f;
+		}
+	}
+	releaseLock(&systemCallTable->lock);
+	return r;
+}
+
+enum ServiceNameError querySystemService(SystemCallTable *systemCallTable, const char *name, unsigned int *syscallNumber){
+	enum ServiceNameError r = SUCCESS;
+	if(isValidName(name) == 0){
+		return INVALID_NAME;
+	}
+	acquireLock(&systemCallTable->lock);
+	*syscallNumber = _querySystemService(systemCallTable, name);
+	releaseLock(&systemCallTable->lock);
+
+	if(*syscallNumber >= NUMBER_OF_SYSTEM_CALLS){
+		return SERVICE_NOT_EXISTING;
+	}
+	return r;
+}
 
 static void systemCallHandler(InterruptParam *p){
 	assert(p->regs.eax < NUMBER_OF_SYSTEM_CALLS);
-	assert(systemCallTable->call[p->regs.eax] != NULL);
-	(systemCallTable->call[p->regs.eax])(p);
+	SystemCallTable *s = (SystemCallTable*)p->argument;
+	if(s->entry[p->regs.eax].call == NULL){
+		printk("unregistered system call: %d\n",p->regs.eax);
+	}
+	else{
+		s->entry[p->regs.eax].call(p);
+	}
 	sti();
 }
 
 SystemCallTable *initSystemCall(InterruptTable *t){
+	SystemCallTable *systemCallTable = NULL;
 	static int needInit = 1;
 	if(needInit){
 		needInit = 0;
 		NEW(systemCallTable);
-		int i;
+		assert(systemCallTable != NULL);
+		systemCallTable->lock = initialSpinlock;
+		systemCallTable->usedCount = SYSCALL_SERVICE_BEGIN;
+		unsigned int i;
 		for(i = 0; i < NUMBER_OF_SYSTEM_CALLS; i++){
-			systemCallTable->call[i] = NULL;
+			systemCallTable->entry[i].name[0] = '\0';
+			systemCallTable->entry[i].number = i;
+			systemCallTable->entry[i].call = NULL;
 		}
 	}
-	registerInterrupt(t, SYSTEM_CALL, systemCallHandler, 0);
+	registerInterrupt(t, SYSTEM_CALL, systemCallHandler, (uintptr_t)systemCallTable);
 	return systemCallTable;
 }

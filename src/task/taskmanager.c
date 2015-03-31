@@ -123,6 +123,8 @@ void startVirtual8086Task(void (*cs_ip)(void), uintptr_t ss_sp){
 		p.ss = ((ss_sp - 0x10000) >> 4) + 1;
 		p.esp = ss_sp - (p.ss << 4);
 	}
+	p.regs.ds = p.regs.es = p.regs.fs = p.regs.gs = getDS();
+	p.ds8086 = p.es8086 = p.fs8086 = p.gs8086 = 0;
 	EFlags flags;
 	flags.value = 0;
 	flags.bit.reserve1 = 1;

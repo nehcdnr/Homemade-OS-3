@@ -17,4 +17,5 @@ ConsoleDisplay *initKernelConsole(void);
 
 // keyboard.c
 typedef struct InterruptController PIC;
-void initPS2Driver(PIC *pic);
+typedef struct SystemCallTable SystemCallTable;
+void initPS2Driver(PIC *pic, SystemCallTable *syscallTable);

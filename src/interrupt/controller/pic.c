@@ -7,7 +7,7 @@
 // see entry.asm
 volatile uintptr_t *initialESP;
 #define KERNEL_STACK_SIZE (8192)
-static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
+static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){return;
 	const uint32_t lapicID = getLAPICID(lapic);
 	const int n = getNumberOfLAPIC(ioapic);
 	NEW_ARRAY(initialESP, n);
