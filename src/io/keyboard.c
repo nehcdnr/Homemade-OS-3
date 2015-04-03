@@ -1,3 +1,4 @@
+#include <task/semaphore.h>
 #include"interrupt/handler.h"
 #include"assembly/assembly.h"
 #include"interrupt/systemcall.h"
@@ -5,6 +6,7 @@
 #include"multiprocessor/processorlocal.h"
 #include"io.h"
 #include"task/task.h"
+#include"task/semaphore.h"
 #include"common.h"
 #include"fifo.h"
 
@@ -139,16 +141,6 @@ static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
 	return key;
 }
 
-static void keyboardInput(uint8_t newData){
-	int release = 0;
-	unsigned int key = scanCodeToKey(newData, &release);
-	if(key != NO_KEY && key < 128 && release == 0){
-		printk("%c", key);
-	}
-	//printk("%x %d %d\n",newData, key, release);
-
-}
-
 #define PS2_DATA_PORT (0x60)
 #define PS2_CMD_PORT (0x64)
 
@@ -168,29 +160,62 @@ static void writeData(uint16_t port, uint8_t data){
 	out8(port, data);
 }
 
-struct{
-	FIFO *fifo;
+typedef struct PS2Data{
+	FIFO *intFIFO, *sysFIFO;
+	Semaphore *intSemaphore, *sysSemaphore;
 	Task *driver;
-}ps2IntParam = {NULL, NULL};
+}PS2Data;
+
+// ps2Handler -> ps2Driver -> keyboardInput ->syscall_keyboard
 
 static void ps2Handler(InterruptParam *p){
 	uintptr_t status = in8(PS2_CMD_PORT);
 	if((status & READABLE_FLAG) != 0){
 		uintptr_t data = readData();
-		FIFO *fifo = (FIFO*)(p->argument);
-		writeFIFO(fifo, (status | (data << 8)));
+		PS2Data *ps2 = (PS2Data*)(p->argument);
+		if(writeFIFO(ps2->intFIFO, (status | (data << 8)))){
+			releaseSemaphore(ps2->intSemaphore);
+		}
 	}
-	resume(ps2IntParam.driver);
 	p->processorLocal->pic->endOfInterrupt(p);
 	sti();
 }
+
+static void syscall_keyboard(InterruptParam *p){
+	printk("%d\n",p->regs.eax);
+	PS2Data *ps2Data = (PS2Data*)(p->argument);
+	uintptr_t key;
+	acquireSemaphore(ps2Data->sysSemaphore, p->processorLocal->taskManager);
+	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
+		panic("ps2 sysFIFO");
+	}
+	SYSTEM_CALL_RETUEN_VALUE(p) = key;
+}
+
+static void syscall_mouse(InterruptParam *p){
+	printk("%d\n",p->regs.eax);
+}
+
+static void keyboardInput(uint8_t data, PS2Data *ps2Data){
+	int release = 0;
+	unsigned int key = scanCodeToKey(data, &release);
+	if(key != NO_KEY && key < 128 && release == 0){
+		if(overwriteFIFO(ps2Data->sysFIFO, key)){
+			syscall_releaseSemaphore(ps2Data->sysSemaphore);
+		}
+		printk("%c", key);
+	}
+}
+
+static PS2Data ps2 = {NULL, NULL, NULL, NULL, NULL};
 
 static void ps2Driver(void){
 	while(1){
 		uintptr_t ds;
 		uint8_t data, status;
-		while(readFIFO(ps2IntParam.fifo, &ds) == 0){
-			systemCall(SYSCALL_SUSPEND);
+		syscall_acquireSemaphore(ps2.intSemaphore);
+		if(readFIFO(ps2.intFIFO, &ds) == 0){
+			panic("ps2 intFIFO");
 		}
 		data = ((ds >> 8) & 0xff);
 		status = (ds & 0xff);
@@ -198,17 +223,9 @@ static void ps2Driver(void){
 			mouseInput(data);
 		}
 		else{
-			keyboardInput(data);
+			keyboardInput(data, &ps2);
 		}
 	}
-}
-
-static void syscall_keyboard(InterruptParam *p){
-	printk("%d\n",p->regs.eax);
-}
-
-static void syscall_mouse(InterruptParam *p){
-	printk("%d\n",p->regs.eax);
 }
 
 static void initMouse(void){
@@ -248,15 +265,18 @@ void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
 	initMouse();
 	initKeyboard();
-	ps2IntParam.fifo = createFIFO(64);
-	ps2IntParam.driver = createKernelTask(ps2Driver);
-	resume(ps2IntParam.driver);
+	ps2.intFIFO = createFIFO(64);
+	ps2.sysFIFO = createFIFO(128);
+	ps2.intSemaphore = createSemaphore(0); // TODO: RW lock
+	ps2.sysSemaphore = createSemaphore(0);
+	ps2.driver = createKernelTask(ps2Driver);
+	resume(ps2.driver);
 
-	setHandler(mouseVector, ps2Handler, (uintptr_t)ps2IntParam.fifo);
-	setHandler(keyboardVector, ps2Handler, (uintptr_t)ps2IntParam.fifo);
+	setHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
+	setHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 	// system call
-	registerSystemService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard);
-	registerSystemService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse);
+	registerSystemService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard, (uintptr_t)&ps2);
+	registerSystemService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse, (uintptr_t)&ps2);
 }

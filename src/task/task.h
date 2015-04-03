@@ -10,6 +10,7 @@ typedef struct Task Task;
 // pause current task and put it into queue
 void schedule(TaskManager *tm);
 // put Task t into queue if it is suspended (by systemCall(SYSCALL_SUSPEND))
+Task *suspendCurrent(TaskManager *tm);
 void resume(/*TaskManager *tm, */Task *t);
 
 TaskManager *createTaskManager(SystemCallTable *systemCallTable, SegmentTable *gdt);

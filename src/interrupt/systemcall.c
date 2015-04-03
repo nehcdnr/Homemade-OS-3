@@ -12,16 +12,23 @@ struct SystemCallTable{
 		char name[MAX_NAME_LENGTH];
 		unsigned int number;
 		SystemCallFunction call;
+		uintptr_t argument;
 	}entry[NUMBER_OF_SYSTEM_CALLS];
 };
 
-void registerSystemCall(SystemCallTable *s, enum SystemCall systemCall, SystemCallFunction f){
+void registerSystemCall(
+	SystemCallTable *s,
+	enum SystemCall systemCall,
+	SystemCallFunction func,
+	uintptr_t arg
+){
 	assert(s->entry[systemCall].call == NULL);
 	assert(systemCall < NUMBER_OF_RESERVED_SYSTEM_CALLS && systemCall >= 0);
 	acquireLock(&s->lock);
 	s->entry[systemCall].name[0] = '\0';
 	s->entry[systemCall].number = systemCall;
-	s->entry[systemCall].call = f;
+	s->entry[systemCall].call = func;
+	s->entry[systemCall].argument = arg;
 	releaseLock(&s->lock);
 }
 
@@ -44,7 +51,12 @@ static int isValidName(const char *name){
 	return 1;
 }
 
-enum ServiceNameError registerSystemService(SystemCallTable *systemCallTable, const char *name, SystemCallFunction f){
+enum ServiceNameError registerSystemService(
+	SystemCallTable *systemCallTable,
+	const char *name,
+	SystemCallFunction func,
+	uintptr_t arg
+){
 	if(isValidName(name) == 0){
 		return INVALID_NAME;
 	}
@@ -63,7 +75,8 @@ enum ServiceNameError registerSystemService(SystemCallTable *systemCallTable, co
 			struct SystemCallEntry *e = systemCallTable->entry + u;
 			strncpy(e->name, name, MAX_NAME_LENGTH);
 			e->number = u;
-			e->call = f;
+			e->call = func;
+			e->argument = arg;
 		}
 	}
 	releaseLock(&systemCallTable->lock);
@@ -88,11 +101,15 @@ enum ServiceNameError querySystemService(SystemCallTable *systemCallTable, const
 static void systemCallHandler(InterruptParam *p){
 	assert(p->regs.eax < NUMBER_OF_SYSTEM_CALLS);
 	SystemCallTable *s = (SystemCallTable*)p->argument;
-	if(s->entry[p->regs.eax].call == NULL){
+	struct SystemCallEntry *e = s->entry + p->regs.eax;
+	if(e->call == NULL){
 		printk("unregistered system call: %d\n",p->regs.eax);
 	}
 	else{
-		s->entry[p->regs.eax].call(p);
+		uintptr_t oldArgument = p->argument;
+		p->argument = e->argument;
+		e->call(p);
+		p->argument = oldArgument;
 	}
 	sti();
 }

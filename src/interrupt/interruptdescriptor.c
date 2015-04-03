@@ -126,11 +126,19 @@ InterruptVector *getVector(InterruptVector *base, int irq){
 	return base + irq;
 }
 
-void systemCall(int eax){
+void systemCall0(int systemCallNumber){
 	__asm__(
 	"int $"SYSTEM_CALL_VECTOR_STRING
 	:
-	:"a"(eax)
+	:"a"(systemCallNumber)
+	);
+}
+
+void systemCall1(int systemCallNumber, uintptr_t param0){
+	__asm__(
+	"int $"SYSTEM_CALL_VECTOR_STRING
+	:
+	:"a"(systemCallNumber), "b"(param0)
 	);
 }
 

@@ -355,7 +355,7 @@ static void setVBEArgument(InterruptParam *p){
 	while(1){
 		// wait for next request
 		while(readFIFO(biosFIFO, &lastData) == 0){
-			systemCall(SYSCALL_SUSPEND);
+			systemCall0(SYSCALL_SUSPEND);
 		}
 		// set next argument
 		int f;
@@ -382,8 +382,8 @@ void initVideoDriver(void){
 	setTaskSystemCall(t, setVBEArgument);
 	writeFIFO(biosFIFO, GET_VBE_INFO);
 	writeFIFO(biosFIFO, GET_VBE_MODE_INFO);
-	writeFIFO(biosFIFO, SET_VBE_MODE);
-	writeFIFO(biosFIFO, SET_VBE_DISPLAY_WINDOW);
+	//writeFIFO(biosFIFO, SET_VBE_MODE);
+	//writeFIFO(biosFIFO, SET_VBE_DISPLAY_WINDOW);
 	//writeFIFO(biosFIFO, SET_VBE_DISPLAY_START);
 	resume(t);
 }

@@ -1,4 +1,5 @@
 #include"task.h"
+#include"task_private.h"
 #include"segment/segment.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
@@ -191,6 +192,11 @@ void resume(/*TaskManager *tm, */Task *t){
 	releaseLock(&globalQueueLock);
 }
 
+Task *suspendCurrent(TaskManager *tm){
+	tm->current->state = SUSPENDED;
+	return tm->current;
+}
+
 static void syscallSuspend(InterruptParam *p){
 	// not need to lock current task
 	p->processorLocal->taskManager->current->state = SUSPENDED;
@@ -220,8 +226,10 @@ TaskManager *createTaskManager(
 		for(t = 0; t < NUMBER_OF_PRIORITY; t++){
 			globalQueue->head[t] = NULL;
 		}
-		registerSystemCall(systemCallTable, SYSCALL_SUSPEND, syscallSuspend);
-		registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined);
+		registerSystemCall(systemCallTable, SYSCALL_SUSPEND, syscallSuspend, 0);
+		registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
+
+		initSemaphore(systemCallTable);
 	}
 	//pushQueue(globalQueue, createTask(b, testTask, 0));
 	return tm;

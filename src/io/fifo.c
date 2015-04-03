@@ -10,17 +10,39 @@ struct FIFO{
 	uintptr_t *buffer;
 };
 
-void writeFIFO(FIFO *fifo, uintptr_t data){
+static void dequeue1(FIFO *fifo){
+	fifo->begin = ((fifo->begin + 1) & (fifo->bufferLength - 1));
+	fifo->dataLength--;
+}
+
+static int _writeFIFO(FIFO *fifo, uintptr_t data, int throwOldestFlag){
+	int r = 1;
 	acquireLock(&fifo->lock);
 	if(fifo->dataLength == fifo->bufferLength){
 		printk("warning: fifo %x is full\n", fifo);
+		if(throwOldestFlag){
+			dequeue1(fifo);
+			r = 1;
+		}
+		else{
+			r = 0;
+		}
 	}
-	else{
+	if(r == 1){
 		int i = ((fifo->begin + fifo->dataLength) & (fifo->bufferLength - 1));
 		fifo->buffer[i] = data;
 		fifo->dataLength++;
 	}
 	releaseLock(&fifo->lock);
+	return r;
+}
+
+int writeFIFO(FIFO *fifo, uintptr_t data){
+	return _writeFIFO(fifo, data, 0);
+}
+
+int overwriteFIFO(FIFO *fifo, uintptr_t data){
+	return _writeFIFO(fifo, data, 1);
 }
 
 static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
@@ -30,8 +52,7 @@ static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
 	if(r){
 		*data = fifo->buffer[fifo->begin];
 		if(readFlag){
-			fifo->begin = ((fifo->begin + 1) & (fifo->bufferLength - 1));
-			fifo->dataLength--;
+			dequeue1(fifo);
 		}
 	}
 	releaseLock(&fifo->lock);
