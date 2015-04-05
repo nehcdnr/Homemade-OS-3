@@ -21,4 +21,4 @@ void startVirtual8086Task(void (*cs_ip)(void), uintptr_t ss_sp);
 
 // initial state is suspended
 Task *createKernelTask(void(*eip0)(void));
-void setTaskSystemCall(Task *t, SystemCallFunction f);
+void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a);

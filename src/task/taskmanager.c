@@ -26,6 +26,7 @@ typedef struct Task{
 	int priority;
 
 	SystemCallFunction taskDefinedSystemCall;
+	uintptr_t taskDefinedArgument;
 
 	struct Task *next, *prev;
 }Task;
@@ -169,6 +170,7 @@ static Task *createTask(
 	t->espInterrupt = esp0;
 	t->esp0 = initTaskStack(eflags.value, (uint32_t)eip0, esp0);
 	t->taskDefinedSystemCall = undefinedSystemCall;
+	t->taskDefinedArgument = 0;
 	t->next =
 	t->prev = NULL;
 	return t;
@@ -179,8 +181,9 @@ Task *createKernelTask(void (*eip0)(void)){
 	return t;
 }
 
-void setTaskSystemCall(Task *t, SystemCallFunction f){
+void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
 	t->taskDefinedSystemCall = f;
+	t->taskDefinedArgument = a;
 }
 
 void resume(/*TaskManager *tm, */Task *t){
@@ -197,14 +200,11 @@ Task *suspendCurrent(TaskManager *tm){
 	return tm->current;
 }
 
-static void syscallSuspend(InterruptParam *p){
-	// not need to lock current task
-	p->processorLocal->taskManager->current->state = SUSPENDED;
-	schedule(p->processorLocal->taskManager);
-}
-
 static void syscallTaskDefined(InterruptParam *p){
+	uintptr_t oldArgument = p->argument;
+	p->argument = p->processorLocal->taskManager->current->taskDefinedArgument;
 	p->processorLocal->taskManager->current->taskDefinedSystemCall(p);
+	p->argument = oldArgument;
 	// schedule(p->processorLocal->taskManager);
 }
 
@@ -226,7 +226,6 @@ TaskManager *createTaskManager(
 		for(t = 0; t < NUMBER_OF_PRIORITY; t++){
 			globalQueue->head[t] = NULL;
 		}
-		registerSystemCall(systemCallTable, SYSCALL_SUSPEND, syscallSuspend, 0);
 		registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
 
 		initSemaphore(systemCallTable);

@@ -9,4 +9,3 @@ void syscall_releaseSemaphore(Semaphore *s);
 // interrupt handler functions
 void acquireSemaphore(Semaphore *s, TaskManager *tm);
 void releaseSemaphore(Semaphore *s);
-

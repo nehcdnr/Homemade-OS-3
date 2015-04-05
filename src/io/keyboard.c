@@ -189,7 +189,7 @@ static void syscall_keyboard(InterruptParam *p){
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
 		panic("ps2 sysFIFO");
 	}
-	SYSTEM_CALL_RETUEN_VALUE(p) = key;
+	SYSTEM_CALL_RETURN_VALUE_0(p) = key;
 }
 
 static void syscall_mouse(InterruptParam *p){

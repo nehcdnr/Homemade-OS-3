@@ -34,23 +34,24 @@ static void pushBlockingQueue(struct Semaphore *s, volatile BlockingTask *w, Tas
 
 static Task *popBlockingQueue(struct Semaphore *s){
 	volatile BlockingTask *b = s->firstWaiting;
-	if(b != NULL){
-		s->firstWaiting = b->next;
-		if(s->firstWaiting == NULL){
-			s->lastWaiting = NULL;
-		}
+	if(b == NULL){
+		return NULL;
+	}
+	s->firstWaiting = b->next;
+	if(s->firstWaiting == NULL){
+		s->lastWaiting = NULL;
 	}
 	return b->task;
 }
 
 static void _acquireSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT(0, p); // TODO: check parameter
+	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
 	acquireSemaphore(s, p->processorLocal->taskManager);
 	sti();
 }
 
 static void _releaseSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT(0, p); // TODO: check parameter
+	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
 	releaseSemaphore(s);
 	sti();
 }

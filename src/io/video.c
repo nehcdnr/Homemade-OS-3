@@ -1,9 +1,12 @@
 #include <io/bios.h>
 #include"assembly/assembly.h"
 #include"memory/memory.h"
+#include"interrupt/systemcall.h"
 #include"io.h"
 #include"task/task.h"
+#include"task/semaphore.h"
 #include"multiprocessor/spinlock.h"
+#include"multiprocessor/processorlocal.h"
 #include"common.h"
 #include"fifo.h"
 
@@ -170,8 +173,13 @@ enum VBEFunction{
 
 // TODO: paging & dynamic allocate stack
 #define V8086_STACK_TOP (0x4000)
-static FIFO *biosFIFO = NULL;
-enum VBEFunction lastData = NO_FUNCTION;
+typedef struct Video{
+	FIFO *biosFIFO;
+	Semaphore *sysSemaphore;
+}Video;
+static Video video = {NULL, NULL};
+
+static enum VBEFunction lastData = NO_FUNCTION;
 
 void callBIOS(void);
 static void startVBETask(void){
@@ -291,22 +299,22 @@ static void setVBEMode_out(__attribute__((__unused__)) InterruptParam *p){
 static void setVBEDisplayWindow_in(InterruptParam *p){
 	p->regs.eax = 0x4f05;
 	p->regs.ebx = /*set*/(0 << 8) + /*window A*/0;
-	p->regs.edx = 0; // window number
+	p->regs.edx = 2; // window number
 }
 
 static void setVBEDisplayWindow_out(__attribute__((__unused__)) InterruptParam *p){
-	int a;
-	for(a=0;a<65536;a++)((uint8_t*)0xa0000)[a]=(a%3==1?0xff:0);
 }
 
 static void setVBEDisplayStart_in(InterruptParam *p){
 	p->regs.eax = 0x4f07;
 	p->regs.ebx = 0;
-	p->regs.ecx = 0;
-	p->regs.edx = 0;
+	p->regs.ecx = 0; // first pixel
+	p->regs.edx = 0; // first scan line
 }
 static void setVBEDisplayStart_out(InterruptParam *p){
-	printk("setVBEDisplayStart: %x %x",p->regs.ecx, p->regs.edx);
+	printk("setVBEDisplayStart: %x",p->regs.eax);
+	int a;
+	for(a=0;a<65536;a++)((uint8_t*)0xa0000)[a]=(a%3==2?0xff:0);
 }
 
 static void noVBEFunction(__attribute__((__unused__)) InterruptParam *p){
@@ -328,6 +336,7 @@ static const struct{
 };
 
 static void setVBEArgument(InterruptParam *p){
+	Video *v = (Video*)(p->argument);
 	p->regs.eax = (p->regs.ebx >> 16);
 	p->regs.ebx &= 0xffff;
 	// read last result
@@ -354,8 +363,9 @@ static void setVBEArgument(InterruptParam *p){
 	}
 	while(1){
 		// wait for next request
-		while(readFIFO(biosFIFO, &lastData) == 0){
-			systemCall0(SYSCALL_SUSPEND);
+		acquireSemaphore(v->sysSemaphore, p->processorLocal->taskManager);
+		while(readFIFO(v->biosFIFO, &lastData) == 0){
+			panic("biosFIFO");
 		}
 		// set next argument
 		int f;
@@ -376,15 +386,27 @@ static void setVBEArgument(InterruptParam *p){
 	}
 }
 
-void initVideoDriver(void){
-	biosFIFO = createFIFO(32);
-	Task *t = createKernelTask(startVBETask);
-	setTaskSystemCall(t, setVBEArgument);
-	writeFIFO(biosFIFO, GET_VBE_INFO);
-	writeFIFO(biosFIFO, GET_VBE_MODE_INFO);
-	//writeFIFO(biosFIFO, SET_VBE_MODE);
-	//writeFIFO(biosFIFO, SET_VBE_DISPLAY_WINDOW);
-	//writeFIFO(biosFIFO, SET_VBE_DISPLAY_START);
-	resume(t);
+static void syscall_video(InterruptParam *p){
+	Video *v = (Video*)(p->argument);
+	uintptr_t param0 = SYSTEM_CALL_ARGUMENT_0(p);
+	if(writeFIFO(v->biosFIFO, param0)){
+		releaseSemaphore(v->sysSemaphore);
+	}
+	else{
+		SYSTEM_CALL_RETURN_VALUE_0(p) = 1;
+	}
 }
 
+void initVideoDriver(SystemCallTable *systemCallTable){
+	video.biosFIFO = createFIFO(32);
+	video.sysSemaphore = createSemaphore(2);
+	Task *t = createKernelTask(startVBETask);
+	setTaskSystemCall(t, setVBEArgument, (uintptr_t)&video);
+	writeFIFO(video.biosFIFO, GET_VBE_INFO);
+	writeFIFO(video.biosFIFO, GET_VBE_MODE_INFO);
+	//writeFIFO(video.biosFIFO, SET_VBE_MODE);
+	//writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_WINDOW);
+	//writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
+	registerSystemService(systemCallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
+	resume(t);
+}

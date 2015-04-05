@@ -138,7 +138,7 @@ void systemCall1(int systemCallNumber, uintptr_t param0){
 	__asm__(
 	"int $"SYSTEM_CALL_VECTOR_STRING
 	:
-	:"a"(systemCallNumber), "b"(param0)
+	:"a"(systemCallNumber), "d"(param0)
 	);
 }
 
