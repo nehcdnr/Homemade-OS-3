@@ -13,12 +13,14 @@ void schedule(TaskManager *tm);
 Task *suspendCurrent(TaskManager *tm);
 void resume(/*TaskManager *tm, */Task *t);
 
-TaskManager *createTaskManager(SystemCallTable *systemCallTable, SegmentTable *gdt);
+TaskManager *createTaskManager(SegmentTable *gdt);
+void initTaskManagement(SystemCallTable *systemCallTable);
 
 void defaultExitTask(void);
 
-void startVirtual8086Task(void (*cs_ip)(void), uintptr_t ss_sp);
+void switchToVirtual8086Mode(void (*cs_ip)(void), uintptr_t ss_sp);
 
 // initial state is suspended
 Task *createKernelTask(void(*eip0)(void));
+
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a);

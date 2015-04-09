@@ -37,3 +37,21 @@ void printAndHalt(const char *condition, const char *file, int line);
 int printk(const char *format, ...);
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
 #define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))
+
+#define REMOVE_FROM_DQUEUE(E) do{\
+	*((E)->prev) = (E)->next;\
+	if((E)->next != NULL){\
+		(E)->next->prev = (E)->prev; \
+		(E)->next = NULL;\
+	}\
+	(E)->prev = NULL;\
+}while(0)
+
+#define ADD_TO_DQUEUE(E, P) do{\
+	(E)->prev = (P);\
+	(E)->next = *(P);\
+	if((E)->next != NULL){\
+		(E)->next->prev = &((E)->next);\
+	}\
+	*((E)->prev) = (E);\
+}while(0)

@@ -46,7 +46,7 @@ static Task *popBlockingQueue(struct Semaphore *s){
 
 static void _acquireSemaphore(InterruptParam *p){
 	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
-	acquireSemaphore(s, p->processorLocal->taskManager);
+	acquireSemaphore(s, getProcessorLocal()->taskManager);
 	sti();
 }
 

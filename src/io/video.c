@@ -109,21 +109,17 @@ int printConsole(ConsoleDisplay *cd, const char *s){
 }
 
 ConsoleDisplay *initKernelConsole(void){
-	static int needInit = 1;
 	ConsoleDisplay *cd = &kernelConsole;
-	if(needInit){
-		needInit = 0;
-		cd->cursor = 0;
-		cd->maxRow = 25;
-		cd->maxColumn = 80;
-		cd->video = DEFAULT_TEXT_VIDEO_ADDRESS;
-		cd->lock = initialSpinlock;
-		updateVideoAddress(cd);
-		updateCursor(cd);
-		int c = 0;
-		for(c = 0; c < cd->maxColumn * cd->maxRow; c++){
-			cd->video[c] = WHITE_SPACE;
-		}
+	cd->cursor = 0;
+	cd->maxRow = 25;
+	cd->maxColumn = 80;
+	cd->video = DEFAULT_TEXT_VIDEO_ADDRESS;
+	cd->lock = initialSpinlock;
+	updateVideoAddress(cd);
+	updateCursor(cd);
+	int c = 0;
+	for(c = 0; c < cd->maxColumn * cd->maxRow; c++){
+		cd->video[c] = WHITE_SPACE;
 	}
 	return cd;
 }
@@ -183,7 +179,7 @@ static enum VBEFunction lastData = NO_FUNCTION;
 
 void callBIOS(void);
 static void startVBETask(void){
-	startVirtual8086Task(callBIOS, V8086_STACK_TOP - 4);
+	switchToVirtual8086Mode(callBIOS, V8086_STACK_TOP - 4);
 }
 
 // VBE 2.0
@@ -363,7 +359,7 @@ static void setVBEArgument(InterruptParam *p){
 	}
 	while(1){
 		// wait for next request
-		acquireSemaphore(v->sysSemaphore, p->processorLocal->taskManager);
+		acquireSemaphore(v->sysSemaphore, getProcessorLocal()->taskManager);
 		while(readFIFO(v->biosFIFO, &lastData) == 0){
 			panic("biosFIFO");
 		}

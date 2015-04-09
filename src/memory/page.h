@@ -2,6 +2,8 @@
 typedef struct PageDirectory PageDirectory;
 typedef struct PageTable PageTable;
 PageDirectory *createPageDirectory(void);
+void deletePageDirectory(PageDirectory *pd);
+
 
 enum PageType{
 	KERNEL_PAGE,

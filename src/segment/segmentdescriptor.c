@@ -92,7 +92,13 @@ SegmentTable *createSegmentTable(void){
 	const int length = GDT_LENGTH;
 	SegmentTable *NEW(t);
 	NEW_ARRAY(t->selector, length);
-	t->descriptor = allocateAligned(length * sizeof(SegmentDescriptor), sizeof(SegmentDescriptor));
+	{
+		uintptr_t desc = (uintptr_t)allocate((length + 1) * sizeof(SegmentDescriptor));
+		while(desc % sizeof(SegmentDescriptor) != 0){
+			desc++;
+		}
+		t->descriptor = (SegmentDescriptor*)desc;
+	}
 	t->length = length;
 	MEMSET0(t->descriptor + 0);
 	setSegment(t, GDT_KERNEL_CODE_INDEX, 0, 0xffffffff, KERNEL_CODE);

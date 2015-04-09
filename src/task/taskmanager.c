@@ -16,7 +16,8 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	PageDirectory *pageTable;
+	PageDirectory *userPageTable;
+	// PageDirectory *kernelPageTable;
 	// queue data
 	enum TaskState{
 		// RUNNING,
@@ -108,7 +109,7 @@ void startTask(void){
 //void startUserMode(PrivilegeChangeInterruptParam p);
 void startVirtual8086Mode(InterruptParam p);
 
-void startVirtual8086Task(void (*cs_ip)(void), uintptr_t ss_sp){
+void switchToVirtual8086Mode(void (*cs_ip)(void), uintptr_t ss_sp){
 	uintptr_t cs_ip2 = (uintptr_t)cs_ip;
 	InterruptParam p;
 	assert(cs_ip2 < (1<<20));
@@ -146,8 +147,8 @@ static void testTask(void){
 	}
 }
 
-static void undefinedSystemCall(InterruptParam *p){
-	printk("task = %x", p->processorLocal->taskManager->current);
+static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
+	printk("task = %x", getProcessorLocal()->taskManager->current);
 	panic("undefined Task system call");
 }
 
@@ -162,7 +163,7 @@ static Task *createTask(
 	esp0 -= sizeof(Task);
 	esp0 -= esp0 % 4;
 	Task *t = (Task*)esp0;
-	t->pageTable = NULL; // TODO
+	t->userPageTable = NULL; // TODO
 	t->state = SUSPENDED;
 	t->priority = priority;
 	EFlags eflags = getEFlags();
@@ -202,34 +203,47 @@ Task *suspendCurrent(TaskManager *tm){
 
 static void syscallTaskDefined(InterruptParam *p){
 	uintptr_t oldArgument = p->argument;
-	p->argument = p->processorLocal->taskManager->current->taskDefinedArgument;
-	p->processorLocal->taskManager->current->taskDefinedSystemCall(p);
+	p->argument = getProcessorLocal()->taskManager->current->taskDefinedArgument;
+	getProcessorLocal()->taskManager->current->taskDefinedSystemCall(p);
 	p->argument = oldArgument;
 	// schedule(p->processorLocal->taskManager);
 }
 
-TaskManager *createTaskManager(
-	SystemCallTable *systemCallTable,
-	SegmentTable *gdt
-){
-	static int needInit = 1;
+TaskManager *createTaskManager(SegmentTable *gdt){
+	assert(globalQueue != NULL);
 	TaskManager *NEW(tm);
 	// create a task for this, eip and esp are irrelevant
 	tm->current = createTask(testTask, 0);
 	tm->current->state = READY;
 	tm->gdt = gdt;
-	if(needInit){
-		needInit = 0;
-		NEW(globalQueue);
-		globalQueueLock = initialSpinlock;
-		int t;
-		for(t = 0; t < NUMBER_OF_PRIORITY; t++){
-			globalQueue->head[t] = NULL;
-		}
-		registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
-
-		initSemaphore(systemCallTable);
-	}
 	//pushQueue(globalQueue, createTask(b, testTask, 0));
 	return tm;
+}
+/*
+static void syscallAllocatePage(InterruptParam *p){
+	uintptr_t linearAddress = SYSTEM_CALL_ARGUMENT_0(p);
+	uintptr_t size = SYSTEM_CALL_ATGUMENT_1(p);
+	uintptr_t physicalAddress =
+	Task *c = getProcessorLocal()->taskManager->current;
+	PageDirectory *pd = c->userPageTable;
+
+}
+
+static void syscallFreePage(InterruptParam *p){
+
+}
+*/
+void initTaskManagement(SystemCallTable *systemCallTable){
+	NEW(globalQueue);
+	globalQueueLock = initialSpinlock;
+	int t;
+	for(t = 0; t < NUMBER_OF_PRIORITY; t++){
+		globalQueue->head[t] = NULL;
+	}
+	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
+	/*
+	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_PAGE, syscallAllocatePage, 0);
+	registerSystemCall(systemCallTable, SYSCALL_FREE_PAGE, syscallFreePage, 0);
+	*/
+	initSemaphore(systemCallTable);
 }

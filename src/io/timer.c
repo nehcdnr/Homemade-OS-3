@@ -51,7 +51,7 @@ void kernelSleep(TimerEventList *tel, unsigned millisecond){
 
 static void timerHandler(InterruptParam *p){
 	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
-	p->processorLocal->pic->endOfInterrupt(p);
+	getProcessorLocal()->pic->endOfInterrupt(p);
 	volatile TimerEvent *volatile *prev = &(((TimerEventList*)p->argument)->head);
 	while(*prev != NULL){
 		volatile TimerEvent *curr = *prev;
@@ -64,7 +64,7 @@ static void timerHandler(InterruptParam *p){
 			prev = &(curr->nextEvent);
 		}
 	}
-	schedule(p->processorLocal->taskManager);
+	schedule(getProcessorLocal()->taskManager);
 	sti();
 }
 

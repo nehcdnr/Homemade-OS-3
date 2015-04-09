@@ -40,11 +40,14 @@ typedef struct{
 }AsmIntEntry;
 static_assert(sizeof(AsmIntEntry) == 16);
 
-extern const AsmIntEntry intEntriesTemplate[];
-extern const size_t sizeOfIntEntries;
+extern AsmIntEntry intEntries[];
 extern const int numberOfIntEntries;
-extern const size_t intEntryBaseOffset;
-extern const size_t processorLocalAddressOffset;
+extern const size_t sizeOfIntEntries;
+extern AsmIntEntry *intEntriesAddress;
+
+static_assert(sizeof(intEntriesAddress) == 4);
+static_assert(sizeof(numberOfIntEntries) <= 4);
+static_assert(sizeof(sizeOfIntEntries) <= 4);
 
 struct InterruptTable{
 	int length;
@@ -54,14 +57,10 @@ struct InterruptTable{
 	InterruptDescriptor *descriptor;
 };
 
-static AsmIntEntry *createAsmIntEntries(ProcessorLocal *p){
-	AsmIntEntry *e = allocateFixed(sizeOfIntEntries);
-	memcpy(e, intEntriesTemplate, sizeOfIntEntries);
-
-	uintptr_t *inst = (uintptr_t*)(intEntryBaseOffset + (uintptr_t)e);
-	uintptr_t *pla = (uintptr_t*)(processorLocalAddressOffset + (uintptr_t)e);
-	*inst = (uintptr_t)e;
-	*pla = (uintptr_t)p;
+static AsmIntEntry *createAsmIntEntries(void){
+	assert(INTERRUPT_ENTRY_MAX_SIZE >= sizeOfIntEntries);
+	AsmIntEntry *e = intEntries;
+	intEntriesAddress = intEntries; // TODO: INTERRUPT_ENTRY_LINEAR_ADDRESS
 	return e;
 }
 
@@ -162,11 +161,17 @@ void (*endOfInterrupt)(InterruptParam *p) = noEOI;
 // segmentdescriptor.h
 uint16_t toShort(SegmentSelector* s);
 
-InterruptTable *initInterruptTable(SegmentTable *gdt, ProcessorLocal *pl){
+InterruptTable *initInterruptTable(SegmentTable *gdt){
 	struct InterruptTable *NEW(t);
-	t->descriptor = allocateAligned(numberOfIntEntries * sizeof(InterruptDescriptor), sizeof(InterruptDescriptor));
-	t->vector = allocateFixed(numberOfIntEntries * sizeof(struct InterruptVector));
-	t->asmIntEntry = createAsmIntEntries(pl);
+	{
+		uintptr_t desc = (uintptr_t)allocate((numberOfIntEntries + 1) * sizeof(InterruptDescriptor));
+		while(desc % sizeof(InterruptDescriptor) != 0){
+			desc++;
+		}
+		t->descriptor = (InterruptDescriptor*)desc;
+	}
+	NEW_ARRAY(t->vector, numberOfIntEntries);
+	t->asmIntEntry = createAsmIntEntries();
 	t->length = numberOfIntEntries;
 	t->usedCount = BEGIN_GENERAL_VECTOR;
 	printk("number of interrupt handlers = %d\n", t->length);

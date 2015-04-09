@@ -72,46 +72,7 @@ static uintptr_t findFirstUsableMemory(const size_t manageSize){
 	return manageBase;
 }
 
-// MemoryManager functions
-
-#define PADDING_SIZE(VALUE, ALIGN) ((VALUE) % (ALIGN) == 0? 0: (ALIGN) - (VALUE) % (ALIGN))
-
-typedef struct MemoryManager{
-	uintptr_t base;
-	size_t size;
-	size_t usedSize;
-	Spinlock lock;
-}MemoryManager;
-
-static MemoryManager *createMemoryManager(uintptr_t base, size_t size){
-	MemoryManager *m = (MemoryManager*)base;
-	m->base = base;
-	m->size = size;
-	m->usedSize = sizeof(MemoryManager);
-	m->lock = initialSpinlock;
-	return m;
-}
-
-static void *_allocateAligned(MemoryManager *m, size_t size, size_t align){
-	const size_t padSize = PADDING_SIZE(m->base + m->usedSize, align);
-	void *address = NULL;
-	acquireLock(&m->lock);
-	if(size <= m->size - padSize - m->usedSize){
-		address = (void*)(m->base + m->usedSize + padSize);
-		m->usedSize += size + padSize;
-	}
-	releaseLock(&m->lock);
-	assert(address != NULL);
-	return address;
-}
-
-#define DEFAULT_ALIGN ((size_t)4)
-static void *_allocateFixed(MemoryManager *m, size_t size){
-	return _allocateAligned(m, size, DEFAULT_ALIGN);
-}
-
 // BlockManager functions
-
 typedef struct MemoryBlock{
 	unsigned sizeOrder;
 	struct MemoryBlock**prev, *next;
@@ -119,6 +80,7 @@ typedef struct MemoryBlock{
 
 #define PAGE_UNIT_SIZE MIN_BLOCK_SIZE
 typedef struct MemoryBlockManager{
+	size_t sizeOfThis;
 	int blockCount;
 	size_t freeSize;
 	Spinlock lock;
@@ -143,7 +105,7 @@ static MemoryBlock *getBlock(MemoryBlockManager *m, uintptr_t address){
 	return &m->block[i];
 }
 
-static int isInList(MemoryBlock *mb){
+static int isInFreeList(MemoryBlock *mb){
 	return mb->prev != NULL;
 }
 
@@ -156,89 +118,84 @@ static MemoryBlock *getBuddy(MemoryBlockManager *m, MemoryBlock *b){
 	return m->block + buddy;
 }
 
-static void removeFromList(MemoryBlock *b){
-	*(b->prev) = b->next;
-	if(b->next != NULL){
-		b->next->prev = b->prev;
-		b->next = NULL;
-	}
-	b->prev = NULL;
-}
 
-static void addToList(MemoryBlock *b, MemoryBlock **previous){
-	b->prev = previous;
-	b->next = *previous;
-	if(b->next != NULL){
-		b->next->prev = &b->next;
-	}
-	*(b->prev) = b;
-}
 
 static void *_allocateBlock(MemoryBlockManager *m, size_t size){
 	void *r = NULL;
 	acquireLock(&m->lock);
 	if(size > MAX_BLOCK_SIZE){
-		goto allocateBlock_retuen;
+		goto allocateBlock_return;
 	}
-	assert(size >= MIN_BLOCK_SIZE);
+	// assert(size >= MIN_BLOCK_SIZE);
 	size_t i, i2;
 	for(i = MIN_BLOCK_ORDER; ((size_t)1 << i) < size; i++);
 	for(i2 = i; 1; i2++){
 		if(m->freeBlock[i2 - MIN_BLOCK_ORDER] != NULL)
 			break;
-		if(i2 == MAX_BLOCK_SIZE)
-			goto allocateBlock_retuen;
+		if(i2 == MAX_BLOCK_ORDER)
+			goto allocateBlock_return;
 	}
 	MemoryBlock *const b = m->freeBlock[i2 - MIN_BLOCK_ORDER];
-	removeFromList(b);
+	REMOVE_FROM_DQUEUE(b);
 	while(i2 != i){
 		// split b and get buddy
 		b->sizeOrder--;
 		MemoryBlock *b2 = getBuddy(m, b);
 		assert(b2 != NULL);
-		assert(isInList(b2) == 0 && b2->sizeOrder == b->sizeOrder);
-		addToList(b2, &m->freeBlock[b2->sizeOrder - MIN_BLOCK_ORDER]);
+		assert(isInFreeList(b2) == 0 && b2->sizeOrder == b->sizeOrder);
+		ADD_TO_DQUEUE(b2, &m->freeBlock[b2->sizeOrder - MIN_BLOCK_ORDER]);
 		i2--;
 	}
 	m->freeSize -= (1 << i);
 	r = (void*)getAddress(m, b);
-	allocateBlock_retuen:
+	allocateBlock_return:
 	releaseLock(&m->lock);
 	return r;
 }
 
-static void _freeBlock(MemoryBlockManager *m, void *address){
+static void _freeBlock(MemoryBlockManager *m, void *memory){
 	acquireLock(&m->lock);
-	MemoryBlock *b = getBlock(m, (uintptr_t)address);
+	MemoryBlock *b = getBlock(m, (uintptr_t)memory);
 	m->freeSize += (1 << b->sizeOrder);
-	assert(isInList(b) == 0);
+	assert(isInFreeList(b) == 0);
 	while(b->sizeOrder < MAX_BLOCK_ORDER){
-		MemoryBlock *b2 = getBuddy(m, b);
-		if(b2 == NULL)
+		MemoryBlock *buddy = getBuddy(m, b);
+		if(buddy == NULL)
 			break;
-		assert(b2->sizeOrder <= b->sizeOrder);
-		if(isInList(b2) == 0)
+		assert(buddy->sizeOrder <= b->sizeOrder);
+		if(isInFreeList(buddy) == 0 || buddy->sizeOrder != b->sizeOrder)
 			break;
 		// merge
-		assert(b2->sizeOrder == b->sizeOrder);
-		removeFromList(b2);
-		assert(((uintptr_t)getAddress(m,b2) ^ (uintptr_t)getAddress(m,b)) == ((uintptr_t)1 << b->sizeOrder));
-		b = (getAddress(m, b) < getAddress(m, b2)? b: b2);
+		//printk("%d %d\n",buddy->sizeOrder, b->sizeOrder);
+		REMOVE_FROM_DQUEUE(buddy);
+		assert(((uintptr_t)getAddress(m,buddy) ^ (uintptr_t)getAddress(m,b)) == ((uintptr_t)1 << b->sizeOrder));
+		b = (getAddress(m, b) < getAddress(m, buddy)? b: buddy);
 		b->sizeOrder++;
 	}
-	addToList(b, &m->freeBlock[b->sizeOrder - MIN_BLOCK_ORDER]);
+	ADD_TO_DQUEUE(b, &m->freeBlock[b->sizeOrder - MIN_BLOCK_ORDER]);
 	releaseLock(&m->lock);
 }
 
-static MemoryBlockManager *createMemoryBlockManager(MemoryManager *m, uintptr_t maxAddr){
-	MemoryBlockManager *bm = _allocateFixed(m, sizeof(*bm));
-	bm->lock = initialSpinlock;
+static MemoryBlockManager *createMemoryBlockManager(uintptr_t manageBase, size_t manageSize, uintptr_t maxAddr){
+	uintptr_t m = manageBase;
+	while(m % 4 != 0){ // align to 4
+		m++;
+	}
+	MemoryBlockManager *bm = (MemoryBlockManager*)m;
+	m += sizeof(MemoryBlockManager);
 	bm->blockCount = maxAddr / MIN_BLOCK_SIZE;
 	bm->freeSize = 0;
-	bm->block = _allocateFixed(m, bm->blockCount * sizeof(*bm->block));
+	bm->lock = initialSpinlock;
+	bm->block = (MemoryBlock*)m;
+	m += sizeof(MemoryBlock) * bm->blockCount;
+	bm->sizeOfThis = m - manageBase;
+	if(bm->sizeOfThis > manageSize){
+		panic("memory manager initialization error");
+	}
 	int b;
 	for(b = 0; b < bm->blockCount; b++){
-		initMemoryBlock(&bm->block[b]); // all blocks are using in the beginning
+		 // all blocks are using and in MIN_BLOCK_ORDER in the beginning
+		initMemoryBlock(&bm->block[b]);
 	}
 	for(b = 0; b <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; b++){
 		bm->freeBlock[b] = NULL;
@@ -247,22 +204,11 @@ static MemoryBlockManager *createMemoryBlockManager(MemoryManager *m, uintptr_t 
 }
 
 // kernel MemoryBlockManager
-static MemoryBlockManager *kbm = NULL;
-
-void *allocateBlock(size_t size){
-	assert(kbm != NULL);
-	return _allocateBlock(kbm, size);
-}
-
-void freeBlock(void *address){
-	assert(kbm != NULL);
-	_freeBlock(kbm, address);
-}
-
-static void initKernelMemoryBlock(MemoryManager *m){
-	kbm = createMemoryBlockManager(m, findMaxAddress());
+static MemoryBlockManager *initKernelMemoryBlock(uintptr_t manageBase, size_t manageSize){
+	static MemoryBlockManager *kbm = NULL;
+	kbm = createMemoryBlockManager(manageBase, manageSize, findMaxAddress());
 	AddressRange extraAR[2] = {
-		{m->base, m->size, RESERVED, 0},
+		{((uintptr_t)kbm), kbm->sizeOfThis, RESERVED, 0},
 		{0, 1 << 20, RESERVED, 0}
 	};
 	int b;
@@ -286,32 +232,203 @@ static void initKernelMemoryBlock(MemoryManager *m){
 			_freeBlock(kbm, (void*)blockBegin);
 		}
 	}
+	return kbm;
+}
+
+
+// MemoryManager functions
+
+typedef union MemoryUnit{
+	union MemoryUnit *next;
+	int address[0];
+}MemoryUnit;
+
+static_assert(sizeof(MemoryUnit) == 4);
+
+// POOL_SIZE must be multiple of MIN_BLOCK_SIZE
+#define POOL_SIZE (MIN_BLOCK_SIZE)
+
+typedef struct Pool{
+	struct Pool *next, **prev;
+	size_t usedCount;
+	MemoryUnit *freeList;
+}MemoryPool;
+
+static int isTotallyFree(MemoryPool *p){
+	return p->usedCount == 0;
+}
+
+static int isTotallyUsed(MemoryPool *p){
+	return p->freeList == NULL;
+}
+
+static MemoryPool *createMemoryPool(MemoryBlockManager *bm, size_t unit){
+	MemoryPool *pool = (MemoryPool*)_allocateBlock(bm, POOL_SIZE);
+	pool->prev = NULL;
+	pool->next = NULL;
+	pool->usedCount = 0;
+	uintptr_t p = ((uintptr_t)pool);
+	p += sizeof(MemoryPool);
+	MemoryUnit *fl = NULL;
+	while(p + sizeof(MemoryUnit) + unit <= ((uintptr_t)pool) + POOL_SIZE){
+		MemoryUnit *u = (MemoryUnit*)p;
+		u->next = fl;
+		fl = u;
+		p = p + sizeof(MemoryUnit) + unit;
+	}
+	pool->freeList = fl;
+	return pool;
+}
+
+static void *allocateUnit(MemoryPool *p){
+	MemoryUnit *m = p->freeList;
+	if(m == NULL)
+		return NULL;
+	p->freeList = m->next;
+	p->usedCount++;
+	return m->address;
+}
+
+static_assert((POOL_SIZE & (POOL_SIZE - 1)) == 0);
+static MemoryPool *freeUnit(void *address){
+	uintptr_t a = (uintptr_t)address;
+	MemoryUnit *u = address;
+	MemoryPool *p = (MemoryPool*)(a - (a & (POOL_SIZE - 1)));
+	u->next = p->freeList;
+	p->freeList = u;
+	p->usedCount--;
+	return p;
+}
+
+// memory pool Manager
+static const size_t poolUnit[] = {
+	16,
+	32,
+	64,
+	128 - sizeof(MemoryPool),
+	256 - sizeof(MemoryPool),
+	512 - sizeof(MemoryPool),
+	1024 - sizeof(MemoryPool),
+	2048 - sizeof(MemoryPool)
+};
+#define NUMBER_OF_POOL_UNIT (LENGTH_OF(poolUnit))
+static_assert(NUMBER_OF_POOL_UNIT == 8);
+
+typedef struct MemoryManager{
+	Spinlock lock;
+	MemoryPool *usablePool[NUMBER_OF_POOL_UNIT];
+	MemoryPool *usedPool[NUMBER_OF_POOL_UNIT];
+
+	MemoryBlockManager *bm;
+}MemoryManager;
+
+static int findMemoryPool(MemoryManager *m, size_t size){
+	int i;
+	for(i = 0; 1; i++){
+		if((unsigned)i >= NUMBER_OF_POOL_UNIT){
+			panic("error allocating memory");
+		}
+		if(poolUnit[i] >= size){
+			break;
+		}
+	}
+	acquireLock(&(m->lock));
+	MemoryPool *p = m->usablePool[i];
+	releaseLock(&m->lock);
+	if(p != NULL){
+		return i;
+	}
+
+	p = createMemoryPool(m->bm, poolUnit[i]);
+	if(p == NULL){
+		return -1;
+	}
+	acquireLock(&(m->lock));
+	ADD_TO_DQUEUE(p, m->usablePool + i);
+	releaseLock(&m->lock);
+	return i;
+}
+
+static void *_allocate(MemoryManager *m, size_t size){
+	if(size >= poolUnit[NUMBER_OF_POOL_UNIT - 1]){
+		return _allocateBlock(m->bm, size);
+	}
+	int i = findMemoryPool(m, size);
+	if(i < 0)
+		return NULL;
+	MemoryPool *p = m->usablePool[i];
+	if(p == NULL){
+		return NULL;
+	}
+	void *r;
+	acquireLock(&m->lock);
+	r = allocateUnit(p);
+	assert(r != NULL);
+	if(isTotallyUsed(p)){
+		REMOVE_FROM_DQUEUE(p);
+		ADD_TO_DQUEUE(p, m->usedPool + i);
+	}
+	releaseLock(&(m->lock));
+	assert(((uintptr_t)r) % MIN_BLOCK_SIZE != 0);
+	return r;
+}
+
+static void _free(MemoryManager *m, void *address){
+	uintptr_t a = (uintptr_t)address;
+	if(a % MIN_BLOCK_SIZE == 0){
+		_freeBlock(m->bm, address);
+		return;
+	}
+	acquireLock(&m->lock);
+	MemoryPool *p = freeUnit(address);
+	if(isTotallyFree(p)){
+		REMOVE_FROM_DQUEUE(p);
+		releaseLock(&m->lock);
+		_freeBlock(m->bm, p);
+	}
+	else{
+		releaseLock(&m->lock);
+	}
+}
+
+static MemoryManager *initKernelMemoryManager(MemoryBlockManager *bm){
+	size_t unit;
+	unsigned int i;
+	for(i = 0; poolUnit[i] < sizeof(MemoryManager); i++);
+	assert(i < NUMBER_OF_POOL_UNIT);
+	unit = poolUnit[i];
+	MemoryPool *s = createMemoryPool(bm, unit);
+
+	MemoryManager *m = allocateUnit(s);
+	m->lock = initialSpinlock;
+	m->bm = bm;
+
+	for(i = 0; i < NUMBER_OF_POOL_UNIT; i++){
+		m->usablePool[i] = NULL;
+		m->usedPool[i] = NULL;
+		if(poolUnit[i] == unit){
+			ADD_TO_DQUEUE(s, m->usablePool + i);
+		}
+	}
+	return m;
 }
 
 // global memory manager
 static MemoryManager *km = NULL;
 
-size_t getAllocatedSize(void){
-	return km->usedSize;
-}
-
-void *allocateAligned(size_t size, size_t align){
+void *allocate(size_t size){
 	assert(km != NULL);
-	return _allocateAligned(km, size, align);
+	return _allocate(km, size);
 }
 
-void *allocateFixed(size_t size){
+void *allocateBlock(size_t size){
+	assert(km != NULL && km->bm != NULL);
+	return _allocateBlock(km->bm, size);
+}
+
+void free(void *memory){
 	assert(km != NULL);
-	return _allocateFixed(km, size);
-}
-
-void initKernelMemory(void){
-	// find first usable memory address >= 1MB
-	assert(km == NULL);
-	size_t manageSize = (15 << 20);
-	uintptr_t manageBase = findFirstUsableMemory(manageSize);
-	km = createMemoryManager(manageBase, manageSize);
-	initKernelMemoryBlock(km);
+	_free(km, memory);
 }
 
 /*
@@ -320,23 +437,62 @@ void enablePaging(MemoryManager *m){
 	setCR0(getCR0() | 0x80000000);
 }
 */
+
 /*
 #ifndef NDEBUG
-void testMemoryBlock(BlockManager *b){
-	void *a1,*a2,*a3,*a4;
-	//void *fr1;
-	a1 = allocateBlock(b, MIN_BLOCK_SIZE);
-	freeBlock(b, a1);
-	a2 = allocateBlock(b, MIN_BLOCK_SIZE);
-	//assert(a1==a2);
-	//fr1 = b->freeBlock[1];
-	a3 = allocateBlock(b, MIN_BLOCK_SIZE+1);
-	//assert(fr1 != b->freeBlock[1]);
-	a4 = allocateBlock(b, MIN_BLOCK_SIZE);
-	freeBlock(b,a4);
-	freeBlock(b,a2);
-	freeBlock(b,a3);
+#define TEST_N (70)
+static void testMemoryManager(void){
+	uint8_t *p[TEST_N];
+	int si[TEST_N];
+	unsigned int r;
+	int a, b, c;
+	r=MIN_BLOCK_SIZE + 388;
+	for(b=0;b<50;b++){
+		for(a=0;a<TEST_N;a++){
+			si[a]=r;
+			p[a]=allocate(r);
+			//printk("%d %d %x\n",a,r,p[a]);
+			if(p[a] == NULL){
+				printk("a = %d, r = %d p[a] = %x\n", a, r, p[a]);
+				panic("mem test checkpoint 1");
+			}
+			for(c=0;c<si[a]&&c<100;c++){
+				p[a][c] =
+				p[a][si[a]-c-1]= a+1;
+			}
+			//r = 1 + (r*7 + 3) % (30 - 1);
+			r = (r*79+3);
+			if(r%5<3) r = r % 2048;
+			else r = (r*17) % (MAX_BLOCK_SIZE - MIN_BLOCK_SIZE) + MIN_BLOCK_SIZE;
+		}
+		for(a=0;a<TEST_N;a++){
+			int a2 = (a+r)%TEST_N;
+			for(c=0;c<si[a2]&&c<100;c++){
+				if(p[a2][c] != a2+1 || p[a2][si[a2]-c-1] != a2+1){
+					printk("%d %d\n",a2, p[a2][c]);
+					panic("mem test checkpoint 2");
+				}
+			}
+			free(p[a2]);
+		}
+	}
+	printk("test ok\n");
+	hlt();
 	//kprintf("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
 }
 #endif
 */
+void initKernelMemory(void){
+	// find first usable memory address >= 1MB
+	assert(km == NULL);
+	size_t manageSize = (15 << 20);
+	uintptr_t manageBase = findFirstUsableMemory(manageSize);
+	// km = createMemoryManager(manageBase, manageSize);
+	MemoryBlockManager *bm = initKernelMemoryBlock(manageBase, manageSize);
+	km = initKernelMemoryManager(bm);
+	/*
+	#ifndef NDEBUG
+	testMemoryManager();
+	#endif
+	*/
+}

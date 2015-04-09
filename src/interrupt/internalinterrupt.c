@@ -88,7 +88,7 @@ static void v8086Monitor(InterruptParam *p){
 			p->cs = v8086IntTable[instruction[1]][1];
 		}
 		else if(instruction[1] == SYSTEM_CALL){
-			callHandler(p->processorLocal->idt, instruction[1], p);
+			callHandler(global.idt, instruction[1], p);
 		}
 		else{
 			printk("int %d ", instruction[1]);

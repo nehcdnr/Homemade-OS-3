@@ -108,7 +108,7 @@ lgdtparameter:
 [BITS 32]
 extern _bspEntry ; main.c
 extern _apEntry ; main.c
-extern _initialESP ; lapic.c
+extern _initialESP ; pic.c
 
 entry3:
 acquirelock:

@@ -23,7 +23,7 @@ enum APICRegisterOffset{
 	LVT_LINT0 = 0x350,
 	LVT_LINT1 = 0x360
 };
-static const uintptr_t apicBase = 0xfee00000;
+#define APIC_BASE ((uintptr_t)0xfee00000)
 
 int isAPICSupported(void){
 	static char result = 2;
@@ -63,7 +63,8 @@ static InterruptVector *registerAPICSpurious(const uintptr_t base, const uint32_
 
 static void apicErrorHandler(InterruptParam *p){
 	printk("APIC error on processor %u\n", toChar(p->vector), p->argument);
-	p->processorLocal->pic->endOfInterrupt(p);
+	// getProcessorLocal->pic->endOfInterrupt(p);
+	apic_endOfInterrupt(p);
 	panic("APIC error");
 	sti();
 }
@@ -78,7 +79,8 @@ static InterruptVector *registerAPICError(const uintptr_t base, uint32_t lapicID
 static volatile uint32_t sleepTicks;
 static void tempSleepHandler(InterruptParam *p){
 	sleepTicks++;
-	p->processorLocal->pic->endOfInterrupt(p);
+	// getProcessorLocal->pic->endOfInterrupt(p);
+	apic_endOfInterrupt(p);
 	//sti();
 }
 
@@ -218,9 +220,13 @@ void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entry
 	deliverIPI(lapic->base, targetLAPICID, STARTUP, (entryAddress >> 12));
 }
 
-void apic_endOfInterrupt(InterruptParam *p){
+uint32_t getMemoryMappedLAPICID(void){
+	return ((*(MemoryMappedRegister)(APIC_BASE + LAPIC_ID)) >> 24) & 0xff;
+}
+
+void apic_endOfInterrupt(__attribute__((__unused__)) InterruptParam *p){
 	MemoryMappedRegister eoi =
-	(MemoryMappedRegister)(p->processorLocal->pic->apic->lapic->base + END_OF_INTERRUPT);
+	(MemoryMappedRegister)(/*getProcessorLocal()->pic->apic->lapic->base*/APIC_BASE + END_OF_INTERRUPT);
 	*eoi = 0;
 }
 
@@ -230,10 +236,10 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);
 	printk("IA32_APIC_BASE MSR = %x:%x\n", edx, eax);
-	if((edx & 0xf) != 0 || (eax & 0xfffff000) != apicBase){
-		printk("relocate apic base address to %x", apicBase);
+	if((edx & 0xf) != 0 || (eax & 0xfffff000) != APIC_BASE){
+		printk("relocate apic base address to %x", APIC_BASE);
 		edx = (edx & ~0xf);
-		eax = ((eax & ~0xfffff000) | apicBase);
+		eax = ((eax & ~0xfffff000) | APIC_BASE);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
 	if(((eax >> 11) & 1) == 0){ // is APIC enabled
@@ -241,10 +247,9 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 		eax |= (1 << 11);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
-	lapic->base = (apicBase & 0xfffff000);
+	lapic->base = (APIC_BASE & 0xfffff000);
 	lapic->isBSP = ((eax >> 8) & 1);
-	MemoryMappedRegister lapicIDAddress = (MemoryMappedRegister)(lapic->base + LAPIC_ID);
-	lapic->lapicID = (((*lapicIDAddress) >> 24) & 0xff);
+	lapic->lapicID = getMemoryMappedLAPICID();
 	lapic->spuriousVector = registerAPICSpurious(lapic->base, lapic->lapicID, t);
 	lapic->errorVector = registerAPICError(lapic->base, lapic->lapicID, t);
 	lapic->timerVector = registerAPICTimer(lapic->base, t);

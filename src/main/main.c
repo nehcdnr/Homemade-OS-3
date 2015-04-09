@@ -14,6 +14,8 @@
 void bspEntry(void);
 void apEntry(void);
 
+SystemGlobal global;
+
 static void initService(PIC *pic, SystemCallTable *syscallTable){
 	initPS2Driver(pic, syscallTable);
 	initVideoDriver(syscallTable);
@@ -29,28 +31,42 @@ void bspEntry(void){
 }
 
 void apEntry(void){
-	ProcessorLocal *NEW(local);
+	static volatile int first = 1;
+	int isBSP = first;
+	first = 0;
 	// 3. GDT
 	SegmentTable *gdt = createSegmentTable();
 	loadgdt(gdt);
 	// 4. IDT
-	local->idt = initInterruptTable(gdt, local);
-	lidt(local->idt);
+	if(isBSP){
+		global.idt = initInterruptTable(gdt);
+	}
+	lidt(global.idt);
 	// 5. system call & exception
-	SystemCallTable *syscall = initSystemCall(local->idt);
+	if(isBSP){
+		global.syscallTable = initSystemCall(global.idt);
+	}
 	// 6. task
-	local->taskManager = createTaskManager(syscall, gdt);
+	if(isBSP){
+		initTaskManagement(global.syscallTable);
+	}
+	TaskManager *taskManager = createTaskManager(gdt);
 	// 7. PIC
-	local->pic = initPIC(local->idt);
-	// 8. driver
-	static int first = 1;
-	if(first){
+	PIC *pic = initPIC(global.idt);
+	// 8. processorLocal
+	initProcessorLocal();
+	ProcessorLocal *local = getProcessorLocal();
+	local->pic = pic;
+	local->gdt = gdt;
+	local->taskManager = taskManager;
+	// 10. driver
+	if(isBSP){ // TODO:
 		first = 0;
-		initService(local->pic, syscall);
+		initService(local->pic, global.syscallTable);
 	}
 	initLocalTimer(local->pic, createTimer());
 	//initMultiprocessor();
-printk("kernel memory usage: %u\n", getAllocatedSize());
+//printk("kernel memory usage: %u\n", getAllocatedSize());
 printk("start accepting interrupt...\n");
 
 	sti();

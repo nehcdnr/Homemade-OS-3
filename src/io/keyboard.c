@@ -177,7 +177,7 @@ static void ps2Handler(InterruptParam *p){
 			releaseSemaphore(ps2->intSemaphore);
 		}
 	}
-	p->processorLocal->pic->endOfInterrupt(p);
+	getProcessorLocal()->pic->endOfInterrupt(p);
 	sti();
 }
 
@@ -185,7 +185,7 @@ static void syscall_keyboard(InterruptParam *p){
 	printk("%d\n",p->regs.eax);
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
-	acquireSemaphore(ps2Data->sysSemaphore, p->processorLocal->taskManager);
+	acquireSemaphore(ps2Data->sysSemaphore, getProcessorLocal()->taskManager);
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
 		panic("ps2 sysFIFO");
 	}

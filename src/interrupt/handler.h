@@ -3,7 +3,6 @@
 #include<std.h>
 #include"assembly/assembly.h"
 
-typedef struct ProcessorLocal ProcessorLocal;
 typedef struct InterruptVector InterruptVector;
 // handler parameter, see interruptentry.asm
 
@@ -18,7 +17,7 @@ typedef struct{
 typedef struct InterruptParam{
 	uintptr_t argument; // pushed by os
 	InterruptVector *vector;
-	ProcessorLocal *processorLocal;
+	uint32_t _unused;
 	GeneralRegisters regs;
 	uint32_t
 	errorCode, // pushed by cpu or os

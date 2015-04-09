@@ -4,6 +4,11 @@
 
 #define PAGE_TABLE_SIZE (4096)
 #define PAGE_TABLE_LENGTH (1024)
+/*
+typedef struct Page{
+	uint32_t address;
+}Page;
+*/
 typedef struct PageDirectory{
 	struct PageDirectoryEntry{
 		uint8_t present: 1;
@@ -46,7 +51,7 @@ static_assert(sizeof(PageTable) == PAGE_TABLE_SIZE);
 static_assert(PAGE_TABLE_SIZE % MIN_BLOCK_SIZE == 0);
 
 PageDirectory *createPageDirectory(void){
-	PageDirectory *pd = allocateBlock(sizeof(PageDirectory));
+	PageDirectory *pd = allocate(sizeof(PageDirectory));
 	if(pd == NULL)
 		return NULL;
 	MEMSET0(pd);
@@ -54,7 +59,7 @@ PageDirectory *createPageDirectory(void){
 }
 
 static PageTable *createPageTable(void){
-	PageTable *pt = allocateBlock(sizeof(PageTable));
+	PageTable *pt = allocate(sizeof(PageTable));
 	if(pt == NULL)
 		return NULL;
 	MEMSET0(pt);
@@ -63,6 +68,47 @@ static PageTable *createPageTable(void){
 
 #define SET_ENTRY_ADDRESS(E, A) ((*(uint32_t*)(E)) = (((*(uint32_t*)(E)) & (4095)) | ((uint32_t)(A))))
 #define GET_ENTRY_ADDRESS(E) ((void*)((*(uint32_t*)(E)) & (~4095)))
+
+static void* getPageTableEntryAddress(struct PageTableEntry *e){
+	return GET_ENTRY_ADDRESS(e);
+}
+
+static void setPageTableEntryAddress(struct PageTableEntry *e, void *a){
+	SET_ENTRY_ADDRESS(e, a);
+}
+
+static PageTable *getPageDirectoryEntryAddress(struct PageDirectoryEntry *e){
+	return GET_ENTRY_ADDRESS(e);
+}
+
+static void setPageDirectoryEntryAddress(struct PageDirectoryEntry *e, PageTable *a){
+	SET_ENTRY_ADDRESS(e, a);
+}
+
+#undef GET_ENTRY_ADDRESS
+#undef SET_ENTRY_ADDRESS
+
+static void deletePageTable(PageTable *pt){
+	unsigned int i;
+	for(i = 0; i < LENGTH_OF(pt->entry); i++){
+		if(pt->entry[i].present == 0){
+			continue;
+		}
+		freeBlock(getPageTableEntryAddress(pt->entry+i));
+	}
+	freeBlock(pt);
+}
+
+void deletePageDirectory(PageDirectory *pd){
+	unsigned int i;
+	static_assert(LENGTH_OF(pd->entry) == PAGE_TABLE_LENGTH);
+	for(i = 0; i < LENGTH_OF(pd->entry); i++){
+		if(pd->entry[i].present == 0)
+			continue;
+		deletePageTable(getPageDirectoryEntryAddress(pd->entry + i));
+	}
+	freeBlock(pd);
+}
 
 void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress){
 	assert((physicalAddress & 4095) == 0 && (linearAddress & 4095) == 0);
@@ -75,7 +121,7 @@ void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t phys
 		pt = createPageTable();
 	}
 	else{
-		pt = GET_ENTRY_ADDRESS(pde);
+		pt = getPageDirectoryEntryAddress(pde);
 	}
 	assert((((uintptr_t)pt) & 4095) == 0);
 	// assert(pte->present == 0);
@@ -89,7 +135,7 @@ void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t phys
 	pte->ignored = 0;
 	pte->global = 0;
 	pte->unused = 0;
-	SET_ENTRY_ADDRESS(pte, physicalAddress);
+	setPageTableEntryAddress(pte, (void*)physicalAddress);
 	pte->present = 1;
 
 	if(pde->present == 0){
@@ -102,7 +148,7 @@ void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t phys
 		pde->size4MB = 0;
 		pde->ignored2 = 0;
 		pde->unused = 0;
-		SET_ENTRY_ADDRESS(pde, pt);
+		setPageDirectoryEntryAddress(pde, pt);
 		pde->present = 1;
 	}
 }

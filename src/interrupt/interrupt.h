@@ -6,8 +6,7 @@ typedef struct InterruptParam InterruptParam;
 
 typedef struct InterruptTable InterruptTable;
 typedef struct SegmentTable SegmentTable;
-typedef struct ProcessorLocal ProcessorLocal;
-InterruptTable *initInterruptTable(SegmentTable *gdt, ProcessorLocal *pl);
+InterruptTable *initInterruptTable(SegmentTable *gdt);
 void callHandler(InterruptTable *t, uint8_t intNumber, InterruptParam *p);
 void lidt(InterruptTable *t);
 

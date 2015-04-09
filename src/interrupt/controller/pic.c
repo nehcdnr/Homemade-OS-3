@@ -5,23 +5,28 @@
 #include"assembly/assembly.h"
 
 // see entry.asm
-volatile uintptr_t *initialESP;
+uintptr_t *initialESP = NULL;
+
 #define KERNEL_STACK_SIZE (8192)
-static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){return;
+static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
 	const uint32_t lapicID = getLAPICID(lapic);
 	const int n = getNumberOfLAPIC(ioapic);
 	NEW_ARRAY(initialESP, n);
-	int iter = 0;
-	// initialESP[0] = 0x7000; entry.asm
+
+	initialESP[0] = 0x7000;
+	int e = 1;
+	int iter;
 	for(iter = 0; iter < 3; iter++){
 		int i;
 		for(i = 0; i < n; i++){
 			uint32_t target = getLAPICIDByIndex(ioapic, i);
+			assert(target < MAX_LAPIC_ID);
 			if(target == lapicID)
 				continue;
-			if(iter == 0){
-				initialESP[i] = (uintptr_t)allocateFixed(KERNEL_STACK_SIZE);
-				initialESP[i] += KERNEL_STACK_SIZE;
+			if(iter == 0){ // entry.asm
+				initialESP[e] = (uintptr_t)allocate(KERNEL_STACK_SIZE);
+				initialESP[e] += KERNEL_STACK_SIZE;
+				e++;
 			}
 			if(iter == 1){
 				interprocessorINIT(lapic, target);
@@ -42,11 +47,36 @@ PIC *castAPIC(APIC *apic){
 	return &apic->this;
 }
 
+static ProcessorLocal *lapicToProcLocal = NULL;
+GetProcessorLocal getProcessorLocal = NULL;
+
+static ProcessorLocal *getProcessorLocalByLAPIC(void){
+	uint32_t id = getMemoryMappedLAPICID();
+	return &lapicToProcLocal[id];
+}
+
+static ProcessorLocal *getProcessorLocal0(void){
+	return &lapicToProcLocal[0];
+}
+
+GetProcessorLocal initProcessorLocal(void){
+	if(lapicToProcLocal == NULL){
+		NEW_ARRAY(lapicToProcLocal, MAX_LAPIC_ID);
+		memset(lapicToProcLocal, 0, MAX_LAPIC_ID * sizeof(lapicToProcLocal[0]));
+	}
+	if(isAPICSupported() == 0){
+		getProcessorLocal = getProcessorLocal0;
+	}
+	else{
+		getProcessorLocal = getProcessorLocalByLAPIC;
+	}
+	return getProcessorLocal;
+}
+
 PIC *initPIC(InterruptTable *t){
 	if(isAPICSupported() == 0){
 		PIC8259 *pic8259 = initPIC8259(t);
-		PIC *pic = castPIC8259(pic8259);
-		return pic;
+		return castPIC8259(pic8259);
 	}
 	static IOAPIC *ioapic = NULL;
 	LAPIC *lapic = initLocalAPIC(t);
@@ -66,7 +96,7 @@ PIC *initPIC(InterruptTable *t){
 	else{
 		apic->ioapic = ioapic;
 	}
-	return &apic->this;
+	return castAPIC(apic);
 }
 
 void initLocalTimer(PIC *pic, TimerEventList *timer){

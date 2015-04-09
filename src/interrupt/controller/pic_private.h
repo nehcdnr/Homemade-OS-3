@@ -23,10 +23,13 @@ void apic_setPICMask(PIC *pic, enum IRQ irq, int setMask);
 InterruptVector *apic_irqToVector(PIC *pic, enum IRQ irq);
 
 // local APIC
+#define MAX_LAPIC_ID (1<<8)
+
 typedef struct LAPIC LAPIC;
 LAPIC *initLocalAPIC(InterruptTable *t);
 InterruptVector *getTimerVector(LAPIC *lapic);
 int isBSP(LAPIC *lapic);
+uint32_t getMemoryMappedLAPICID(void);
 uint32_t getLAPICID(LAPIC *lapic);
 void testAndResetLAPICTimer(LAPIC *lapic, PIC* pic);
 void resetLAPICTimer(LAPIC *lapic);

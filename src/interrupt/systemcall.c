@@ -131,23 +131,20 @@ static void syscall_queryService(InterruptParam *p){
 }
 
 SystemCallTable *initSystemCall(InterruptTable *t){
-	SystemCallTable *systemCallTable = NULL;
-	static int needInit = 1;
-	if(needInit){
-		needInit = 0;
-		NEW(systemCallTable);
-		assert(systemCallTable != NULL);
-		systemCallTable->lock = initialSpinlock;
-		systemCallTable->usedCount = SYSCALL_SERVICE_BEGIN;
-		unsigned int i;
-		for(i = 0; i < NUMBER_OF_SYSTEM_CALLS; i++){
-			systemCallTable->entry[i].name[0] = '\0';
-			systemCallTable->entry[i].number = i;
-			systemCallTable->entry[i].call = NULL;
-		}
+	SystemCallTable *NEW(systemCallTable);
+
+	assert(systemCallTable != NULL);
+	systemCallTable->lock = initialSpinlock;
+	systemCallTable->usedCount = SYSCALL_SERVICE_BEGIN;
+	unsigned int i;
+	for(i = 0; i < NUMBER_OF_SYSTEM_CALLS; i++){
+		systemCallTable->entry[i].name[0] = '\0';
+		systemCallTable->entry[i].number = i;
+		systemCallTable->entry[i].call = NULL;
 	}
-	registerInterrupt(t, SYSTEM_CALL, systemCallHandler, (uintptr_t)systemCallTable);
 	registerSystemCall(systemCallTable, SYSCALL_REGISTER_SERVICE, syscall_registerService, (uintptr_t)systemCallTable);
 	registerSystemCall(systemCallTable, SYSCALL_QUERY_SERVICE, syscall_queryService, (uintptr_t)systemCallTable);
+	registerInterrupt(t, SYSTEM_CALL, systemCallHandler, (uintptr_t)systemCallTable);
+
 	return systemCallTable;
 }

@@ -1,39 +1,31 @@
 [BITS 32]
 [SECTION .data]
 
+align 4096
 NUMBER_OF_HANDLERS EQU 128
-
-global _sizeOfIntEntries:
-_sizeOfIntEntries:
-dd intEntrySetEnd - intEntrySetBegin
 
 global _numberOfIntEntries
 _numberOfIntEntries:
 	dd NUMBER_OF_HANDLERS
 
-global _intEntryBaseOffset
-_intEntryBaseOffset:
-	dd baseAddressData - intEntrySetBegin
+global _sizeOfIntEntries
+_sizeOfIntEntries:
+	dd intEntriesEnd - _intEntries
 
-global _processorLocalAddressOffset
-_processorLocalAddressOffset:
-	dd processorLocal - intEntrySetBegin
+global _intEntriesAddress
 
-global _intEntriesTemplate:
-_intEntriesTemplate:
-intEntrySetBegin:
+global _intEntries:
+_intEntries:
 ; interrupt vector table
 %assign n 0
 %rep NUMBER_OF_HANDLERS
 interruptEntry%[n]:
-	dd entry%[n] - intEntrySetBegin ; entry offset
+	dd entry%[n] - _intEntries ; entry offset
 	dd 0xffffffff ; handler address
 	dd 0xffffffff ; vector address
 	dd 0 ; handler parameter
 %assign n n+1
 %endrep
-processorLocal:
-	dd 0
 
 %assign n 0
 %rep NUMBER_OF_HANDLERS
@@ -42,16 +34,10 @@ entry%[n]:
 	push DWORD 0 ; for interrupt without error code
 %endif
 	push eax
-	mov eax, interruptEntry%[n] - intEntrySetBegin
+	mov eax, interruptEntry%[n] - _intEntries
 	jmp generalEntry
 %assign n n+1
 %endrep
-
-getBase:
-	db 0xba ; opcode: mov edx, ...
-baseAddressData:
-	dd intEntrySetBegin ; operand: ... intEntrySetBegin
-	ret
 
 generalEntry:
 	push ecx
@@ -74,16 +60,18 @@ generalEntry:
 	mov fs, bx
 	mov gs, bx
 
-	call getBase
+	db 0xba ; opcode: mov edx,
+_intEntriesAddress:
+	dd _intEntries ; operand: _intEntries
+
 	add eax, edx
-	push DWORD [edx + processorLocal - intEntrySetBegin]
+	push DWORD 0
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
 	mov edx, esp
 	push edx ; &InterruptParam
 	call [eax + 4] ; handler
 
-	call getBase
 	cli
 ; see task.h
 global _startVirtual8086Mode
@@ -102,4 +90,4 @@ _startVirtual8086Mode:
 	pop eax
 	add esp, 4 ; pop error code
 	iretd
-intEntrySetEnd:
+intEntriesEnd:
