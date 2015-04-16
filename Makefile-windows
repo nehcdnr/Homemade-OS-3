@@ -2,7 +2,8 @@
 NDEBUG=-DNDEBUG
 NASM=./tool/nasm-2.11.06/nasm.exe
 CC=gcc.exe
-CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -Isrc -O2
+CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -Isrc -O0
+LDFLAGS=--oformat elf32-i386
 BFI=./tool/bfi10/bfi.exe
 
 # optional

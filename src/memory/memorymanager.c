@@ -78,7 +78,6 @@ typedef struct MemoryBlock{
 	struct MemoryBlock**prev, *next;
 }MemoryBlock;
 
-#define PAGE_UNIT_SIZE MIN_BLOCK_SIZE
 typedef struct MemoryBlockManager{
 	size_t sizeOfThis;
 	int blockCount;
@@ -438,9 +437,11 @@ void enablePaging(MemoryManager *m){
 }
 */
 
-/*
-#ifndef NDEBUG
-#define TEST_N (70)
+
+#ifdef NDEBUG
+#define testMemoryManager() do()while(0)
+#else
+#define TEST_N (60)
 static void testMemoryManager(void){
 	uint8_t *p[TEST_N];
 	int si[TEST_N];
@@ -477,11 +478,10 @@ static void testMemoryManager(void){
 		}
 	}
 	printk("test ok\n");
-	hlt();
 	//kprintf("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
 }
 #endif
-*/
+
 void initKernelMemory(void){
 	// find first usable memory address >= 1MB
 	assert(km == NULL);
@@ -490,9 +490,6 @@ void initKernelMemory(void){
 	// km = createMemoryManager(manageBase, manageSize);
 	MemoryBlockManager *bm = initKernelMemoryBlock(manageBase, manageSize);
 	km = initKernelMemoryManager(bm);
-	/*
-	#ifndef NDEBUG
+
 	testMemoryManager();
-	#endif
-	*/
 }

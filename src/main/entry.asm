@@ -1,15 +1,15 @@
 [BITS 16]
 [SECTION .entry]
 ; org 0xbe00
+ENTRY_BEGIN equ 0xbe00
 global _entry
 _entry:
 ; assume cs = ds = 0
 ; ss, esp, ebp = uninitialized
 ; --------get address range--------
 
-	cmp BYTE [memorymaploadedflag], 0
+	cmp BYTE [initializedflag], 0
 	jne entry2
-	mov BYTE [memorymaploadedflag], 1
 	; set BSP stack
 	mov ax, 0
 	mov ss, ax
@@ -40,9 +40,6 @@ memorymapend:
 	mov ebp, esp
 	jmp entry2
 
-memorymaploadedflag:
-	db 0
-
 	global _addressRange
 _addressRange: ; memory.c
 	dd 0
@@ -50,24 +47,29 @@ _addressRange: ; memory.c
 _addressRangeCount:
 	dd 0
 
-; --------set temporary GDT--------
+; --------set temporary GDT&page table--------
+extern KERNEL_VIRTUAL_ADDRESS
+
 entry2:
 	; 1. disable interrupt
 	cli
-	; 2. set temporary gdt
-	lgdt [lgdtparameter]
-	; 3. enable a20 line
+	; 2. enable a20 line
+	cmp BYTE [initializedflag], 0
+	jne loadgdt
 	in al, 0x92
 	or al, 2
 	out 0x92, al
-	; 4. set cr0
+	; 3. set temporary gdt
+	loadgdt:
+	lgdt [lgdtparameter]
+	; 3. set cr0
 	mov eax, cr0
 	and eax, 0x7fffffff ; paging=0
-	or eax, 1 ; protected mode=1
+	or eax, 0x00000001 ; protected mode=1
 	mov cr0, eax
 	jmp flushpipeline
 	flushpipeline:
-	; 5. reload data segments
+	; 4. reload data segments
 	mov ax, 8*2
 	mov ds, ax
 	mov es, ax
@@ -104,13 +106,43 @@ lgdtparameter:
 	dw gdtend-gdt0-1; limit
 	dd gdt0 ; base
 
-; --------set stack registers if this is AP--------
 [BITS 32]
+; --------set stack registers if this is AP--------
+entry3:
+	cmp BYTE [initializedflag], 0
+	jne loadpage
+
+	mov eax, pde_begin
+	mov edx, 0
+initpdeloop:
+	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
+	or [eax], edx
+	cmp edx, KERNEL_VIRTUAL_ADDRESS
+	jb nextpde
+	sub DWORD [eax], KERNEL_VIRTUAL_ADDRESS
+	nextpde:
+	add eax, 4
+	add edx, (1 << 22)
+	cmp eax, pde_end
+	jne initpdeloop
+
+loadpage:
+	mov eax, pde_begin
+	mov cr3, eax
+	mov eax, cr4
+	or eax, (1<<4) ; pse=1 allow 4MB page TODO
+	mov cr4, eax
+	mov eax, cr0
+	or eax, 0x80000000 ; paging=1
+	mov cr0, eax
+	jmp entry4
+
+; --------set stack registers if this is AP--------
 extern _bspEntry ; main.c
 extern _apEntry ; main.c
 extern _initialESP ; pic.c
 
-entry3:
+entry4:
 acquirelock:
 	mov eax, 0
 	lock xchg [spinlock], eax
@@ -138,10 +170,24 @@ releaselock:
 
 ; go to main.c
 cmp ecx, 0
-je _bspEntry
-jmp _apEntry
+	je bspinitalized
+	jmp _apEntry
+bspinitalized:
+	mov BYTE [initializedflag], 1
+	jmp _bspEntry
 
 spinlock:
 	dd 1
 initnumber:
 	dd 0
+
+initializedflag:
+	db 0
+
+times (4096-(ENTRY_BEGIN+$-$$) % 4096) db 0
+
+pde_begin:
+%rep 1024
+	dd 0
+%endrep
+pde_end:

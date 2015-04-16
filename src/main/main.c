@@ -16,11 +16,6 @@ void apEntry(void);
 
 SystemGlobal global;
 
-static void initService(PIC *pic, SystemCallTable *syscallTable){
-	initPS2Driver(pic, syscallTable);
-	initVideoDriver(syscallTable);
-}
-
 void bspEntry(void){
 	// 1. memory
 	initKernelMemory();
@@ -28,6 +23,11 @@ void bspEntry(void){
 	initKernelConsole();
 	//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
 	apEntry();
+}
+
+static void initService(PIC *pic, SystemCallTable *syscallTable){
+	initPS2Driver(pic, syscallTable);
+	initVideoDriver(syscallTable);
 }
 
 void apEntry(void){

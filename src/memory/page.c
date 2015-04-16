@@ -17,9 +17,9 @@ typedef struct PageDirectory{
 		uint8_t writeThrough: 1;
 		uint8_t cacheDisabled: 1;
 		uint8_t accessed: 1;
-		uint8_t ignored1: 1;
+		uint8_t zero1: 1;
 		uint8_t size4MB: 1;
-		uint8_t ignored2: 1;
+		uint8_t zero2: 1;
 		uint8_t unused: 3;
 		uint8_t address0_4: 4;
 		uint16_t address4_20: 16;
@@ -35,7 +35,7 @@ typedef struct PageTable{
 		uint8_t cacheDisabled: 1;
 		uint8_t accessed: 1;
 		uint8_t dirty: 1;
-		uint8_t ignored: 1;
+		uint8_t zero: 1;
 		uint8_t global: 1;
 		uint8_t unused: 3;
 		uint8_t address0_4: 4;
@@ -132,7 +132,7 @@ void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t phys
 	pte->cacheDisabled = 0;
 	pte->accessed = 0;
 	pte->dirty = 0;
-	pte->ignored = 0;
+	pte->zero = 0;
 	pte->global = 0;
 	pte->unused = 0;
 	setPageTableEntryAddress(pte, (void*)physicalAddress);
@@ -144,9 +144,9 @@ void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t phys
 		pde->writeThrough = 0;
 		pde->cacheDisabled = 0;
 		pde->accessed = 0;
-		pde->ignored1 = 0;
+		pde->zero1 = 0;
 		pde->size4MB = 0;
-		pde->ignored2 = 0;
+		pde->zero2 = 0;
 		pde->unused = 0;
 		setPageDirectoryEntryAddress(pde, pt);
 		pde->present = 1;

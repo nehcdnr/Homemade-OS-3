@@ -60,7 +60,7 @@ struct InterruptTable{
 static AsmIntEntry *createAsmIntEntries(void){
 	assert(INTERRUPT_ENTRY_MAX_SIZE >= sizeOfIntEntries);
 	AsmIntEntry *e = intEntries;
-	intEntriesAddress = intEntries; // TODO: INTERRUPT_ENTRY_LINEAR_ADDRESS
+	intEntriesAddress = intEntries;
 	return e;
 }
 

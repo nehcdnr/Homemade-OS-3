@@ -18,7 +18,7 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define _STRCAT(A,B) A##B
 #define STRCAT(A,B) _STRCAT(A,B)
 
-// eclipse error
+// eclipse parser does not recognize
 #ifndef __BASE_FILE__
 #define __BASE_FILE__ ""
 #endif
@@ -36,7 +36,7 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
 int printk(const char *format, ...);
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
-#define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))
+//#define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))
 
 #define REMOVE_FROM_DQUEUE(E) do{\
 	*((E)->prev) = (E)->next;\

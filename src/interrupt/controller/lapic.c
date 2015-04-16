@@ -25,7 +25,7 @@ enum APICRegisterOffset{
 };
 #define APIC_BASE ((uintptr_t)0xfee00000)
 
-int isAPICSupported(void){
+int isAPICSupported(void){return 0;
 	static char result = 2;
 	if(result != 2)
 		return result;
