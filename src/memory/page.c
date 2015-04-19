@@ -94,9 +94,9 @@ static void deletePageTable(PageTable *pt){
 		if(pt->entry[i].present == 0){
 			continue;
 		}
-		freeBlock(getPageTableEntryAddress(pt->entry+i));
+		free(getPageTableEntryAddress(pt->entry+i));
 	}
-	freeBlock(pt);
+	free(pt);
 }
 
 void deletePageDirectory(PageDirectory *pd){
@@ -107,7 +107,7 @@ void deletePageDirectory(PageDirectory *pd){
 			continue;
 		deletePageTable(getPageDirectoryEntryAddress(pd->entry + i));
 	}
-	freeBlock(pd);
+	free(pd);
 }
 
 void map4KBKernelPage(PageDirectory *pd, uintptr_t linearAddress, uintptr_t physicalAddress){

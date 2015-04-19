@@ -48,7 +48,7 @@ _addressRangeCount:
 	dd 0
 
 ; --------set temporary GDT&page table--------
-extern KERNEL_VIRTUAL_ADDRESS
+extern _KERNEL_VIRTUAL_ADDRESS_SYMBOL
 
 entry2:
 	; 1. disable interrupt
@@ -117,9 +117,9 @@ entry3:
 initpdeloop:
 	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
 	or [eax], edx
-	cmp edx, KERNEL_VIRTUAL_ADDRESS
+	cmp edx, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
 	jb nextpde
-	sub DWORD [eax], KERNEL_VIRTUAL_ADDRESS
+	sub DWORD [eax], _KERNEL_VIRTUAL_ADDRESS_SYMBOL
 	nextpde:
 	add eax, 4
 	add edx, (1 << 22)

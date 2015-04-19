@@ -158,7 +158,8 @@ static Task *createTask(
 	void (*eip0)(void),
 	int priority
 ){
-	uintptr_t esp0 = (uintptr_t)allocateBlock(MIN_BLOCK_SIZE);
+	uintptr_t esp0 = (uintptr_t)allocate(MIN_BLOCK_SIZE);
+	assert(esp0 % MIN_BLOCK_SIZE == 0);// TODO: page?
 	esp0 += MIN_BLOCK_SIZE;
 	esp0 -= sizeof(Task);
 	esp0 -= esp0 % 4;
