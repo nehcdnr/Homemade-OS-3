@@ -29,8 +29,11 @@ static int isTotallyUsed(Slab *p){
 	return p->freeList == NULL;
 }
 
-static Slab *createSlab(MemoryBlockManager *bm, size_t unit){
-	Slab *slab = (Slab*)allocateBlock(bm, SLAB_SIZE);
+static Slab *createSlab(LinearMemoryManager *m, size_t unit){
+	Slab *slab = (Slab*)allocateAndMapPhysical(m, SLAB_SIZE);
+	if(slab == NULL){
+		return NULL;
+	}
 	slab->prev = NULL;
 	slab->next = NULL;
 	slab->usedCount = 0;
@@ -86,7 +89,7 @@ typedef struct SlabManager{
 	Slab *usableSlab[NUMBER_OF_SLAB_UNIT];
 	Slab *usedSlab[NUMBER_OF_SLAB_UNIT];
 
-	MemoryBlockManager *linear;
+	LinearMemoryManager *memory;
 }SlabManager;
 
 static int findSlab(SlabManager *m, size_t size){
@@ -106,7 +109,7 @@ static int findSlab(SlabManager *m, size_t size){
 		return i;
 	}
 
-	p = createSlab(m->linear, SlabUnit[i]);
+	p = createSlab(m->memory, SlabUnit[i]);
 	if(p == NULL){
 		return -1;
 	}
@@ -116,9 +119,9 @@ static int findSlab(SlabManager *m, size_t size){
 	return i;
 }
 
-void *_allocateSlab(SlabManager *m, size_t size){
+void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
-		return allocateBlock(m->linear, size);
+		return allocateAndMapPhysical(m->memory, size);
 	}
 	int i = findSlab(m, size);
 	if(i < 0)
@@ -130,7 +133,7 @@ void *_allocateSlab(SlabManager *m, size_t size){
 	void *r;
 	acquireLock(&m->lock);
 	r = allocateUnit(p);
-	assert(r != NULL);
+	// r can be NULL
 	if(isTotallyUsed(p)){
 		REMOVE_FROM_DQUEUE(p);
 		ADD_TO_DQUEUE(p, m->usedSlab + i);
@@ -140,10 +143,10 @@ void *_allocateSlab(SlabManager *m, size_t size){
 	return r;
 }
 
-void _releaseSlab(SlabManager *m, void *address){
+void releaseSlab(SlabManager *m, void *address){
 	uintptr_t a = (uintptr_t)address;
 	if(a % MIN_BLOCK_SIZE == 0){
-		releaseBlock(m->linear, address);
+		unmapAndReleasePhysical(m->memory, address);
 		return;
 	}
 	acquireLock(&m->lock);
@@ -151,24 +154,29 @@ void _releaseSlab(SlabManager *m, void *address){
 	if(isTotallyFree(p)){
 		REMOVE_FROM_DQUEUE(p);
 		releaseLock(&m->lock);
-		releaseBlock(m->linear, p);
+		unmapAndReleasePhysical(m->memory, p);
 	}
 	else{
 		releaseLock(&m->lock);
 	}
 }
 
-SlabManager *createSlabManager(MemoryBlockManager *lm){
+SlabManager *createSlabManager(LinearMemoryManager *lm){
 	size_t unit;
 	unsigned int i;
 	for(i = 0; SlabUnit[i] < sizeof(SlabManager); i++);
 	assert(i < NUMBER_OF_SLAB_UNIT);
 	unit = SlabUnit[i];
 	Slab *s = createSlab(lm, unit);
-
+	if(s == NULL){
+		return NULL;
+	}
 	SlabManager *m = allocateUnit(s);
+	if(m == NULL){
+		return NULL;
+	}
 	m->lock = initialSpinlock;
-	m->linear = lm;
+	m->memory = lm;
 
 	for(i = 0; i < NUMBER_OF_SLAB_UNIT; i++){
 		m->usableSlab[i] = NULL;

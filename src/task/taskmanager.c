@@ -16,7 +16,7 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	PageDirectory *userPageTable;
+	TopLevelPageTable *userPageTable;
 	// PageDirectory *kernelPageTable;
 	// queue data
 	enum TaskState{

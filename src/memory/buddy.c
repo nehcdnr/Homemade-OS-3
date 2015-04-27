@@ -42,10 +42,6 @@ static int isInFreeList(MemoryBlock *mb){
 	return mb->prev != NULL;
 }
 
-int isFreeBlock(MemoryBlockManager *m, void* memory){
-	return isInFreeList(getBlock(m, (uintptr_t)memory));
-}
-
 uintptr_t getFirstBlockAddress(MemoryBlockManager *m){
 	return m->beginAddress;
 }
@@ -59,15 +55,15 @@ static MemoryBlock *getBuddy(MemoryBlockManager *m, MemoryBlock *b){
 	return m->block + buddy;
 }
 
-void *allocateBlock(MemoryBlockManager *m, size_t size){
+void *allocateBlock(MemoryBlockManager *m, size_t *size){
 	void *r = NULL;
 	acquireLock(&m->lock);
-	if(size > MAX_BLOCK_SIZE){
+	if(*size > MAX_BLOCK_SIZE){
 		goto allocateBlock_return;
 	}
 	// assert(size >= MIN_BLOCK_SIZE);
 	size_t i, i2;
-	for(i = MIN_BLOCK_ORDER; ((size_t)1 << i) < size; i++);
+	for(i = MIN_BLOCK_ORDER; ((size_t)1 << i) < (*size); i++);
 	for(i2 = i; 1; i2++){
 		if(m->freeBlock[i2 - MIN_BLOCK_ORDER] != NULL)
 			break;
@@ -86,15 +82,21 @@ void *allocateBlock(MemoryBlockManager *m, size_t size){
 		i2--;
 	}
 	m->freeSize -= (1 << i);
+	(*size) = (size_t)(1 << i);
 	r = (void*)getAddress(m, b);
 	allocateBlock_return:
 	releaseLock(&m->lock);
 	return r;
 }
 
-void releaseBlock(MemoryBlockManager *m, void *memory){
+size_t getAllocatedBlockSize(MemoryBlockManager *m, void *address){
+	MemoryBlock *b = getBlock(m, (uintptr_t)address);
+	return (1 << b->sizeOrder);
+}
+
+void releaseBlock(MemoryBlockManager *m, void *address){
 	acquireLock(&m->lock);
-	MemoryBlock *b = getBlock(m, (uintptr_t)memory);
+	MemoryBlock *b = getBlock(m, (uintptr_t)address);
 	m->freeSize += (1 << b->sizeOrder);
 	assert(isInFreeList(b) == 0);
 	while(b->sizeOrder < MAX_BLOCK_ORDER){

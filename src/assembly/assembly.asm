@@ -19,6 +19,11 @@ _getEBP:
 	mov eax, ebp
 	ret
 
+global _getEIP
+_getEIP:
+	mov eax, [esp]
+	ret
+
 global _cpuid_isSupported
 _cpuid_isSupported:
 	pushfd

@@ -21,24 +21,6 @@ uint16_t getDS(void){
 	return d;
 }
 
-uint32_t getCR3(void){
-	uint32_t value = 0;
-	__asm__(
-	"mov %%cr3, %0\n"
-	:"=a"(value)
-	:
-	);
-	return value;
-}
-
-void setCR3(uint32_t value){
-	__asm__(
-	"mov  %0, %%cr3\n"
-	:
-	:"a"(value)
-	);
-}
-
 uint32_t getCR0(void){
 	uint32_t value = 0;
 	__asm__(

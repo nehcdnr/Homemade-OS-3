@@ -23,7 +23,6 @@ enum APICRegisterOffset{
 	LVT_LINT0 = 0x350,
 	LVT_LINT1 = 0x360
 };
-#define APIC_BASE ((uintptr_t)0xfee00000)
 
 int isAPICSupported(void){return 0;
 	static char result = 2;
@@ -129,8 +128,9 @@ static void deliverIPI(const uintptr_t base, uint32_t targetLAPICID, enum IPIDel
 }
 
 struct LAPIC{
-	uintptr_t base;
 	int isBSP;
+	// see uintptr_t apicLinearBase
+	uintptr_t linearBase;
 	uint32_t lapicID;
 	InterruptVector *spuriousVector;
 	InterruptVector *timerVector;
@@ -180,9 +180,9 @@ static uint32_t testLAPICTimerFrequency(const uintptr_t base, const uint32_t tic
 
 void testAndResetLAPICTimer(LAPIC *lapic, PIC *pic){
 	MemoryMappedRegister
-	lvt_timer = (MemoryMappedRegister)(lapic->base + LVT_TIMER_VECTOR),
-	timer_divide = (MemoryMappedRegister)(lapic->base + TIMER_DIVIDE),
-	timer_initialCnt = (MemoryMappedRegister)(lapic->base + TIMER_INITIAL_COUNT);
+	lvt_timer = (MemoryMappedRegister)(lapic->linearBase + LVT_TIMER_VECTOR),
+	timer_divide = (MemoryMappedRegister)(lapic->linearBase + TIMER_DIVIDE),
+	timer_initialCnt = (MemoryMappedRegister)(lapic->linearBase + TIMER_INITIAL_COUNT);
 	// 1. mask timer interrupt
 	// bit 8~0 = interrupt vector
 	// bit 16 = 1: masked, 0: not masked
@@ -200,7 +200,7 @@ void testAndResetLAPICTimer(LAPIC *lapic, PIC *pic){
 	static uint32_t lastResult = 1000000000;
 	if(pic != NULL){
 		static_assert(TIMER_FREQUENCY % FREQ_DIV == 0);
-		lastResult = testLAPICTimerFrequency(lapic->base, TIMER_FREQUENCY / FREQ_DIV, pic);
+		lastResult = testLAPICTimerFrequency(lapic->linearBase, TIMER_FREQUENCY / FREQ_DIV, pic);
 	}
 	// kprintf("LAPIC timer frequency = %u kHz\n", (cnt / 1000) * FREQ_DIV);
 	*timer_initialCnt = lastResult / (TIMER_FREQUENCY / FREQ_DIV);
@@ -213,20 +213,25 @@ void resetLAPICTimer(LAPIC *lapic){
 }
 
 void interprocessorINIT(LAPIC *lapic, uint32_t targetLAPICID){
-	deliverIPI(lapic->base, targetLAPICID, INIT, 0);
+	deliverIPI(lapic->linearBase, targetLAPICID, INIT, 0);
 }
 void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entryAddress){
 	assert((entryAddress & (~0x000ff000)) == 0);
-	deliverIPI(lapic->base, targetLAPICID, STARTUP, (entryAddress >> 12));
+	deliverIPI(lapic->linearBase, targetLAPICID, STARTUP, (entryAddress >> 12));
 }
 
+// linear address of APIC_BASE
+#define APIC_PHYSICAL_BASE ((uintptr_t)0xfee00000)
+#define APIC_MAPPING_SIZE ((size_t)4096)
+static uintptr_t apicLinearBase;
+
 uint32_t getMemoryMappedLAPICID(void){
-	return ((*(MemoryMappedRegister)(APIC_BASE + LAPIC_ID)) >> 24) & 0xff;
+	return ((*(MemoryMappedRegister)(apicLinearBase + LAPIC_ID)) >> 24) & 0xff;
 }
 
 void apic_endOfInterrupt(__attribute__((__unused__)) InterruptParam *p){
 	MemoryMappedRegister eoi =
-	(MemoryMappedRegister)(/*getProcessorLocal()->pic->apic->lapic->base*/APIC_BASE + END_OF_INTERRUPT);
+	(MemoryMappedRegister)(/*getProcessorLocal()->pic->apic->lapic->base*/apicLinearBase + END_OF_INTERRUPT);
 	*eoi = 0;
 }
 
@@ -236,10 +241,10 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);
 	printk("IA32_APIC_BASE MSR = %x:%x\n", edx, eax);
-	if((edx & 0xf) != 0 || (eax & 0xfffff000) != APIC_BASE){
-		printk("relocate apic base address to %x", APIC_BASE);
+	if((edx & 0xf) != 0 || (eax & 0xfffff000) != APIC_PHYSICAL_BASE){
+		printk("relocate apic base address to %x", APIC_PHYSICAL_BASE);
 		edx = (edx & ~0xf);
-		eax = ((eax & ~0xfffff000) | APIC_BASE);
+		eax = ((eax & ~0xfffff000) | APIC_PHYSICAL_BASE);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
 	if(((eax >> 11) & 1) == 0){ // is APIC enabled
@@ -247,11 +252,16 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 		eax |= (1 << 11);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
-	lapic->base = (APIC_BASE & 0xfffff000);
+
 	lapic->isBSP = ((eax >> 8) & 1);
+	if(lapic->isBSP){
+		apicLinearBase = (uintptr_t)map((void*)APIC_PHYSICAL_BASE, APIC_MAPPING_SIZE);
+	}
+	lapic->linearBase = apicLinearBase;
+	assert(lapic->linearBase = (APIC_PHYSICAL_BASE & 0xfffff000));
 	lapic->lapicID = getMemoryMappedLAPICID();
-	lapic->spuriousVector = registerAPICSpurious(lapic->base, lapic->lapicID, t);
-	lapic->errorVector = registerAPICError(lapic->base, lapic->lapicID, t);
-	lapic->timerVector = registerAPICTimer(lapic->base, t);
+	lapic->spuriousVector = registerAPICSpurious(lapic->linearBase, lapic->lapicID, t);
+	lapic->errorVector = registerAPICError(lapic->linearBase, lapic->lapicID, t);
+	lapic->timerVector = registerAPICTimer(lapic->linearBase, t);
 	return lapic;
 }

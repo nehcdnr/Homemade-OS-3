@@ -47,7 +47,7 @@ _addressRange: ; memory.c
 _addressRangeCount:
 	dd 0
 
-; --------set temporary GDT&page table--------
+; --------set temporary GDT--------
 extern _KERNEL_VIRTUAL_ADDRESS_SYMBOL
 
 entry2:
@@ -107,42 +107,56 @@ lgdtparameter:
 	dd gdt0 ; base
 
 [BITS 32]
-; --------set stack registers if this is AP--------
+; --------initialze bss section--------
+extern __bss_physical_start ; see linker script
+extern __bss_physical_end
 entry3:
 	cmp BYTE [initializedflag], 0
-	jne loadpage
+	jne entry4
+	mov eax, __bss_physical_start
+initbssloop:
+	cmp eax, __bss_physical_end
+	je entry4
+	mov BYTE [eax], 0
+	add eax, 1
+	jmp initbssloop
 
-	mov eax, pde_begin
-	mov edx, 0
-initpdeloop:
-	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
-	or [eax], edx
-	cmp edx, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
-	jb nextpde
-	sub DWORD [eax], _KERNEL_VIRTUAL_ADDRESS_SYMBOL
-	nextpde:
-	add eax, 4
-	add edx, (1 << 22)
-	cmp eax, pde_end
-	jne initpdeloop
+; --------set temporary page table--------
+entry4:
+;	cmp BYTE [initializedflag], 0
+;	jne loadpage
 
-loadpage:
-	mov eax, pde_begin
-	mov cr3, eax
-	mov eax, cr4
-	or eax, (1<<4) ; pse=1 allow 4MB page TODO
-	mov cr4, eax
-	mov eax, cr0
-	or eax, 0x80000000 ; paging=1
-	mov cr0, eax
-	jmp entry4
+;	mov eax, pde_begin
+;	mov edx, 0
+;initpdeloop:
+;	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
+;	or [eax], edx
+;	cmp edx, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
+;	jb nextpde
+;	sub DWORD [eax], _KERNEL_VIRTUAL_ADDRESS_SYMBOL
+;	nextpde:
+;	add eax, 4
+;	add edx, (1 << 22)
+;	cmp eax, pde_end
+;	jne initpdeloop
+
+;loadpage:
+;	mov eax, pde_begin
+;	mov cr3, eax
+;	mov eax, cr4
+;	or eax, (1<<4) ; pse=1 allow 4MB page TODO
+;	mov cr4, eax
+;	mov eax, cr0
+;	or eax, 0x80000000 ; paging=1
+;	mov cr0, eax
+	jmp entry5
 
 ; --------set stack registers if this is AP--------
 extern _bspEntry ; main.c
 extern _apEntry ; main.c
 extern _initialESP ; pic.c
 
-entry4:
+entry5:
 acquirelock:
 	mov eax, 0
 	lock xchg [spinlock], eax
@@ -169,10 +183,11 @@ releaselock:
 	lock xchg [spinlock], eax
 
 ; go to main.c
-cmp ecx, 0
+	cmp ecx, 0
 	je bspinitalized
 	jmp _apEntry
 bspinitalized:
+;	add esp, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
 	mov BYTE [initializedflag], 1
 	jmp _bspEntry
 
@@ -184,10 +199,8 @@ initnumber:
 initializedflag:
 	db 0
 
-times (4096-(ENTRY_BEGIN+$-$$) % 4096) db 0
-
-pde_begin:
-%rep 1024
-	dd 0
-%endrep
-pde_end:
+;[SECTION .bss]
+;align 4096
+;pde_begin:
+;resb 4096
+;pde_end:

@@ -12,8 +12,7 @@
 uint16_t getCS(void);
 uint16_t getDS(void);
 uint32_t getEBP(void);
-uint32_t getCR3(void);
-void setCR3(uint32_t value);
+uint32_t getEIP(void);
 uint32_t getCR0(void);
 void setCR0(uint32_t value);
 uint8_t in8(uint16_t port);
