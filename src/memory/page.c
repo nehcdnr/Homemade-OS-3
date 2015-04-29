@@ -2,6 +2,7 @@
 #include"memory.h"
 #include"memory_private.h"
 #include"page.h"
+#include"assembly/assembly.h"
 
 #define PAGE_TABLE_SIZE (4096)
 #define PAGE_TABLE_LENGTH (1024)
@@ -189,18 +190,10 @@ void setCR3(PageDirectory *value){
 }
 
 static void setCR0PagingBit(void){
-	__asm__(
-	"mov %%cr0, %%eax\n"
-	"mov %%cr0, %%ecx\n"
-	"orl $0x80000000, %%eax\n"
-	"cmp %%eax, %%ecx\n"
-	"je skipsetcr0\n"
-	"mov %%eax, %%cr0\n"
-	"skipsetcr0:"
-	:
-	:
-	:"eax","ecx"
-	);
+	uint32_t cr0 = getCR0();
+	if((cr0 & 0x80000000) == 0){
+		setCR0(cr0 | 0x80000000);
+	}
 }
 
 // kernel page table
