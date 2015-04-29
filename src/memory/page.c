@@ -191,14 +191,15 @@ void setCR3(PageDirectory *value){
 static void setCR0PagingBit(void){
 	__asm__(
 	"mov %%cr0, %%eax\n"
-	"andl $0x80000000, %%eax\n"
-	"jz skipsetcr0\n"
+	"mov %%cr0, %%ecx\n"
 	"orl $0x80000000, %%eax\n"
+	"cmp %%eax, %%ecx\n"
+	"je skipsetcr0\n"
 	"mov %%eax, %%cr0\n"
 	"skipsetcr0:"
 	:
 	:
-	:"eax"
+	:"eax","ecx"
 	);
 }
 
