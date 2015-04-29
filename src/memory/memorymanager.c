@@ -87,7 +87,7 @@ void *mapPhysical(LinearMemoryManager *m, void *p_address, size_t size){
 	// page
 	size_t s = 0;
 	while(s < l_size){
-		if(mapKernelPage(m->page, ((uintptr_t)l_address) + s, ((uintptr_t)p_address) + s) == 0){
+		if(mapKernelPage(m, ((uintptr_t)l_address) + s, ((uintptr_t)p_address) + s) == 0){
 			goto error_page;
 		}
 		s += PAGE_SIZE;
@@ -98,7 +98,7 @@ void *mapPhysical(LinearMemoryManager *m, void *p_address, size_t size){
 	error_page: // [l_address ~ l_address+s-PAGE_SIZE] are mapped; [l_address + s] is not mapped
 	while(s != 0){
 		s -= PAGE_SIZE;
-		unmapPage(m->page, ((uintptr_t)l_address) + s);
+		unmapPage(m->page, m->physical, ((uintptr_t)l_address) + s);
 	}
 	releaseBlock(m->linear, l_address);
 	error_linear:
@@ -109,7 +109,7 @@ void unmapPhysical(LinearMemoryManager *m, void *l_address){
 	size_t s = getAllocatedBlockSize(m->linear, l_address);
 	while(s != 0){
 		s -= PAGE_SIZE;
-		unmapPage(m->page, ((uintptr_t)l_address) + s);
+		unmapPage(m->page, m->physical, ((uintptr_t)l_address) + s);
 	}
 	releaseBlock(m->linear, l_address);
 }
@@ -223,7 +223,7 @@ static MemoryBlockManager *initKernelPhysicalBlock(
 ){
 	MemoryBlockManager *m = createMemoryBlockManager(manageBegin, manageEnd - manageBegin, minAddress, maxAddress);
 	const AddressRange extraAR[1] = {
-		{manageBase, manageEnd - manageBase, RESERVED, 0}
+		{manageBase - KERNEL_LINEAR_BASE, manageEnd - manageBase, RESERVED, 0}
 	};
 	initUsableBlocks(m, addressRange, addressRangeCount, extraAR, LENGTH_OF(extraAR));
 
@@ -253,8 +253,8 @@ static void testMemoryManager(void){
 	int si[TEST_N];
 	unsigned int r;
 	int a, b, c;
-	r=MIN_BLOCK_SIZE + 350;
-	for(b=0;b<50;b++){
+	r=MIN_BLOCK_SIZE + 351;
+	for(b=0;b<40;b++){
 		for(a=0;a<TEST_N;a++){
 			si[a]=r;
 			p[a]=allocate(r);
@@ -284,35 +284,39 @@ static void testMemoryManager(void){
 			free((void*)p[a2]);
 		}
 	}
-	printk("test ok\n");
+	printk("test memory: ok\n");
 	//kprintf("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
 }
 #endif
 
 // 256M
-#define KERNEL_LINEAR_MEMORY_END (0x4000000)
 
 void initKernelMemory(void){
-	// find first usable memory address >= 1MB
 	assert(kernelMemory.linear == NULL && kernelMemory.page == NULL && kernelMemory.physical == NULL);
-	const uintptr_t manageBase = 0;
-	uintptr_t manageEnd = manageBase + (16 << 20);
-	uintptr_t manageBegin = manageBase + (1 << 20);
+	// reserved... are linear address
+	const uintptr_t reservedBase = KERNEL_LINEAR_BASE;
+	uintptr_t reservedBegin = reservedBase + (1 << 20);
+	uintptr_t reservedDirectMapEnd = reservedBase + (12 << 20);
+	uintptr_t reservedEnd = reservedBase + (16 << 20);
 	kernelMemory.physical = initKernelPhysicalBlock(
-		manageBase, manageBegin, manageEnd,
-		manageEnd, findMaxAddress()
+		reservedBase, reservedBegin, reservedDirectMapEnd,
+		0, findMaxAddress()
 	);
-	manageBegin = ((uintptr_t)kernelMemory.physical) + getMetaSize(kernelMemory.physical);
+	reservedBegin = ((uintptr_t)kernelMemory.physical) + getBlockManagerMetaSize(kernelMemory.physical);
 
 	kernelMemory.linear = initKernelLinearBlock(
-		manageBase, manageBegin, manageEnd,
-		manageEnd, KERNEL_LINEAR_MEMORY_END
+		reservedBase, reservedBegin, reservedEnd,
+		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
 	);
-	manageBegin = ((uintptr_t)kernelMemory.linear) + getMetaSize(kernelMemory.linear);
+	reservedBegin = ((uintptr_t)kernelMemory.linear) + getBlockManagerMetaSize(kernelMemory.linear);
 
-	kernelMemory.page = initKernelPageTable(manageBase, manageBegin, manageEnd);
+	kernelMemory.page = initKernelPageTable(
+		reservedBase, reservedBegin, reservedEnd,
+		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
+	);
+
 	kernelSlab = createSlabManager(&kernelMemory);
 
 	testMemoryManager();
-
+//hlt();
 }

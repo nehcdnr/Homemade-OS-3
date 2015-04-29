@@ -1,13 +1,19 @@
 ENTRY(_entry)
-KERNEL_VIRTUAL_ADDRESS = 0xf0000000;
+_KERNEL_LINEAR_BASE_SYMBOL = 0xf0000000-0xf0000000;
+_KERNEL_LINEAR_END_SYMBOL = 0xfffff000-0xf0000000;
+ASSERT(_KERNEL_LINEAR_BASE_SYMBOL % 4096 == 0, "kernel linear address not aligned to page");
+ASSERT(_KERNEL_LINEAR_END_SYMBOL % 4096 == 0, "kernel linear address not aligned to page");
 
-ASSERT(KERNEL_VIRTUAL_ADDRESS % (1<<22) == 0, "kernel not aligned to 4MB")
 SECTIONS{
 	. = 0xbe00;
 	.entry : {*(.entry)}
 	.text : {*(.text)}
 	.rdata : {*(.rdata)}
 	.data : {*(.data)}
-	.bss : {*(.bss)}
 	.drectve : {*(.drectve)}
+	.bss : {
+		__bss_physical_start = .;
+		*(.bss)
+		__bss_physical_end = .;
+	}
 }

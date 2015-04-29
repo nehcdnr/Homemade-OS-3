@@ -122,7 +122,7 @@ void releaseBlock(MemoryBlockManager *m, void *address){
 	releaseLock(&m->lock);
 }
 
-size_t getMetaSize(MemoryBlockManager *m){
+size_t getBlockManagerMetaSize(MemoryBlockManager *m){
 	return m->sizeOfThis;
 }
 

@@ -48,8 +48,6 @@ _addressRangeCount:
 	dd 0
 
 ; --------set temporary GDT--------
-extern _KERNEL_VIRTUAL_ADDRESS_SYMBOL
-
 entry2:
 	; 1. disable interrupt
 	cli
@@ -122,33 +120,34 @@ initbssloop:
 	jmp initbssloop
 
 ; --------set temporary page table--------
+extern _KERNEL_LINEAR_BASE_SYMBOL
 entry4:
-;	cmp BYTE [initializedflag], 0
-;	jne loadpage
+	cmp BYTE [initializedflag], 0
+	jne loadpage
 
-;	mov eax, pde_begin
-;	mov edx, 0
-;initpdeloop:
-;	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
-;	or [eax], edx
-;	cmp edx, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
-;	jb nextpde
-;	sub DWORD [eax], _KERNEL_VIRTUAL_ADDRESS_SYMBOL
-;	nextpde:
-;	add eax, 4
-;	add edx, (1 << 22)
-;	cmp eax, pde_end
-;	jne initpdeloop
+	mov eax, pde_begin
+	mov edx, 0
+initpdeloop:
+	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
+	or [eax], edx
+	cmp edx, _KERNEL_LINEAR_BASE_SYMBOL
+	jb nextpde
+	sub DWORD [eax], _KERNEL_LINEAR_BASE_SYMBOL
+	nextpde:
+	add eax, 4
+	add edx, (1 << 22)
+	cmp eax, pde_end
+	jne initpdeloop
 
-;loadpage:
-;	mov eax, pde_begin
-;	mov cr3, eax
-;	mov eax, cr4
-;	or eax, (1<<4) ; pse=1 allow 4MB page TODO
-;	mov cr4, eax
-;	mov eax, cr0
-;	or eax, 0x80000000 ; paging=1
-;	mov cr0, eax
+loadpage:
+	mov eax, pde_begin
+	mov cr3, eax
+	mov eax, cr4
+	or eax, (1<<4) ; pse=1 allow 4MB page TODO
+	mov cr4, eax
+	mov eax, cr0
+	or eax, 0x80000000 ; paging=1
+	mov cr0, eax
 	jmp entry5
 
 ; --------set stack registers if this is AP--------
@@ -187,7 +186,7 @@ releaselock:
 	je bspinitalized
 	jmp _apEntry
 bspinitalized:
-;	add esp, _KERNEL_VIRTUAL_ADDRESS_SYMBOL
+	add esp, _KERNEL_LINEAR_BASE_SYMBOL
 	mov BYTE [initializedflag], 1
 	jmp _bspEntry
 
@@ -199,8 +198,8 @@ initnumber:
 initializedflag:
 	db 0
 
-;[SECTION .bss]
-;align 4096
-;pde_begin:
-;resb 4096
-;pde_end:
+[SECTION .bss]
+align 4096
+pde_begin:
+resb 4096
+pde_end:

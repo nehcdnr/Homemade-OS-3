@@ -179,8 +179,6 @@ static enum VBEFunction lastData = NO_FUNCTION;
 
 void callBIOS(void);
 static void startVBETask(void){
-	//TODO: create page table, map to 0~1MB
-	allocate(1<<20); // + 64k
 	switchToVirtual8086Mode(callBIOS, V8086_STACK_TOP - 4);
 }
 

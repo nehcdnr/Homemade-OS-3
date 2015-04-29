@@ -24,8 +24,9 @@ enum{
 static void pic8259_endOfInterrupt(InterruptParam *p){
 	int irq = getIRQ(p->vector);
 	assert(irq >= 0 && irq < 16);
-	if(irq >= 8)
+	if(irq >= 8){
 		out8(S_OCW2, 0x20);
+	}
 	out8(M_OCW2, 0x20);
 }
 
@@ -86,6 +87,7 @@ PIC8259 *initPIC8259(InterruptTable *t){
 	pic->masterMask = 0xff;
 	pic->slaveMask = 0xff;
 	resetPIC8259(toChar(pic->vectorBase));
+	pic->this.setPICMask(&pic->this, SLAVE_IRQ, 0);
 
 	printk("8259 interrupt #0 mapped to vector %d\n", toChar(pic->vectorBase));
 	return pic;
