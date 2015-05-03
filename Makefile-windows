@@ -2,7 +2,9 @@
 NDEBUG=-DNDEBUG
 NASM=./tool/nasm-2.11.06/nasm.exe
 CC=gcc.exe
-CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -Isrc -O2
+CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -Isrc -O0
+LD=ld
+#./tool/i686-pc-linux-gnu/ld.exe
 LDFLAGS=--oformat elf32-i386
 BFI=./tool/bfi10/bfi.exe
 
@@ -30,16 +32,19 @@ os3.img: floppyloader.bin build/kernel.bin
 floppyloader.bin: $(BOOTLOADER_SRC)
 	$(NASM) $< -o $@
 
+#	objcopy -O elf32-i386 --change-section-vma .text+0xf0000000 --change-section-vma .rdata+0xf0000000 --change-section-vma .data+0xf0000000 --change-section-vma .drectve+0xf0000000 --change-section-vma .bss+0xf0000000 kernel.o kernel.elf
+#
 build/kernel.bin: $(OBJ)
-	ld -T kernel.ld -m i386pe --file-alignment 8 --section-alignment 8 -o kernel.o $(OBJ)
-	objcopy -O binary kernel.o build/kernel.bin
+	$(LD) -m i386pe -T kernel.ld -o kernel.o $(OBJ)
+	objcopy -O elf32-i386 --change-section-lma .text-0xf0000000 --change-section-lma .rdata-0xf0000000 --change-section-lma .data-0xf0000000 --change-section-lma .drectve-0xf0000000 --change-section-lma .bss-0xf0000000 kernel.o kernel.elf
+	objcopy -O binary kernel.elf build/kernel.bin
 
 .SUFFIXES: .o .asm
 .asm.o:
 	$(NASM) -f elf32 $< -o $@
 
 clean:
-	del floppyloader.bin os3.img build\kernel.bin kernel.o $(OBJ)
+	del floppyloader.bin os3.img build\kernel.bin kernel.o kernel.elf $(OBJ)
 
 run: runqemu
 

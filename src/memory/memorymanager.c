@@ -278,18 +278,16 @@ static void testMemoryManager(void){
 			for(c=0;c<si[a2]&&c<100;c++){
 				if(p[a2][c] != a2+1 || p[a2][si[a2]-c-1] != a2+1){
 					//printk("%x %x %d %d %d %d\n", p[a2], p[p[a2][c]-1],si[p[a2][c]-1], p[a2][c], p[a2][si[a2]-c-1], a2+1);
-					panic("mem test checkpoint 2");
+					panic("memory test failed");
 				}
 			}
 			free((void*)p[a2]);
 		}
 	}
-	printk("test memory: ok\n");
-	//kprintf("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
+	//printk("test memory: ok\n");
+	//printk("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
 }
 #endif
-
-// 256M
 
 void initKernelMemory(void){
 	assert(kernelMemory.linear == NULL && kernelMemory.page == NULL && kernelMemory.physical == NULL);
@@ -309,7 +307,6 @@ void initKernelMemory(void){
 		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
 	);
 	reservedBegin = ((uintptr_t)kernelMemory.linear) + getBlockManagerMetaSize(kernelMemory.linear);
-
 	kernelMemory.page = initKernelPageTable(
 		reservedBase, reservedBegin, reservedEnd,
 		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
@@ -318,5 +315,4 @@ void initKernelMemory(void){
 	kernelSlab = createSlabManager(&kernelMemory);
 
 	testMemoryManager();
-//hlt();
 }

@@ -24,5 +24,5 @@ void unmapPage(
 	uintptr_t linearAddress
 );
 struct PageDirectory;
-void setCR3(struct PageDirectory *t);
+void setCR3(uint32_t value);
 struct PageDirectory *getCR3(void);

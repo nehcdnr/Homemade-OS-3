@@ -17,11 +17,12 @@ struct ConsoleDisplay{
 	Spinlock lock;
 };
 
-#define DEFAULT_TEXT_VIDEO_ADDRESS ((volatile uint16_t*)0xb8000)
+#define DEFAULT_TEXT_VIDEO_ADDRESS ((uintptr_t)0xb8000)
+#define VIDEO_ADDRESS_END ((uintptr_t)0xc0000)
 ConsoleDisplay kernelConsole = {
 	0,
 	25, 80,
-	DEFAULT_TEXT_VIDEO_ADDRESS,
+	(volatile uint16_t*)DEFAULT_TEXT_VIDEO_ADDRESS,
 	NULL_SPINLOCK
 };
 
@@ -113,7 +114,7 @@ ConsoleDisplay *initKernelConsole(void){
 	cd->cursor = 0;
 	cd->maxRow = 25;
 	cd->maxColumn = 80;
-	cd->video = DEFAULT_TEXT_VIDEO_ADDRESS;
+	cd->video = map((void*)DEFAULT_TEXT_VIDEO_ADDRESS, VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
 	cd->lock = initialSpinlock;
 	updateVideoAddress(cd);
 	updateCursor(cd);

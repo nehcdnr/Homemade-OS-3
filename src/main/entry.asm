@@ -7,7 +7,6 @@ _entry:
 ; assume cs = ds = 0
 ; ss, esp, ebp = uninitialized
 ; --------get address range--------
-
 	cmp BYTE [initializedflag], 0
 	jne entry2
 	; set BSP stack
@@ -57,65 +56,39 @@ entry2:
 	in al, 0x92
 	or al, 2
 	out 0x92, al
-	; 3. set temporary gdt
-	loadgdt:
-	lgdt [lgdtparameter]
-	; 3. set cr0
+	; 3. set temporary gdt at physical address
+loadgdt:
+	lgdt [physical_lgdtargument]  ; load GDT at physical address
+	; 4. set cr0
 	mov eax, cr0
 	and eax, 0x7fffffff ; paging=0
 	or eax, 0x00000001 ; protected mode=1
 	mov cr0, eax
 	jmp flushpipeline
-	flushpipeline:
-	; 4. reload data segments
+flushpipeline:
+	; 5. reload segments
 	mov ax, 8*2
 	mov ds, ax
 	mov es, ax
 	mov fs, ax
 	mov gs, ax
 	mov ss, ax
-	jmp DWORD 8:entry3 ; reload code segment and go to entry.asm
-
-	align 8
-gdt0:
-	dw 0 ; limit (0~16)
-	dw 0 ; base (0~16)
-	db 0 ; base (16~24)
-	db 0 ; access
-	db 0 ; limit (16~20), flag
-	db 0 ; base (24~32)
-gdt1:
-	dw 0xffff
-	dw 0
-	db 0
-	db 0x98 ; present=1, privilege=00, 1, executable=1, low-privilege accessible=1, readable=0, 0
-	db 0xcf ; 4kB unit=1, 32bit=1, 0, 0
-	db 0
-gdt2:
-	dw 0xffff
-	dw 0
-	db 0
-	db 0x92 ; present=1, privilege=00, 1, executable=0, grow down=0, writable=1, 0
-	db 0xcf
-	db 0
-gdtend:
-
-lgdtparameter:
-	dw gdtend-gdt0-1; limit
-	dd gdt0 ; base
+	jmp DWORD 8:entry3
 
 [BITS 32]
 ; --------initialze bss section--------
-extern __bss_physical_start ; see linker script
-extern __bss_physical_end
+extern __bss_linear_start ; see linker script
+extern __bss_linear_end
 entry3:
 	cmp BYTE [initializedflag], 0
 	jne entry4
-	mov eax, __bss_physical_start
+	mov eax, __bss_linear_start
 initbssloop:
-	cmp eax, __bss_physical_end
+	cmp eax, __bss_linear_end
 	je entry4
-	mov BYTE [eax], 0
+	mov ebx, eax
+	sub ebx, _KERNEL_LINEAR_BASE_SYMBOL
+	mov BYTE [ebx], 0
 	add eax, 1
 	jmp initbssloop
 
@@ -125,7 +98,11 @@ entry4:
 	cmp BYTE [initializedflag], 0
 	jne loadpage
 
-	mov eax, pde_begin
+	mov esi, linear_pde_begin ; esi = physical_pde_begin
+	mov edi, linear_pde_end ; edi = physical_pde_begin
+	sub esi, _KERNEL_LINEAR_BASE_SYMBOL
+	sub edi, _KERNEL_LINEAR_BASE_SYMBOL
+	mov eax, esi
 	mov edx, 0
 initpdeloop:
 	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
@@ -133,22 +110,39 @@ initpdeloop:
 	cmp edx, _KERNEL_LINEAR_BASE_SYMBOL
 	jb nextpde
 	sub DWORD [eax], _KERNEL_LINEAR_BASE_SYMBOL
-	nextpde:
+nextpde:
 	add eax, 4
 	add edx, (1 << 22)
-	cmp eax, pde_end
+	cmp eax, edi
 	jne initpdeloop
 
 loadpage:
-	mov eax, pde_begin
-	mov cr3, eax
+	mov cr3, esi
 	mov eax, cr4
 	or eax, (1<<4) ; pse=1 allow 4MB page TODO
 	mov cr4, eax
 	mov eax, cr0
 	or eax, 0x80000000 ; paging=1
 	mov cr0, eax
-	jmp entry5
+	; load GDT at linear address
+	cmp BYTE [initializedflag], 0
+	jne loadgdt2
+intigdt2:
+	mov dx, [physical_lgdtargument + 0] ; limit
+	mov eax, [physical_lgdtargument + 2] ; address
+	add eax, _KERNEL_LINEAR_BASE_SYMBOL
+	mov [linear_lgdtargument + 0], dx
+	mov [linear_lgdtargument + 2], eax
+loadgdt2:
+	lgdt [linear_lgdtargument]
+	; reload segments
+	mov ax, 8*2
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
+	jmp DWORD 8:entry5
 
 ; --------set stack registers if this is AP--------
 extern _bspEntry ; main.c
@@ -188,6 +182,7 @@ releaselock:
 bspinitalized:
 	add esp, _KERNEL_LINEAR_BASE_SYMBOL
 	mov BYTE [initializedflag], 1
+
 	jmp _bspEntry
 
 spinlock:
@@ -198,8 +193,40 @@ initnumber:
 initializedflag:
 	db 0
 
+physical_lgdtargument:
+	dw gdtend-gdt0-1; limit
+	dd gdt0 ; base
+
+	align 8
+gdt0:
+	dw 0 ; limit (0~16)
+	dw 0 ; base (0~16)
+	db 0 ; base (16~24)
+	db 0 ; access
+	db 0 ; limit (16~20), flag
+	db 0 ; base (24~32)
+; gdt1:
+	dw 0xffff
+	dw 0
+	db 0
+	db 0x98 ; present=1, privilege=00, 1, executable=1, low-privilege accessible=1, readable=0, 0
+	db 0xcf ; 4kB unit=1, 32bit=1, 0, 0
+	db 0
+; gdt2:
+	dw 0xffff
+	dw 0
+	db 0
+	db 0x92 ; present=1, privilege=00, 1, executable=0, grow down=0, writable=1, 0
+	db 0xcf
+	db 0
+gdtend:
+
 [SECTION .bss]
-align 4096
-pde_begin:
-resb 4096
-pde_end:
+
+	align 4096
+linear_pde_begin:
+	resb 4096
+linear_pde_end:
+
+linear_lgdtargument:
+	resb 6

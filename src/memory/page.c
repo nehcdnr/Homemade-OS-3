@@ -181,7 +181,7 @@ PageDirectory *getCR3(void){
 	return value;
 }
 
-void setCR3(PageDirectory *value){
+void setCR3(uint32_t value){
 	__asm__(
 	"mov  %0, %%cr3\n"
 	:
@@ -290,7 +290,8 @@ TopLevelPageTable *initKernelPageTable(
 	TopLevelPageTable *kPage = (TopLevelPageTable*)manageBegin;
 	assert(((uintptr_t)&kPage->pd) % PAGE_TABLE_SIZE == 0);
 
-	kPage->pdIndexBase = PD_INDEX(kernelLinearBase);
+	kPage->pdIndexBase = (PAGE_TABLE_LENGTH - PD_INDEX(kernelLinearBase)) & (PAGE_TABLE_LENGTH - 1);
+	assert(linearAddressOfPageTable(kPage, kernelLinearBase) == kPage->pt + 0);
 	MEMSET0(&kPage->pd);
 	uintptr_t a;
 	for(a = manageBase; a < manageEnd; a += PAGE_SIZE * PAGE_TABLE_LENGTH){
@@ -303,8 +304,8 @@ TopLevelPageTable *initKernelPageTable(
 		PageTable *kpt = linearAddressOfPageTable(kPage, a);
 		int ptIndex = PT_INDEX(a);
 		initKernelPTE(kpt->entry + ptIndex, ((void*)(a - kernelLinearBase)));
-	}
-	setCR3(&kPage->pd);
+	}printk("%x %x\n", manageEnd, getEBP());
+	setCR3(((uintptr_t)&(kPage->pd)) - kernelLinearBase);
 	setCR0PagingBit();
 
 	return kPage;
