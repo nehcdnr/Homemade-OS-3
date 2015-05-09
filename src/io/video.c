@@ -111,10 +111,11 @@ int printConsole(ConsoleDisplay *cd, const char *s){
 
 ConsoleDisplay *initKernelConsole(void){
 	ConsoleDisplay *cd = &kernelConsole;
+	PhysicalAddress defaultTextVideoAddress = {DEFAULT_TEXT_VIDEO_ADDRESS};
 	cd->cursor = 0;
 	cd->maxRow = 25;
 	cd->maxColumn = 80;
-	cd->video = map((void*)DEFAULT_TEXT_VIDEO_ADDRESS, VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
+	cd->video = mapPage(defaultTextVideoAddress, VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
 	cd->lock = initialSpinlock;
 	updateVideoAddress(cd);
 	updateCursor(cd);

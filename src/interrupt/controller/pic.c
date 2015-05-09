@@ -24,7 +24,7 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 			if(target == lapicID)
 				continue;
 			if(iter == 0){ // entry.asm
-				initialESP[e] = (uintptr_t)allocate(KERNEL_STACK_SIZE);
+				initialESP[e] = (uintptr_t)allocateKernelMemory(KERNEL_STACK_SIZE);
 				initialESP[e] += KERNEL_STACK_SIZE;
 				e++;
 			}

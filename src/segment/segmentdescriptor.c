@@ -93,7 +93,7 @@ SegmentTable *createSegmentTable(void){
 	SegmentTable *NEW(t);
 	NEW_ARRAY(t->selector, length);
 	{
-		uintptr_t desc = (uintptr_t)allocate((length + 1) * sizeof(SegmentDescriptor));
+		uintptr_t desc = (uintptr_t)allocateKernelMemory((length + 1) * sizeof(SegmentDescriptor));
 		while(desc % sizeof(SegmentDescriptor) != 0){
 			desc++;
 		}

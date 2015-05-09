@@ -76,54 +76,63 @@ static uintptr_t findFirstUsableMemory(const size_t manageSize){
 
 // memory manager collection
 
-void *mapPhysical(LinearMemoryManager *m, void *p_address, size_t size){
+PhysicalAddress _allocatePhysicalPage(LinearMemoryManager *m, size_t size){
+	size_t p_size = size;
+	PhysicalAddress p_address = {allocateBlock(m->physical, &p_size)};
+	return p_address;
+}
+
+void _releasePhysicalPage(LinearMemoryManager *m, PhysicalAddress address){
+	releaseBlock(m->physical, address.value);
+}
+
+void *_mapPage(LinearMemoryManager *m, PhysicalAddress p_address, size_t size){
 	// linear
 	size_t l_size = size;
-	void *l_address = allocateBlock(m->linear, &l_size);
-	if(l_address == NULL){
+	uintptr_t l_address = allocateBlock(m->linear, &l_size);
+	if(l_address == UINTPTR_NULL){
 		goto error_linear;
 	}
-	assert(((uintptr_t)l_address) % PAGE_SIZE == 0);
+	assert((l_address) % PAGE_SIZE == 0);
 	// page
 	size_t s = 0;
 	while(s < l_size){
-		if(mapKernelPage(m, ((uintptr_t)l_address) + s, ((uintptr_t)p_address) + s) == 0){
+		PhysicalAddress p_address_s = {p_address.value + s};
+		if(setKernelPage(m, (l_address) + s, p_address_s) == 0){
 			goto error_page;
 		}
 		s += PAGE_SIZE;
 	}
 	// succeeded
-	return l_address;
+	return (void*)l_address;
 	// undo
 	error_page: // [l_address ~ l_address+s-PAGE_SIZE] are mapped; [l_address + s] is not mapped
 	while(s != 0){
 		s -= PAGE_SIZE;
-		unmapPage(m->page, m->physical, ((uintptr_t)l_address) + s);
+		invalidatePage(m, ((uintptr_t)l_address) + s);
 	}
-	releaseBlock(m->linear, l_address);
+	releaseBlock(m->linear, (uintptr_t)l_address);
 	error_linear:
 	return NULL;
 }
 
-void unmapPhysical(LinearMemoryManager *m, void *l_address){
-	size_t s = getAllocatedBlockSize(m->linear, l_address);
+void _unmapPage(LinearMemoryManager *m, void *l_address){
+	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)l_address);
 	while(s != 0){
 		s -= PAGE_SIZE;
-		unmapPage(m->page, m->physical, ((uintptr_t)l_address) + s);
+		invalidatePage(m, ((uintptr_t)l_address) + s);
 	}
-	releaseBlock(m->linear, l_address);
+	releaseBlock(m->linear, (uintptr_t)l_address);
 }
 
-void *allocateAndMapPhysical(LinearMemoryManager *m, size_t size){
+void *_allocateAndMapPage(LinearMemoryManager *m, size_t size){
 	// physical
-	size_t p_size = size;
-	void *p_address = allocateBlock(m->physical, &p_size);
-	if(p_address == NULL){
+	PhysicalAddress p_address = _allocatePhysicalPage(m, size);
+	if(p_address.value == UINTPTR_NULL){
 		goto error_physical;
 	}
-	assert(((uintptr_t)p_address) % PAGE_SIZE == 0);
 	// linear
-	void *l_address = mapPhysical(m, p_address, size);
+	void *l_address = _mapPage(m, p_address, size);
 	if(l_address == NULL){
 		goto error_map;
 	}
@@ -131,41 +140,55 @@ void *allocateAndMapPhysical(LinearMemoryManager *m, size_t size){
 	return l_address;
 	// undo
 	error_map:
-	releaseBlock(m->physical, p_address);
+	releaseBlock(m->physical, p_address.value);
 	error_physical:
 	return NULL;
 }
 
-void unmapAndReleasePhysical(LinearMemoryManager *m, void* l_address){
-	void *p_address = translatePage(m->page, l_address);
-	unmapPhysical(m, l_address);
-	releaseBlock(m->physical, p_address);
+void _unmapAndReleasePage(LinearMemoryManager *m, void* l_address){
+	PhysicalAddress p_address = translatePage(m->page, l_address);
+	_unmapPage(m, l_address);
+	_releasePhysicalPage(m, p_address);
 }
 
 // global memory manager
 static LinearMemoryManager kernelMemory;
 static SlabManager *kernelSlab = NULL;
 
-void *allocate(size_t size){
+void *allocateKernelMemory(size_t size){
 	assert(kernelSlab != NULL);
 	return allocateSlab(kernelSlab, size);
 }
 
-void free(void *address){
+void releaseKernelMemory(void *address){
 	assert(kernelSlab != NULL);
 	releaseSlab(kernelSlab, address);
 }
 
-void *map(void *address, size_t size){
-	assert(size % PAGE_SIZE == 0);
-	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
-	return mapPhysical(&kernelMemory, address, size);
+PhysicalAddress allocatePhysicalPage(size_t size){
+	return _allocatePhysicalPage(&kernelMemory, size);
+}
+void releasePhysicalPage(PhysicalAddress address){
+	_releasePhysicalPage(&kernelMemory, address);
 }
 
-void unmap(void *address){
+void *mapPage(PhysicalAddress address, size_t size){
+	assert(size % PAGE_SIZE == 0);
 	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
-	unmapPhysical(&kernelMemory, address);
+	return _mapPage(&kernelMemory, address, size);
 }
+
+void unmapPage(void *linearAddress){
+	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
+	_unmapPage(&kernelMemory, linearAddress);
+}
+void *allocateAndMapPage(size_t size){
+	return _allocateAndMapPage(&kernelMemory, size);
+}
+void unmapAndReleasePage(void *linearAddress){
+	_unmapAndReleasePage(&kernelMemory, linearAddress);
+}
+
 /*
 size_t getPhysicalMemoryUsage(){
 
@@ -173,16 +196,22 @@ size_t getPhysicalMemoryUsage(){
 
 size_t getKernelMemoryUsage(){
 
-
 }
 */
 /*
-void enablePaging(MemoryManager *m){
-	setCR3((uint32_t)(m->pageDirectory));
-	setCR0(getCR0() | 0x80000000);
+UserPageTable *mapUserPageTable(PhysicalAddress p){
+	return _mapUserPageTable(&kernelMemory, kernelSlab, p);
+}
+PhysicalAddress unmapUserPageTable(UserPageTable *p){
+	return _unmapUserPageTable(&kernelMemory, kernelSlab, p);
+}
+UserPageTable *createUserPageTable(void){
+	return _createUserPageTable(&kernelMemory, kernelSlab);
+}
+void deleteUserPageTable(UserPageTable *p){
+	_deleteUserPageTable(&kernelMemory, kernelSlab, p);
 }
 */
-
 static void initUsableBlocks(MemoryBlockManager *m,
 	const AddressRange *arArray1, int arLength1,
 	const AddressRange *arArray2, int arLength2
@@ -211,7 +240,7 @@ static void initUsableBlocks(MemoryBlockManager *m,
 			}
 		}
 		if(isInUnusable == 0 && isInUsable == 1){
-			releaseBlock(m, (void*)blockAddress);
+			releaseBlock(m, blockAddress);
 		}
 	}
 }
@@ -257,7 +286,7 @@ static void testMemoryManager(void){
 	for(b=0;b<40;b++){
 		for(a=0;a<TEST_N;a++){
 			si[a]=r;
-			p[a]=allocate(r);
+			p[a]=allocateKernelMemory(r);
 			if(p[a] == NULL){
 				// printk("a = %d, r = %d p[a] = %x\n", a, r, p[a]);
 			}
@@ -281,7 +310,7 @@ static void testMemoryManager(void){
 					panic("memory test failed");
 				}
 			}
-			free((void*)p[a2]);
+			releaseKernelMemory((void*)p[a2]);
 		}
 	}
 	//printk("test memory: ok\n");
@@ -294,7 +323,7 @@ void initKernelMemory(void){
 	// reserved... are linear address
 	const uintptr_t reservedBase = KERNEL_LINEAR_BASE;
 	uintptr_t reservedBegin = reservedBase + (1 << 20);
-	uintptr_t reservedDirectMapEnd = reservedBase + (12 << 20);
+	uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
 	uintptr_t reservedEnd = reservedBase + (16 << 20);
 	kernelMemory.physical = initKernelPhysicalBlock(
 		reservedBase, reservedBegin, reservedDirectMapEnd,

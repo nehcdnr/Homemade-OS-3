@@ -1,28 +1,20 @@
 typedef struct MemoryBlockManager MemoryBlockManager;
-typedef struct TopLevelPageTable TopLevelPageTable;
-
-TopLevelPageTable *createPageTable(MemoryBlockManager *m);
-void deletePageDirectory(MemoryBlockManager *m, TopLevelPageTable *pd);
+typedef struct PageManager PageManager;
 
 #define PAGE_SIZE (4096)
 
-enum PageType{
-	KERNEL_PAGE,
-	USER_PAGE
-};
-
-void *translatePage(TopLevelPageTable *p, void *linearAddress);
+PhysicalAddress translatePage(PageManager *p, void *linearAddress);
 
 typedef struct LinearMemoryManager LinearMemoryManager;
 // return 1 if success, 0 if error
-int mapKernelPage(
+int setKernelPage(
 	LinearMemoryManager *m,
-	uintptr_t linearAddress, uintptr_t physicalAddress
+	uintptr_t linearAddress, PhysicalAddress physicalAddress
 );
-void unmapPage(
-	TopLevelPageTable *p, MemoryBlockManager *physical,
+void invalidatePage(
+	LinearMemoryManager *m,
 	uintptr_t linearAddress
 );
-struct PageDirectory;
+
 void setCR3(uint32_t value);
-struct PageDirectory *getCR3(void);
+uint32_t getCR3(void);

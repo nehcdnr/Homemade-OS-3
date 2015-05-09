@@ -7,7 +7,7 @@ _entry:
 ; assume cs = ds = 0
 ; ss, esp, ebp = uninitialized
 ; --------get address range--------
-	cmp BYTE [initializedflag], 0
+	cmp BYTE [init_flag], 0
 	jne entry2
 	; set BSP stack
 	mov ax, 0
@@ -51,7 +51,7 @@ entry2:
 	; 1. disable interrupt
 	cli
 	; 2. enable a20 line
-	cmp BYTE [initializedflag], 0
+	cmp BYTE [init_flag], 0
 	jne loadgdt
 	in al, 0x92
 	or al, 2
@@ -77,10 +77,11 @@ flushpipeline:
 
 [BITS 32]
 ; --------initialze bss section--------
+extern _KERNEL_LINEAR_BASE_SYMBOL
 extern __bss_linear_start ; see linker script
 extern __bss_linear_end
 entry3:
-	cmp BYTE [initializedflag], 0
+	cmp BYTE [init_flag], 0
 	jne entry4
 	mov eax, __bss_linear_start
 initbssloop:
@@ -93,15 +94,14 @@ initbssloop:
 	jmp initbssloop
 
 ; --------set temporary page table--------
-extern _KERNEL_LINEAR_BASE_SYMBOL
 entry4:
-	cmp BYTE [initializedflag], 0
+	cmp BYTE [init_flag], 0
 	jne loadpage
 
-	mov esi, linear_pde_begin ; esi = physical_pde_begin
-	mov edi, linear_pde_end ; edi = physical_pde_begin
-	sub esi, _KERNEL_LINEAR_BASE_SYMBOL
-	sub edi, _KERNEL_LINEAR_BASE_SYMBOL
+	mov esi, linear_pde_begin
+	mov edi, linear_pde_end
+	sub esi, _KERNEL_LINEAR_BASE_SYMBOL ; esi = physical_pde_begin
+	sub edi, _KERNEL_LINEAR_BASE_SYMBOL ; edi = physical_pde_end
 	mov eax, esi
 	mov edx, 0
 initpdeloop:
@@ -115,7 +115,6 @@ nextpde:
 	add edx, (1 << 22)
 	cmp eax, edi
 	jne initpdeloop
-
 loadpage:
 	mov cr3, esi
 	mov eax, cr4
@@ -125,7 +124,7 @@ loadpage:
 	or eax, 0x80000000 ; paging=1
 	mov cr0, eax
 	; load GDT at linear address
-	cmp BYTE [initializedflag], 0
+	cmp BYTE [init_flag], 0
 	jne loadgdt2
 intigdt2:
 	mov dx, [physical_lgdtargument + 0] ; limit
@@ -181,7 +180,7 @@ releaselock:
 	jmp _apEntry
 bspinitalized:
 	add esp, _KERNEL_LINEAR_BASE_SYMBOL
-	mov BYTE [initializedflag], 1
+	mov BYTE [init_flag], 1
 
 	jmp _bspEntry
 
@@ -190,12 +189,8 @@ spinlock:
 initnumber:
 	dd 0
 
-initializedflag:
+init_flag:
 	db 0
-
-physical_lgdtargument:
-	dw gdtend-gdt0-1; limit
-	dd gdt0 ; base
 
 	align 8
 gdt0:
@@ -221,12 +216,17 @@ gdt0:
 	db 0
 gdtend:
 
-[SECTION .bss]
+physical_lgdtargument:
+	dw gdtend-gdt0-1; limit
+	dd gdt0 ; base
 
+linear_lgdtargument:
+	dw 0; limit
+	dd 0; base
+
+[SECTION .bss]
 	align 4096
 linear_pde_begin:
 	resb 4096
 linear_pde_end:
 
-linear_lgdtargument:
-	resb 6

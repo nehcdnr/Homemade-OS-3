@@ -58,7 +58,6 @@ struct InterruptTable{
 };
 
 static AsmIntEntry *createAsmIntEntries(void){
-	assert(INTERRUPT_ENTRY_MAX_SIZE >= sizeOfIntEntries);
 	AsmIntEntry *e = intEntries;
 	intEntriesAddress = intEntries;
 	return e;
@@ -66,7 +65,7 @@ static AsmIntEntry *createAsmIntEntries(void){
 
 void defaultInterruptHandler(InterruptParam *param){
 	printk("unhandled interrupt %d; argument = %x\n", toChar(param->vector), param->argument);
-	printk("ds=%u, eax=%x, error=%u, eip=%u, cs=%u, eflags=%x\n",
+	printk("ds=%u, eax=%x, error=%u, eip=%x, cs=%u, eflags=%x\n",
 	param->regs.ds, param->regs.eax, param->errorCode, param->eip, param->cs, param->eflags.value);
 	panic("unhandled interrupt");
 	sti();
@@ -164,7 +163,7 @@ uint16_t toShort(SegmentSelector* s);
 InterruptTable *initInterruptTable(SegmentTable *gdt){
 	struct InterruptTable *NEW(t);
 	{
-		uintptr_t desc = (uintptr_t)allocate((numberOfIntEntries + 1) * sizeof(InterruptDescriptor));
+		uintptr_t desc = (uintptr_t)allocateKernelMemory((numberOfIntEntries + 1) * sizeof(InterruptDescriptor));
 		while(desc % sizeof(InterruptDescriptor) != 0){
 			desc++;
 		}

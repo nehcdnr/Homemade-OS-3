@@ -16,7 +16,9 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	TopLevelPageTable *userPageTable;
+	PhysicalAddress userPageTable;
+	uintptr_t userStackBottom;
+	uintptr_t userHeapTop;
 	// PageDirectory *kernelPageTable;
 	// queue data
 	enum TaskState{
@@ -26,6 +28,7 @@ typedef struct Task{
 	}state;
 	int priority;
 
+	// system call
 	SystemCallFunction taskDefinedSystemCall;
 	uintptr_t taskDefinedArgument;
 
@@ -154,17 +157,33 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip0, uint32_t esp0);
 
+static PhysicalAddress createTaskPageTable(void){
+	PhysicalAddress pm = {1};
+	return pm;
+}
+/*
+static void deleteTaskPageTable(PhysicalAddress address){
+}
+*/
 static Task *createTask(
 	void (*eip0)(void),
 	int priority
 ){
-	uintptr_t esp0 = (uintptr_t)allocate(MIN_BLOCK_SIZE);
+	uintptr_t esp0 = (uintptr_t)allocateKernelMemory(MIN_BLOCK_SIZE);
+	if(esp0 == UINTPTR_NULL){
+		goto error_kernel_stack;
+	}
 	assert(esp0 % MIN_BLOCK_SIZE == 0);// TODO: page?
 	esp0 += MIN_BLOCK_SIZE;
 	esp0 -= sizeof(Task);
 	esp0 -= esp0 % 4;
 	Task *t = (Task*)esp0;
-	t->userPageTable = NULL; // TODO
+	t->userPageTable = createTaskPageTable(); // TODO: physical memory
+	if(t->userPageTable.value == UINTPTR_NULL){
+		goto error_page_table;
+	}
+	t->userStackBottom = USER_LINEAR_END - 4;
+	t->userHeapTop = USER_LINEAR_BEGIN;
 	t->state = SUSPENDED;
 	t->priority = priority;
 	EFlags eflags = getEFlags();
@@ -175,7 +194,14 @@ static Task *createTask(
 	t->taskDefinedArgument = 0;
 	t->next =
 	t->prev = NULL;
+
 	return t;
+
+	//deleteTaskPageTable(t->userPageTable); TODO
+	error_page_table:
+	releaseKernelMemory((void*)esp0);
+	error_kernel_stack:
+	return NULL;
 }
 
 Task *createKernelTask(void (*eip0)(void)){
