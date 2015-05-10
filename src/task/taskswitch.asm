@@ -14,14 +14,16 @@ _initTaskStack:
 	sub eax, 12 + 32 ; eip, startTask, pushf, pushad
 	ret
 
-; void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0)
+; void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0, uint32_t newCR3)
 global _contextSwitch
 _contextSwitch:
 	pushf ; 4 bytes
 	pushad ; 8*4 bytes
+	mov edx, [esp + 48] ; newCR3
 	mov eax, [esp + 40] ; oldTaskESP0
 	mov [eax], esp
 	mov esp, [esp + 44] ; newTaskESP0
+	mov cr3, edx
 	popad
 	popf
 	ret

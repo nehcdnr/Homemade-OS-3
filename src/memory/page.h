@@ -1,3 +1,5 @@
+#include<std.h>
+
 typedef struct MemoryBlockManager MemoryBlockManager;
 typedef struct PageManager PageManager;
 
@@ -16,5 +18,4 @@ void invalidatePage(
 	uintptr_t linearAddress
 );
 
-void setCR3(uint32_t value);
 uint32_t getCR3(void);

@@ -77,7 +77,7 @@ flushpipeline:
 
 [BITS 32]
 ; --------initialze bss section--------
-extern _KERNEL_LINEAR_BASE_SYMBOL
+extern _KERNEL_LINEAR_BEGIN_SYMBOL
 extern __bss_linear_start ; see linker script
 extern __bss_linear_end
 entry3:
@@ -88,7 +88,7 @@ initbssloop:
 	cmp eax, __bss_linear_end
 	je entry4
 	mov ebx, eax
-	sub ebx, _KERNEL_LINEAR_BASE_SYMBOL
+	sub ebx, _KERNEL_LINEAR_BEGIN_SYMBOL
 	mov BYTE [ebx], 0
 	add eax, 1
 	jmp initbssloop
@@ -100,16 +100,16 @@ entry4:
 
 	mov esi, linear_pde_begin
 	mov edi, linear_pde_end
-	sub esi, _KERNEL_LINEAR_BASE_SYMBOL ; esi = physical_pde_begin
-	sub edi, _KERNEL_LINEAR_BASE_SYMBOL ; edi = physical_pde_end
+	sub esi, _KERNEL_LINEAR_BEGIN_SYMBOL ; esi = physical_pde_begin
+	sub edi, _KERNEL_LINEAR_BEGIN_SYMBOL ; edi = physical_pde_end
 	mov eax, esi
 	mov edx, 0
 initpdeloop:
 	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
 	or [eax], edx
-	cmp edx, _KERNEL_LINEAR_BASE_SYMBOL
+	cmp edx, _KERNEL_LINEAR_BEGIN_SYMBOL
 	jb nextpde
-	sub DWORD [eax], _KERNEL_LINEAR_BASE_SYMBOL
+	sub DWORD [eax], _KERNEL_LINEAR_BEGIN_SYMBOL
 nextpde:
 	add eax, 4
 	add edx, (1 << 22)
@@ -129,7 +129,7 @@ loadpage:
 intigdt2:
 	mov dx, [physical_lgdtargument + 0] ; limit
 	mov eax, [physical_lgdtargument + 2] ; address
-	add eax, _KERNEL_LINEAR_BASE_SYMBOL
+	add eax, _KERNEL_LINEAR_BEGIN_SYMBOL
 	mov [linear_lgdtargument + 0], dx
 	mov [linear_lgdtargument + 2], eax
 loadgdt2:
@@ -179,7 +179,7 @@ releaselock:
 	je bspinitalized
 	jmp _apEntry
 bspinitalized:
-	add esp, _KERNEL_LINEAR_BASE_SYMBOL
+	add esp, _KERNEL_LINEAR_BEGIN_SYMBOL
 	mov BYTE [init_flag], 1
 
 	jmp _bspEntry

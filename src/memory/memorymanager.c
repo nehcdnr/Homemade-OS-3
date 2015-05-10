@@ -1,6 +1,6 @@
 #include"common.h"
 #include"memory.h"
-#include"page.h"
+#include"memory/page.h"
 #include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"
 #include"memory_private.h"
@@ -252,7 +252,7 @@ static MemoryBlockManager *initKernelPhysicalBlock(
 ){
 	MemoryBlockManager *m = createMemoryBlockManager(manageBegin, manageEnd - manageBegin, minAddress, maxAddress);
 	const AddressRange extraAR[1] = {
-		{manageBase - KERNEL_LINEAR_BASE, manageEnd - manageBase, RESERVED, 0}
+		{manageBase - KERNEL_LINEAR_BEGIN, manageEnd - manageBase, RESERVED, 0}
 	};
 	initUsableBlocks(m, addressRange, addressRangeCount, extraAR, LENGTH_OF(extraAR));
 
@@ -277,7 +277,7 @@ static MemoryBlockManager *initKernelLinearBlock(
 #define testMemoryManager() do{}while(0)
 #else
 #define TEST_N (60)
-static void testMemoryManager(void){
+static void testMemoryManager(void){return;
 	uint8_t *p[TEST_N];
 	int si[TEST_N];
 	unsigned int r;
@@ -321,7 +321,7 @@ static void testMemoryManager(void){
 void initKernelMemory(void){
 	assert(kernelMemory.linear == NULL && kernelMemory.page == NULL && kernelMemory.physical == NULL);
 	// reserved... are linear address
-	const uintptr_t reservedBase = KERNEL_LINEAR_BASE;
+	const uintptr_t reservedBase = KERNEL_LINEAR_BEGIN;
 	uintptr_t reservedBegin = reservedBase + (1 << 20);
 	uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
 	uintptr_t reservedEnd = reservedBase + (16 << 20);
@@ -333,12 +333,12 @@ void initKernelMemory(void){
 
 	kernelMemory.linear = initKernelLinearBlock(
 		reservedBase, reservedBegin, reservedEnd,
-		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
+		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
 	);
 	reservedBegin = ((uintptr_t)kernelMemory.linear) + getBlockManagerMetaSize(kernelMemory.linear);
 	kernelMemory.page = initKernelPageTable(
 		reservedBase, reservedBegin, reservedEnd,
-		KERNEL_LINEAR_BASE, KERNEL_LINEAR_END
+		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
 	);
 
 	kernelSlab = createSlabManager(&kernelMemory);

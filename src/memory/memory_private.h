@@ -18,6 +18,13 @@ MemoryBlockManager *createMemoryBlockManager(
 size_t getBlockManagerMetaSize(MemoryBlockManager *m);
 int getBlockCount(MemoryBlockManager *m);
 
+// 4K~8M
+// block is always aligned to MIN_BLOCK_SIZE
+#define MIN_BLOCK_ORDER (12)
+#define MIN_BLOCK_SIZE (1<<MIN_BLOCK_ORDER)
+#define MAX_BLOCK_ORDER (23)
+#define MAX_BLOCK_SIZE (1<<MAX_BLOCK_ORDER)
+
 // page.c
 typedef struct PageManager PageManager;
 PageManager *initKernelPageTable(

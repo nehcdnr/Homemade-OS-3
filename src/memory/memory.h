@@ -25,7 +25,9 @@ typedef struct PageManager PageManager;
 //UserPageTable *mapUserPageTable(PhysicalAddress p);
 //PhysicalAddress unmapUserPageTable(UserPageTable *p);
 extern const size_t sizeOfPageTableSet;
-PageManager *createUserPageTable(uintptr_t reservedBase, uintptr_t reservedEnd, void *pageTableSetAddress);
+PageManager *createAndMapUserPageTable(uintptr_t targetAddress);
+void unmapUserPageTableSet(PageManager *p);
+uint32_t toCR3(PageManager *p);
 void deleteUserPageTable(PageManager *p);
 
 
@@ -34,17 +36,10 @@ void deleteUserPageTable(PageManager *p);
 #define DELETE(V) releaseKernelMemory(V)
 
 //see kernel.ld
-extern char KERNEL_LINEAR_BASE_SYMBOL;
+extern char KERNEL_LINEAR_BEGIN_SYMBOL;
 extern char KERNEL_LINEAR_END_SYMBOL;
-#define KERNEL_LINEAR_BASE ((uintptr_t)&KERNEL_LINEAR_BASE_SYMBOL)
+#define KERNEL_LINEAR_BEGIN ((uintptr_t)&KERNEL_LINEAR_BEGIN_SYMBOL)
 #define KERNEL_LINEAR_END ((uintptr_t)&KERNEL_LINEAR_END_SYMBOL)
 
-#define USER_LINEAR_END KERNEL_LINEAR_BASE
 #define USER_LINEAR_BEGIN ((uintptr_t)0)
-
-// 4K~8M
-// block is always aligned to MIN_BLOCK_SIZE
-#define MIN_BLOCK_ORDER (12)
-#define MIN_BLOCK_SIZE (1<<MIN_BLOCK_ORDER)
-#define MAX_BLOCK_ORDER (23)
-#define MAX_BLOCK_SIZE (1<<MAX_BLOCK_ORDER)
+#define USER_LINEAR_END KERNEL_LINEAR_BEGIN
