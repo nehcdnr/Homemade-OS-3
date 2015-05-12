@@ -98,7 +98,7 @@ void *_mapPage(LinearMemoryManager *m, PhysicalAddress p_address, size_t size){
 	size_t s = 0;
 	while(s < l_size){
 		PhysicalAddress p_address_s = {p_address.value + s};
-		if(setKernelPage(m, (l_address) + s, p_address_s) == 0){
+		if(setKernelPage(m, (l_address) + s, p_address_s, KERNEL_PAGE) == 0){
 			goto error_page;
 		}
 		s += PAGE_SIZE;
@@ -172,13 +172,13 @@ void releasePhysicalPage(PhysicalAddress address){
 	_releasePhysicalPage(&kernelMemory, address);
 }
 
-void *mapPage(PhysicalAddress address, size_t size){
+void *mapPageToPhysical(PhysicalAddress address, size_t size){
 	assert(size % PAGE_SIZE == 0);
 	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
 	return _mapPage(&kernelMemory, address, size);
 }
 
-void unmapPage(void *linearAddress){
+void unmapPageToPhysical(void *linearAddress){
 	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
 	_unmapPage(&kernelMemory, linearAddress);
 }

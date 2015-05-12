@@ -109,6 +109,10 @@ void startTask(void){
 	// TODO: application loader
 }
 
+void loadV8086Memory(){
+
+}
+
 //void startUserMode(PrivilegeChangeInterruptParam p);
 void startVirtual8086Mode(InterruptParam p);
 

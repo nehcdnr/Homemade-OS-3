@@ -93,14 +93,6 @@ static void invlpg(uintptr_t linearAddress){
 #define PD_INDEX(ADDRESS) ((int)(((ADDRESS) >> 22) & (PAGE_TABLE_LENGTH - 1)))
 #define PT_INDEX(ADDRESS) ((int)(((ADDRESS) >> 12) & (PAGE_TABLE_LENGTH - 1)))
 
-#define USER_PAGE_FLAG (1 << 1)
-#define WRITABLE_PAGE_FLAG (1 << 2)
-enum PageType{
-	KERNEL_PAGE = WRITABLE_PAGE_FLAG,
-	USER_READ_ONLY_PAGE = USER_PAGE_FLAG,
-	USER_WRITABLE_PAGE = USER_PAGE_FLAG + WRITABLE_PAGE_FLAG
-};
-
 static void setPDE(
 	volatile PageDirectoryEntry *targetPDE, enum PageType type, PhysicalAddress pt_physical
 ){
@@ -238,7 +230,8 @@ PhysicalAddress translatePage(PageManager *p, void *linearAddress){
 
 int setKernelPage(
 	LinearMemoryManager *m,
-	uintptr_t linearAddress, PhysicalAddress physicalAddress
+	uintptr_t linearAddress, PhysicalAddress physicalAddress,
+	enum PageType pageType
 ){
 	PageManager *p = m->page;
 	assert((physicalAddress.value & 4095) == 0 && (linearAddress & 4095) == 0);
@@ -255,14 +248,14 @@ int setKernelPage(
 		uintptr_t pt_i1 = PD_INDEX((uintptr_t)pt_linear);
 		assert(isPDEPresent(p->page->pd.entry + pt_i1));
 #endif
-		if(setKernelPage(m, (uintptr_t)pt_linear, pt_physical) == 0){
+		if(setKernelPage(m, (uintptr_t)pt_linear, pt_physical, KERNEL_PAGE) == 0){
 			assert(0); // pt_linear must present in kernel page directory
 		}
 		MEMSET0(pt_linear);
 	}
 	assert((((uintptr_t)pt_linear) & 4095) == 0);
 
-	setPTE(pt_linear->entry + i2, KERNEL_PAGE, physicalAddress, linearAddress);
+	setPTE(pt_linear->entry + i2, pageType, physicalAddress, linearAddress);
 	assert(pt_linear->entry[i2].present == 1);
 
 	return 1;
@@ -281,8 +274,8 @@ void invalidatePage(
 	assert(isPTEPresent(pt_linear->entry + i2));
 
 	invalidatePTE(pt_linear->entry + i2, linear);
-	if(0){// TODO: if the PageTable is empty
-		// set PDE not present
+	if(0){// do not release even if the PageTable is empty
+		//invalidatePDE(p->page->pd.entry + i1);
 		releaseBlock(m->physical , pt_physical.value);
 	}
 }
@@ -381,7 +374,7 @@ static void initPageManagerPT(
 }
 
 void unmapUserPageTableSet(PageManager *p){
-	unmapPage(p->page);
+	unmapPageToPhysical(p->page);
 	p->page = (PageTableSet*)p->pageInUserSpace;
 }
 
@@ -449,6 +442,7 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	return NULL;
 }
 
+// TODO
 void deleteUserPageTable(PageManager *p){
 	assert(getCR3() == p->physicalPD.value);
 	int pdIndex;
@@ -474,6 +468,25 @@ void deleteUserPageTable(PageManager *p){
 
 	DELETE(p);
 }
+
+int mapPageFormLinear(PageManager *p, void *linearAddress, size_t size){
+	PhysicalAddress physical = allocatePhysicalPage(size);
+	EXPECT(physical.value != UINTPTR_NULL);
+	int result = setKernelPage(linearAddress, physical, USER_WRITABLE_PAGE);
+	EXPECT(result == 1);
+
+	return 1;
+
+	ON_ERROR;
+	releasePhysicalPage(physical);
+	ON_ERROR;
+	return 0;
+}
+
+int unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
+
+}
+
 
 /*
 UserPageTable *_mapUserPageTable(LinearMemoryManager *m, SlabManager *s, PhysicalAddress p){

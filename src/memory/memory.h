@@ -12,14 +12,15 @@ void releaseKernelMemory(void *address);
 PhysicalAddress allocatePhysicalPage(size_t size);
 void releasePhysicalPage(PhysicalAddress address);
 
-void *mapPage(PhysicalAddress address, size_t size);
-void unmapPage(void *linearAddress);
+void *mapPageToPhysical(PhysicalAddress address, size_t size);
+void unmapPageToPhysical(void *linearAddress);
 
 void *allocateAndMapPage(size_t size);
 void unmapAndReleasePage(void *linearAddress);
 
 size_t getPhysicalMemoryUsage(void);
 size_t getKernelMemoryUsage(void);
+
 
 typedef struct PageManager PageManager;
 //UserPageTable *mapUserPageTable(PhysicalAddress p);
@@ -30,6 +31,8 @@ void unmapUserPageTableSet(PageManager *p);
 uint32_t toCR3(PageManager *p);
 void deleteUserPageTable(PageManager *p);
 
+void mapPageFormLinear(PageManager *p, void *linearAddress, size_t size);
+void unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)

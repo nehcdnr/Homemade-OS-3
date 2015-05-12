@@ -256,7 +256,7 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	lapic->isBSP = ((eax >> 8) & 1);
 	if(lapic->isBSP){
 		PhysicalAddress apicPhysicalBase = {APIC_PHYSICAL_BASE};
-		apicLinearBase = (uintptr_t)mapPage(apicPhysicalBase, APIC_MAPPING_SIZE);
+		apicLinearBase = (uintptr_t)mapPageToPhysical(apicPhysicalBase, APIC_MAPPING_SIZE);
 	}
 	lapic->linearBase = apicLinearBase;
 	assert(lapic->linearBase = (APIC_PHYSICAL_BASE & 0xfffff000));
