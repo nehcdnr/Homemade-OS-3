@@ -1,5 +1,5 @@
 [BITS 16]
-[SECTION .entry]
+[SECTION .real]
 ; org 0xbe00
 ENTRY_BEGIN equ 0xbe00
 global _entry

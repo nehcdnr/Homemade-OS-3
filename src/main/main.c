@@ -27,7 +27,7 @@ void bspEntry(void){
 
 static void initService(PIC *pic, SystemCallTable *syscallTable){
 	initPS2Driver(pic, syscallTable);
-	//initVideoDriver(syscallTable); TODO:
+	initVideoDriver(syscallTable); //TODO:
 }
 
 void apEntry(void){

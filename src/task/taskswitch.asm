@@ -11,7 +11,8 @@ _initTaskStack:
 	mov DWORD [eax - 8], _startTask
 	mov edx, [esp + 4] ; eFlags
 	mov [eax - 12], edx
-	sub eax, 12 + 32 ; eip, startTask, pushf, pushad
+	; return number of pushed bytes
+	mov eax, 12 + 32 ; eip, startTask, pushf, pushad
 	ret
 
 ; void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0, uint32_t newCR3)

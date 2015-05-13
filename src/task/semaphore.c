@@ -57,7 +57,9 @@ static void _releaseSemaphore(InterruptParam *p){
 }
 
 void acquireSemaphore(Semaphore *s, TaskManager *tm){
-	volatile BlockingTask w;
+	BlockingTask *NEW(w);
+assert(w!=NULL); // TODO
+	assert(w != NULL);
 	int acquired;
 	acquireLock(&s->lock);
 	if(s->quota > 0){
@@ -65,13 +67,14 @@ void acquireSemaphore(Semaphore *s, TaskManager *tm){
 		acquired = 1;
 	}
 	else{
-		pushBlockingQueue(s, &w, suspendCurrent(tm));
+		pushBlockingQueue(s, w, suspendCurrent(tm));
 		acquired = 0;
 	}
 	releaseLock(&s->lock);
 	if(acquired == 0){
 		schedule(tm);
 	}
+	DELETE(w);
 	sti();
 }
 

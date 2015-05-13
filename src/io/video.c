@@ -1,4 +1,4 @@
-#include <io/bios.h>
+#include"bios.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"interrupt/systemcall.h"
@@ -310,9 +310,12 @@ static void setVBEDisplayStart_in(InterruptParam *p){
 	p->regs.edx = 0; // first scan line
 }
 static void setVBEDisplayStart_out(InterruptParam *p){
-	printk("setVBEDisplayStart: %x",p->regs.eax);
+	printk("setVBEDisplayStart: %x\n",p->regs.eax);
 	int a;
-	for(a=0;a<65536;a++)((uint8_t*)0xa0000)[a]=(a%3==2?0xff:0);
+	for(a=0;a<65536;a++){// TODO:map to real address
+		((volatile uint8_t*)0xb8000)[a]=(a%3==2?0xff:0);
+	}
+	printk("ok\n");
 }
 
 static void noVBEFunction(__attribute__((__unused__)) InterruptParam *p){
@@ -397,14 +400,14 @@ static void syscall_video(InterruptParam *p){
 
 void initVideoDriver(SystemCallTable *systemCallTable){
 	video.biosFIFO = createFIFO(32);
-	video.sysSemaphore = createSemaphore(2);
+	video.sysSemaphore = createSemaphore(3);
 	Task *t = createKernelTask(startVBETask);
 	setTaskSystemCall(t, setVBEArgument, (uintptr_t)&video);
 	writeFIFO(video.biosFIFO, GET_VBE_INFO);
 	writeFIFO(video.biosFIFO, GET_VBE_MODE_INFO);
 	//writeFIFO(video.biosFIFO, SET_VBE_MODE);
 	//writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_WINDOW);
-	//writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
+	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
 	registerSystemService(systemCallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
 	resume(t);
 }

@@ -15,9 +15,7 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	PageManager *userPageTable;
-	uintptr_t userStackBottom;
-	uintptr_t userHeapTop;
+	PageManager *pageManager;
 	// PageDirectory *kernelPageTable;
 	// queue data
 	enum TaskState{
@@ -34,9 +32,9 @@ typedef struct Task{
 	struct Task *next, *prev;
 }Task;
 
-#define NUMBER_OF_PRIORITY (4)
+#define NUMBER_OF_PRIORITIES (4)
 typedef struct TaskQueue{
-	Task *head[NUMBER_OF_PRIORITY];
+	Task *head[NUMBER_OF_PRIORITIES];
 }TaskQueue;
 static TaskQueue *globalQueue = NULL;
 static Spinlock globalQueueLock = INITIAL_SPINLOCK;
@@ -67,7 +65,7 @@ static void pushQueue(struct TaskQueue *q, Task *t){
 static Task *popQueue(struct TaskQueue *q){
 	int p;
 	for(p = 0; q->head[p] == NULL; p++){
-		assert(p < NUMBER_OF_PRIORITY);
+		assert(p < NUMBER_OF_PRIORITIES);
 	}
 	struct Task *t = q->head[p];
 	if(t->next == t/* && t->prev == t*/){
@@ -95,22 +93,31 @@ void schedule(TaskManager *tm){
 	tm->current = popQueue(globalQueue);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(oldTask != tm->current){
-		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(tm->current->userPageTable));
+		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(tm->current->pageManager));
 		// may go to startTask or return here
 	}
 	releaseLock(&globalQueueLock);
 }
 // see taskswitch.asm
 void startTask(void);
+void loadV8086Memory(void);
 void startTask(void){
 	releaseLock(&globalQueueLock); // after contextSwitch in schedule
 	sti(); // acquireLock
 	// return to eip assigned in initTaskStack
-	// TODO: application loader
+	loadV8086Memory();
 }
-
-void loadV8086Memory(){
-
+//TODO: move this
+void loadV8086Memory(void){
+	const size_t v8086MemorySize = (1<<20) + 0x10000;
+	PageManager *p;
+	cli();
+	p = getProcessorLocal()->taskManager->current->pageManager;
+	sti();
+	if(mapPageFromLinear(p, 0, v8086MemorySize) == 0){
+		panic("0~1MB error");// TODO: call terminateTask
+	}
+	memcpy((void*)0, (void*)KERNEL_LINEAR_BEGIN, v8086MemorySize);
 }
 
 //void startUserMode(PrivilegeChangeInterruptParam p);
@@ -146,64 +153,76 @@ void switchToVirtual8086Mode(void (*cs_ip)(void), uintptr_t ss_sp){
 	panic("startVirtual8086UserTask");
 }
 
-static void testTask(void){
-	int a=0;
-	while(1){
-		printk(" %d %d %d\n",cpuid_getInitialAPICID(),totalBlockCount,a++);
-		hlt();
-	}
-}
-
 static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 	printk("task = %x", getProcessorLocal()->taskManager->current);
 	panic("undefined Task system call");
 }
 
-uint32_t initTaskStack(uint32_t eFlags, uint32_t eip0, uint32_t esp0);
+uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
-/*
-static void deleteTaskPageTable(PhysicalAddress address){
-}
-*/
-#define KERNEL_STACK_SIZE (8192)
-static Task *createTask(
-	void (*eip0)(void),
-	int priority
-){
+static Task *createTask(uint32_t esp0, uint32_t espInterrupt, PageManager *pageTable, int priority){
 	Task *NEW(t);
 	EXPECT(t != NULL);
-	uintptr_t esp0 = USER_LINEAR_END;
-	esp0 -= sizeOfPageTableSet;
-	t->userPageTable = createAndMapUserPageTable(esp0);
-	EXPECT(t->userPageTable != NULL);
-	t->userStackBottom = USER_LINEAR_END - 4;
-	t->userHeapTop = USER_LINEAR_BEGIN;
+	t->esp0 = esp0;
+	t->espInterrupt = espInterrupt;
+	t->pageManager = pageTable;
 	t->state = SUSPENDED;
 	t->priority = priority;
-	EFlags eflags = getEFlags();
-	eflags.bit.interrupt = 0;
-//TODO: allocateAndMap
-esp0 = (uintptr_t)allocateAndMapPage(KERNEL_STACK_SIZE) + KERNEL_STACK_SIZE - 4;
-	EXPECT(esp0 != UINTPTR_NULL);
-	t->espInterrupt = esp0;
-	t->esp0 = initTaskStack(eflags.value, (uint32_t)eip0, esp0);
 	t->taskDefinedSystemCall = undefinedSystemCall;
 	t->taskDefinedArgument = 0;
 	t->next =
 	t->prev = NULL;
 
-	unmapUserPageTableSet(t->userPageTable);
 	return t;
 	ON_ERROR;
-	//deleteUserPageTable(t->userPageTable); TODO
+	return NULL;
+}
+
+#define KERNEL_STACK_SIZE (8192)
+static Task *createUserTask(
+	void (*eip0)(void),
+	int priority
+){
+	const uintptr_t targetESP0 = USER_LINEAR_END - sizeOfPageTableSet;
+	const uintptr_t targetStackBegin = targetESP0 - KERNEL_STACK_SIZE;
+	// 1. task page table
+	PageManager *pageManager = createAndMapUserPageTable(targetESP0);
+	EXPECT(pageManager != NULL);
+	// 2. kernel stack for task
+	// TODO: use current page table, not kernel
+	void *mappedStackBegin = allocateAndMapPages(KERNEL_STACK_SIZE);
+	EXPECT(mappedStackBegin != NULL);
+	int mapOK = mapExistingPages(
+		pageManager, kernelPageManager,
+		targetStackBegin, ((uintptr_t)mappedStackBegin), KERNEL_STACK_SIZE
+	);
+	EXPECT(mapOK != 0);
+	// 3. create task
+	EFlags eflags = getEFlags();
+	eflags.bit.interrupt = 0;
+	uintptr_t initialESP0 = targetESP0 -
+	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBegin) + (targetESP0 - targetStackBegin));
+	Task *t = createTask(initialESP0, targetESP0 - 4, pageManager, priority);
+	EXPECT(t != NULL);
+
+	unmapPageToPhysical((void*)mappedStackBegin);
+	unmapUserPageTableSet(pageManager);
+
+	return t;
+	//DELETE(t);
 	ON_ERROR;
-	releaseKernelMemory((void*)esp0);
+	// unmapPages(pageManager, targetStackBegin) or delete with userPageTable
+	ON_ERROR;
+	// TODO: use current page table, not kernel
+	unmapAndReleasePages(mappedStackBegin);
+	ON_ERROR;
+	// deleteUserPageTable(pageManager); TODO
 	ON_ERROR;
 	return NULL;
 }
 
 Task *createKernelTask(void (*eip0)(void)){
-	Task *t = createTask(eip0, 0);
+	Task *t = createUserTask(eip0, 0);
 	return t;
 }
 
@@ -238,7 +257,10 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
 	TaskManager *NEW(tm);
 	// create a task for this, eip and esp are irrelevant
-	tm->current = createTask(testTask, 0);
+	tm->current = createTask(0, 0, kernelPageManager, 3);
+	if(tm->current == NULL){
+		panic("cannot initialize bootstrap task");
+	}
 	tm->current->state = READY;
 	tm->gdt = gdt;
 	//pushQueue(globalQueue, createTask(b, testTask, 0));
@@ -250,7 +272,7 @@ static void syscallAllocatePage(InterruptParam *p){
 	uintptr_t size = SYSTEM_CALL_ATGUMENT_1(p);
 	uintptr_t physicalAddress =
 	Task *c = getProcessorLocal()->taskManager->current;
-	PageDirectory *pd = c->userPageTable;
+	PageDirectory *pd = c->pageManager;
 
 }
 
@@ -262,7 +284,7 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	NEW(globalQueue);
 	globalQueueLock = initialSpinlock;
 	int t;
-	for(t = 0; t < NUMBER_OF_PRIORITY; t++){
+	for(t = 0; t < NUMBER_OF_PRIORITIES; t++){
 		globalQueue->head[t] = NULL;
 	}
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);

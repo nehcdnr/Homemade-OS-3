@@ -2,10 +2,11 @@
 
 typedef struct MemoryBlockManager MemoryBlockManager;
 typedef struct PageManager PageManager;
+typedef struct MemoryBlockManager MemoryBlockManager;
 
 #define PAGE_SIZE (4096)
 
-PhysicalAddress translatePage(PageManager *p, void *linearAddress);
+PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress);
 
 typedef struct LinearMemoryManager LinearMemoryManager;
 
@@ -17,13 +18,13 @@ enum PageType{
 	USER_WRITABLE_PAGE = USER_PAGE_FLAG + WRITABLE_PAGE_FLAG
 };
 // return 1 if success, 0 if error
-int setKernelPage(
-	LinearMemoryManager *m,
+int setPage(
+	PageManager *p,	MemoryBlockManager *physical,
 	uintptr_t linearAddress, PhysicalAddress physicalAddress,
 	enum PageType pageType
 );
 void invalidatePage(
-	LinearMemoryManager *m,
+	PageManager *p,	MemoryBlockManager *physical,
 	uintptr_t linearAddress
 );
 

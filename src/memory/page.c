@@ -202,10 +202,9 @@ struct PageManager{
 	const PageTableSet *pageInUserSpace;
 };
 
-struct{
-	PageManager *pm;
-	uintptr_t kernelLinearBegin, kernelLinearEnd;
-}kPage;
+PageManager *kernelPageManager;
+static uintptr_t kLinearBegin, kLinearEnd;
+
 
 uint32_t toCR3(PageManager *p){
 	// bit 3: write through
@@ -218,37 +217,37 @@ static PageTable *linearAddressOfPageTable(PageManager *p, uintptr_t linear){
 	return p->page->pt + index;
 }
 
-PhysicalAddress translatePage(PageManager *p, void *linearAddress){
-	int i1 = PD_INDEX((uintptr_t)linearAddress);
-	int i2 = PT_INDEX((uintptr_t)linearAddress);
+PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress){
+	int i1 = PD_INDEX(linearAddress);
+	int i2 = PT_INDEX(linearAddress);
 	if(isPDEPresent(p->page->pd.entry + i1) == 0){
 		panic("translatePage: page not present");
 	}
-	PageTable *pt = linearAddressOfPageTable(p, (uintptr_t)linearAddress);
+	PageTable *pt = linearAddressOfPageTable(p, linearAddress);
 	return getPTEAddress(pt->entry + i2);
 }
 
-int setKernelPage(
-	LinearMemoryManager *m,
+int setPage(
+	PageManager *p,
+	MemoryBlockManager *physical,
 	uintptr_t linearAddress, PhysicalAddress physicalAddress,
 	enum PageType pageType
 ){
-	PageManager *p = m->page;
 	assert((physicalAddress.value & 4095) == 0 && (linearAddress & 4095) == 0);
 	int i1 = PD_INDEX(linearAddress);
 	int i2 = PT_INDEX(linearAddress);
 	PageTable *pt_linear = linearAddressOfPageTable(p, linearAddress);
-	if(isPDEPresent(p->page->pd.entry + i1) == 0){assert(0);
-		PhysicalAddress pt_physical = _allocatePhysicalPage(m, sizeof(PageTable));
+	if(isPDEPresent(p->page->pd.entry + i1) == 0){
+		PhysicalAddress pt_physical = _allocatePhysicalPages(physical, sizeof(PageTable));
 		if(pt_physical.value == UINTPTR_NULL){
 			return 0;
 		}
-		setPDE(p->page->pd.entry + i1, KERNEL_PAGE, pt_physical);
+		setPDE(p->page->pd.entry + i1, USER_WRITABLE_PAGE, pt_physical);
 #ifndef NDEBUG
 		uintptr_t pt_i1 = PD_INDEX((uintptr_t)pt_linear);
 		assert(isPDEPresent(p->page->pd.entry + pt_i1));
 #endif
-		if(setKernelPage(m, (uintptr_t)pt_linear, pt_physical, KERNEL_PAGE) == 0){
+		if(setPage(p, physical, (uintptr_t)pt_linear, pt_physical, KERNEL_PAGE) == 0){
 			assert(0); // pt_linear must present in kernel page directory
 		}
 		MEMSET0(pt_linear);
@@ -262,10 +261,10 @@ int setKernelPage(
 }
 
 void invalidatePage(
-	LinearMemoryManager *m,
+	PageManager *p,
+	MemoryBlockManager *physical,
 	uintptr_t linear
 ){
-	PageManager *p = m->page;
 	int i1 = PD_INDEX(linear);
 	int i2 = PT_INDEX(linear);
 	PageTable *pt_linear = linearAddressOfPageTable(p, linear);
@@ -276,7 +275,7 @@ void invalidatePage(
 	invalidatePTE(pt_linear->entry + i2, linear);
 	if(0){// do not release even if the PageTable is empty
 		//invalidatePDE(p->page->pd.entry + i1);
-		releaseBlock(m->physical , pt_physical.value);
+		releaseBlock(physical , pt_physical.value);
 	}
 }
 
@@ -301,10 +300,10 @@ static PhysicalAddress linearToPhysical(enum PhyscialMapping mapping, void *line
 	PhysicalAddress physical;
 	switch(mapping){
 	case MAP_TO_PRESENT_PHYSICAL:
-		physical = translatePage(kPage.pm, linear);
+		physical = translatePage(kernelPageManager, (uintptr_t)linear);
 		break;
 	case MAP_TO_KERNEL_RESERVED:
-		physical.value = (((uintptr_t)(linear)) - kPage.kernelLinearBegin);
+		physical.value = (((uintptr_t)(linear)) - kLinearBegin);
 		break;
 	default:
 		panic("invalid argument");
@@ -373,6 +372,30 @@ static void initPageManagerPT(
 	}
 }
 
+int _mapExistingPages(
+	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
+	uintptr_t dstLinear, uintptr_t srcLinear, size_t size
+){
+	assert(srcLinear % PAGE_SIZE == 0 && dstLinear % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
+	uintptr_t s;
+	for(s = 0; s < size; s += PAGE_SIZE){
+		PhysicalAddress p = translatePage(src, srcLinear + s);
+		if(setPage(dst, physical, dstLinear + s, p, KERNEL_PAGE) == 0){
+			break;
+		}
+	}
+	EXPECT(s >= size);
+
+	return 1;
+
+	ON_ERROR;
+	while(s != 0){
+		s -= PAGE_SIZE;
+		invalidatePage(dst, physical, dstLinear + s);
+	}
+	return 0;
+}
+
 void unmapUserPageTableSet(PageManager *p){
 	unmapPageToPhysical(p->page);
 	p->page = (PageTableSet*)p->pageInUserSpace;
@@ -380,17 +403,17 @@ void unmapUserPageTableSet(PageManager *p){
 
 PageManager *initKernelPageTable(
 	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
-	uintptr_t kernelLinearBase, uintptr_t kernelLinearEnd
+	uintptr_t kernelLinearBegin, uintptr_t kernelLinearEnd
 ){
-	assert(kernelLinearBase % (PAGE_SIZE * PAGE_TABLE_LENGTH) == 0 && kernelLinearEnd % PAGE_SIZE == 0);
-	assert(manageBase >= kernelLinearBase && manageEnd <= kernelLinearEnd);
-	assert(kernelLinearBase == KERNEL_LINEAR_BEGIN);
+	assert(kernelLinearBegin % (PAGE_SIZE * PAGE_TABLE_LENGTH) == 0 && kernelLinearEnd % PAGE_SIZE == 0);
+	assert(manageBase >= kernelLinearBegin && manageEnd <= kernelLinearEnd);
+	assert(kernelLinearBegin == KERNEL_LINEAR_BEGIN);
 
-	kPage.pm = (PageManager*)manageBegin;
-	kPage.kernelLinearBegin = kernelLinearBase;
-	kPage.kernelLinearEnd = kernelLinearEnd;
+	kernelPageManager = (PageManager*)manageBegin;
+	kLinearBegin = kernelLinearBegin;
+	kLinearEnd = kernelLinearEnd;
 
-	manageBegin += sizeof(*(kPage.pm));
+	manageBegin += sizeof(*kernelPageManager);
 	if(manageBegin % PAGE_TABLE_SIZE != 0){
 		manageBegin += (PAGE_TABLE_SIZE - (manageBegin % PAGE_TABLE_SIZE));
 	}
@@ -398,14 +421,14 @@ PageManager *initKernelPageTable(
 		panic("insufficient reserved memory for kernel page table");
 	}
 	initPageManager(
-		kPage.pm, (PageTableSet*)manageBegin, (PageTableSet*)manageBegin,
+		kernelPageManager, (PageTableSet*)manageBegin, (PageTableSet*)manageBegin,
 		manageBase, manageEnd, MAP_TO_KERNEL_RESERVED
 	);
-	initPageManagerPD(kPage.pm, kPage.kernelLinearBegin, kPage.kernelLinearEnd, MAP_TO_KERNEL_RESERVED);
-	initPageManagerPT(kPage.pm, manageBase, manageEnd, manageBase, MAP_TO_KERNEL_RESERVED);
-	setCR3(toCR3(kPage.pm));
+	initPageManagerPD(kernelPageManager, kLinearBegin, kernelLinearEnd, MAP_TO_KERNEL_RESERVED);
+	initPageManagerPT(kernelPageManager, manageBase, manageEnd, manageBase, MAP_TO_KERNEL_RESERVED);
+	setCR3(toCR3(kernelPageManager));
 	setCR0PagingBit();
-	return kPage.pm;
+	return kernelPageManager;
 }
 
 // user page table
@@ -423,13 +446,13 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	EXPECT(p != NULL);
 	size_t evalSize = evaluateSizeOfPageTableSet(targetBegin, targetEnd);
 	EXPECT(targetAddress >= targetBegin && targetAddress + evalSize <= targetEnd);
-	PageTableSet *pts = allocateAndMapPage(evalSize);
+	PageTableSet *pts = allocateAndMapPages(evalSize);
 	EXPECT(pts != NULL);
 	initPageManager(
 		p, (PageTableSet*)targetAddress, pts,
 		targetBegin, targetEnd, MAP_TO_PRESENT_PHYSICAL
 	);
-	copyPageManagerPD(p, kPage.pm, kPage.kernelLinearBegin, kPage.kernelLinearEnd);
+	copyPageManagerPD(p, kernelPageManager, kLinearBegin, kLinearEnd);
 	initPageManagerPD(p, targetBegin, targetEnd, MAP_TO_PRESENT_PHYSICAL);
 	initPageManagerPT(p, targetBegin, targetBegin + evalSize, (uintptr_t)pts, MAP_TO_PRESENT_PHYSICAL);
 	return p;
@@ -469,22 +492,39 @@ void deleteUserPageTable(PageManager *p){
 	DELETE(p);
 }
 
-int mapPageFormLinear(PageManager *p, void *linearAddress, size_t size){
-	PhysicalAddress physical = allocatePhysicalPage(size);
-	EXPECT(physical.value != UINTPTR_NULL);
-	int result = setKernelPage(linearAddress, physical, USER_WRITABLE_PAGE);
-	EXPECT(result == 1);
+int _mapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
+	uintptr_t l_addr = (uintptr_t)linearAddress;
+	assert(size % PAGE_SIZE == 0);
+	size_t s;
+	for(s = 0; s < size; s += PAGE_SIZE){
+		PhysicalAddress p_addr = _allocatePhysicalPages(physical, PAGE_SIZE);
+		if(p_addr.value == UINTPTR_NULL){
+			break;
+		}
+		int result = setPage(p, physical, l_addr + s, p_addr, USER_WRITABLE_PAGE);
+		if(result != 1){
+			releasePhysicalPages(p_addr);
+			break;
+		}
+	}
+	EXPECT(s >= size);
 
 	return 1;
 
 	ON_ERROR;
-	releasePhysicalPage(physical);
-	ON_ERROR;
+	_unmapPageFromLinear(p, physical, linearAddress, s);
 	return 0;
 }
 
-int unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
-
+void _unmapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
+	uintptr_t l_addr = (uintptr_t)linearAddress;
+	size_t s = size;
+	while(s != 0){
+		s -= PAGE_SIZE;
+		PhysicalAddress p_addr = translatePage(p, l_addr + s);
+		invalidatePage(p, physical, l_addr + s);
+		_releasePhysicalPages(physical, p_addr);
+	}
 }
 
 

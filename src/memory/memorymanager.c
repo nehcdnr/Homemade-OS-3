@@ -76,63 +76,62 @@ static uintptr_t findFirstUsableMemory(const size_t manageSize){
 
 // memory manager collection
 
-PhysicalAddress _allocatePhysicalPage(LinearMemoryManager *m, size_t size){
+PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
 	size_t p_size = size;
-	PhysicalAddress p_address = {allocateBlock(m->physical, &p_size)};
+	PhysicalAddress p_address = {allocateBlock(physical, &p_size)};
 	return p_address;
 }
 
-void _releasePhysicalPage(LinearMemoryManager *m, PhysicalAddress address){
-	releaseBlock(m->physical, address.value);
+void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address){
+	releaseBlock(physical, address.value);
 }
 
-void *_mapPage(LinearMemoryManager *m, PhysicalAddress p_address, size_t size){
+void *_mapPages(LinearMemoryManager *m, PhysicalAddress p_address, size_t size){
 	// linear
 	size_t l_size = size;
 	uintptr_t l_address = allocateBlock(m->linear, &l_size);
-	if(l_address == UINTPTR_NULL){
-		goto error_linear;
-	}
+	EXPECT(l_address != UINTPTR_NULL);
 	assert((l_address) % PAGE_SIZE == 0);
 	// page
 	size_t s = 0;
 	while(s < l_size){
 		PhysicalAddress p_address_s = {p_address.value + s};
-		if(setKernelPage(m, (l_address) + s, p_address_s, KERNEL_PAGE) == 0){
-			goto error_page;
+		if(setPage(m->page, m->physical, l_address + s, p_address_s, KERNEL_PAGE) == 0){
+			break;
 		}
 		s += PAGE_SIZE;
 	}
+	EXPECT(s >= l_size);
 	// succeeded
 	return (void*)l_address;
 	// undo
-	error_page: // [l_address ~ l_address+s-PAGE_SIZE] are mapped; [l_address + s] is not mapped
+	ON_ERROR; // [l_address ~ l_address+s-PAGE_SIZE] are mapped; [l_address + s] is not mapped
 	while(s != 0){
 		s -= PAGE_SIZE;
-		invalidatePage(m, ((uintptr_t)l_address) + s);
+		invalidatePage(m->page, m->physical, ((uintptr_t)l_address) + s);
 	}
 	releaseBlock(m->linear, (uintptr_t)l_address);
-	error_linear:
+	ON_ERROR;
 	return NULL;
 }
 
-void _unmapPage(LinearMemoryManager *m, void *l_address){
+void _unmapPages(LinearMemoryManager *m, void *l_address){
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)l_address);
 	while(s != 0){
 		s -= PAGE_SIZE;
-		invalidatePage(m, ((uintptr_t)l_address) + s);
+		invalidatePage(m->page, m->physical, ((uintptr_t)l_address) + s);
 	}
 	releaseBlock(m->linear, (uintptr_t)l_address);
 }
 
-void *_allocateAndMapPage(LinearMemoryManager *m, size_t size){
+void *_allocateAndMapPages(LinearMemoryManager *m, size_t size){
 	// physical
-	PhysicalAddress p_address = _allocatePhysicalPage(m, size);
+	PhysicalAddress p_address = _allocatePhysicalPages(m->physical, size); // TOOD: PAGE_SIZE
 	if(p_address.value == UINTPTR_NULL){
 		goto error_physical;
 	}
 	// linear
-	void *l_address = _mapPage(m, p_address, size);
+	void *l_address = _mapPages(m, p_address, size);
 	if(l_address == NULL){
 		goto error_map;
 	}
@@ -145,10 +144,10 @@ void *_allocateAndMapPage(LinearMemoryManager *m, size_t size){
 	return NULL;
 }
 
-void _unmapAndReleasePage(LinearMemoryManager *m, void* l_address){
-	PhysicalAddress p_address = translatePage(m->page, l_address);
-	_unmapPage(m, l_address);
-	_releasePhysicalPage(m, p_address);
+void _unmapAndReleasePages(LinearMemoryManager *m, void* l_address){
+	PhysicalAddress p_address = translatePage(m->page, (uintptr_t)l_address);
+	_unmapPages(m, l_address);
+	_releasePhysicalPages(m->physical, p_address);
 }
 
 // global memory manager
@@ -165,28 +164,36 @@ void releaseKernelMemory(void *address){
 	releaseSlab(kernelSlab, address);
 }
 
-PhysicalAddress allocatePhysicalPage(size_t size){
-	return _allocatePhysicalPage(&kernelMemory, size);
+PhysicalAddress allocatePhysicalPages(size_t size){
+	return _allocatePhysicalPages(kernelMemory.physical, size);
 }
-void releasePhysicalPage(PhysicalAddress address){
-	_releasePhysicalPage(&kernelMemory, address);
+void releasePhysicalPages(PhysicalAddress address){
+	_releasePhysicalPages(kernelMemory.physical, address);
 }
 
 void *mapPageToPhysical(PhysicalAddress address, size_t size){
 	assert(size % PAGE_SIZE == 0);
 	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
-	return _mapPage(&kernelMemory, address, size);
+	return _mapPages(&kernelMemory, address, size);
 }
 
 void unmapPageToPhysical(void *linearAddress){
 	assert(kernelMemory.page != NULL && kernelMemory.linear != NULL);
-	_unmapPage(&kernelMemory, linearAddress);
+	_unmapPages(&kernelMemory, linearAddress);
 }
-void *allocateAndMapPage(size_t size){
-	return _allocateAndMapPage(&kernelMemory, size);
+
+int mapExistingPages(
+	PageManager *dst, PageManager *src,
+	uintptr_t dstLinear, uintptr_t srcLinear, size_t size
+){
+	return _mapExistingPages(kernelMemory.physical, dst, src, dstLinear, srcLinear, size);
 }
-void unmapAndReleasePage(void *linearAddress){
-	_unmapAndReleasePage(&kernelMemory, linearAddress);
+
+void *allocateAndMapPages(size_t size){
+	return _allocateAndMapPages(&kernelMemory, size);
+}
+void unmapAndReleasePages(void *linearAddress){
+	_unmapAndReleasePages(&kernelMemory, linearAddress);
 }
 
 /*
@@ -198,6 +205,14 @@ size_t getKernelMemoryUsage(){
 
 }
 */
+
+int mapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
+	return _mapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
+}
+void unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
+	_unmapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
+}
+
 /*
 UserPageTable *mapUserPageTable(PhysicalAddress p){
 	return _mapUserPageTable(&kernelMemory, kernelSlab, p);

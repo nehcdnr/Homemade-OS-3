@@ -27,12 +27,20 @@ int getBlockCount(MemoryBlockManager *m);
 
 // page.c
 typedef struct PageManager PageManager;
+
 PageManager *initKernelPageTable(
 	uintptr_t manageBase,
 	uintptr_t manageBegin,
 	uintptr_t manageEnd,
 	uintptr_t kernelLinearBase,
 	uintptr_t kernelLinearEnd
+);
+
+int _mapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
+void _unmapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
+int _mapExistingPages(
+	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
+	uintptr_t dstLinear, uintptr_t srcLinear, size_t size
 );
 
 // linear + physical + page
@@ -42,12 +50,12 @@ typedef struct LinearMemoryManager{
 	PageManager *page;
 }LinearMemoryManager;
 
-PhysicalAddress _allocatePhysicalPage(LinearMemoryManager *m, size_t size);
-void _releasePhysicalPage(LinearMemoryManager *m, PhysicalAddress address);
-void *_mapPage(LinearMemoryManager *m, PhysicalAddress address, size_t size);
-void _unmapPage(LinearMemoryManager *m, void *address);
-void *_allocateAndMapPage(LinearMemoryManager *m, size_t size);
-void _unmapAndReleasePage(LinearMemoryManager *m, void* address);
+PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
+void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
+void *_mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size);
+void _unmapPages(LinearMemoryManager *m, void *address);
+void *_allocateAndMapPages(LinearMemoryManager *m, size_t size);
+void _unmapAndReleasePages(LinearMemoryManager *m, void* address);
 
 // slab.c (linear memory)
 typedef struct SlabManager SlabManager;
