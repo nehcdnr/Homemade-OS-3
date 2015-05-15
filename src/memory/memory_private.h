@@ -38,6 +38,13 @@ PageManager *initKernelPageTable(
 
 int _mapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
 void _unmapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
+
+int _mapPage_LP(
+	PageManager *p, MemoryBlockManager *physical,
+	void *linearAddress, PhysicalAddress physicalAddress, size_t size
+);
+void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
+
 int _mapExistingPages(
 	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	uintptr_t dstLinear, uintptr_t srcLinear, size_t size

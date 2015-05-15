@@ -206,12 +206,19 @@ size_t getKernelMemoryUsage(){
 }
 */
 
-int mapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
+int mapPage_L(PageManager *p, void *linearAddress, size_t size){
 	return _mapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
 }
-void unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size){
+void unmapPage_L(PageManager *p, void *linearAddress, size_t size){
 	_unmapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
 }
+int mapPage_LP(PageManager *p, void *linearAddress, PhysicalAddress physicalAddress, size_t size){
+	return _mapPage_LP(p, kernelMemory.physical, linearAddress, physicalAddress, size);
+}
+void unmapPage_LP(PageManager *p, void *linearAddress, size_t size){
+	return _unmapPage_LP(p, kernelMemory.physical, linearAddress, size);
+}
+
 
 /*
 UserPageTable *mapUserPageTable(PhysicalAddress p){

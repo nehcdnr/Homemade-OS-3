@@ -100,21 +100,22 @@ void schedule(TaskManager *tm){
 }
 // see taskswitch.asm
 void startTask(void);
-void loadV8086Memory(void);
+void initV8086Memory(void);
 void startTask(void){
 	releaseLock(&globalQueueLock); // after contextSwitch in schedule
 	sti(); // acquireLock
 	// return to eip assigned in initTaskStack
-	loadV8086Memory();
+	initV8086Memory();
 }
 //TODO: move this
-void loadV8086Memory(void){
+void initV8086Memory(void){
 	const size_t v8086MemorySize = (1<<20) + 0x10000;
+	PhysicalAddress v8086MemoryBegin = {0};
 	PageManager *p;
 	cli();
 	p = getProcessorLocal()->taskManager->current->pageManager;
 	sti();
-	if(mapPageFromLinear(p, 0, v8086MemorySize) == 0){
+	if(mapPage_LP(p, (void*)v8086MemoryBegin.value, v8086MemoryBegin, v8086MemorySize) == 0){
 		panic("0~1MB error");// TODO: call terminateTask
 	}
 	memcpy((void*)0, (void*)KERNEL_LINEAR_BEGIN, v8086MemorySize);

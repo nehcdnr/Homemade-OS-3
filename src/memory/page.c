@@ -527,6 +527,36 @@ void _unmapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *li
 	}
 }
 
+int _mapPage_LP(
+	PageManager *p, MemoryBlockManager *physical,
+	void *linearAddress, PhysicalAddress physicalAddress, size_t size
+){
+
+	size_t s;
+	for(s = 0; s < size; s += PAGE_SIZE){
+		uintptr_t l_addr = ((uintptr_t)linearAddress) + s;
+		PhysicalAddress p_addr = {physicalAddress.value + s};
+		int result = setPage(p, physical, l_addr, p_addr, USER_WRITABLE_PAGE);
+		if(result == 0){
+			break;
+		}
+	}
+	EXPECT(s >= size);
+	return 1;
+	ON_ERROR;
+	_unmapPage_LP(p, physical, linearAddress, s);
+	return 0;
+}
+
+void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
+	size_t s = size;
+	while(s != 0){
+		s -= PAGE_SIZE;
+		invalidatePage(p, physical, ((uintptr_t)linearAddress) + s);
+	}
+}
+
+
 
 /*
 UserPageTable *_mapUserPageTable(LinearMemoryManager *m, SlabManager *s, PhysicalAddress p){

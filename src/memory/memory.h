@@ -34,16 +34,15 @@ int mapExistingPages(
 	PageManager *dst, PageManager *src,
 	uintptr_t dstLinear, uintptr_t srcLinear, size_t size
 );
-int mapNewPhysicalPages(
-	PageManager *p,
-	void *linear, size_t size
-);
 
 uint32_t toCR3(PageManager *p);
 void deleteUserPageTable(PageManager *p);
 
-int mapPageFromLinear(PageManager *p, void *linearAddress, size_t size);
-void unmapPageFromLinear(PageManager *p, void *linearAddress, size_t size);
+int mapPage_L(PageManager *p, void *linearAddress, size_t size);
+void unmapPage_L(PageManager *p, void *linearAddress, size_t size);
+
+int mapPage_LP(PageManager *p, void *linearAddress, PhysicalAddress physicalAddress, size_t size);
+void unmapPage_LP(PageManager *p, void *linearAddress, size_t size);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)
