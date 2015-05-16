@@ -2,12 +2,14 @@
 #include<common.h>
 #include"memory/memory.h"
 #include"multiprocessor/spinlock.h"
+#include"task/semaphore.h"
 
 struct FIFO{
 	int begin, dataLength;
 	int bufferLength;
 	Spinlock lock;
-	uintptr_t *buffer;
+	volatile uintptr_t *buffer;
+	Semaphore *semaphore;
 };
 
 static void dequeue1(FIFO *fifo){
@@ -16,43 +18,52 @@ static void dequeue1(FIFO *fifo){
 }
 
 static int _writeFIFO(FIFO *fifo, uintptr_t data, int throwOldestFlag){
-	int r = 1;
+	int sizeChangeFlag = 0, writeFlag = 1;
 	acquireLock(&fifo->lock);
-	if(fifo->dataLength == fifo->bufferLength){
+	sizeChangeFlag = (fifo->dataLength < fifo->bufferLength);
+	if(sizeChangeFlag == 0){
 		printk("warning: fifo %x is full\n", fifo);
 		if(throwOldestFlag){
 			dequeue1(fifo);
-			r = 1;
+			writeFlag = 1;
 		}
 		else{
-			r = 0;
+			writeFlag = 0;
 		}
 	}
-	if(r == 1){
+	if(writeFlag){
 		int i = ((fifo->begin + fifo->dataLength) & (fifo->bufferLength - 1));
 		fifo->buffer[i] = data;
 		fifo->dataLength++;
 	}
 	releaseLock(&fifo->lock);
-	return r;
+	return sizeChangeFlag;
 }
 
 int writeFIFO(FIFO *fifo, uintptr_t data){
-	return _writeFIFO(fifo, data, 0);
+	int r = _writeFIFO(fifo, data, 0);
+	if(r){
+		releaseSemaphore(fifo->semaphore);
+	}
+	return r;
 }
 
 int overwriteFIFO(FIFO *fifo, uintptr_t data){
-	return _writeFIFO(fifo, data, 1);
+	if(_writeFIFO(fifo, data, 1)){
+		releaseSemaphore(fifo->semaphore);
+	}
+	return 1;
 }
 
-static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
+static int _readFIFO(FIFO *fifo, uintptr_t *data, int doReadFlag){
 	uintptr_t r;
 	acquireLock(&fifo->lock);
 	r = (fifo->dataLength != 0);
 	if(r){
 		*data = fifo->buffer[fifo->begin];
-		if(readFlag){
+		if(doReadFlag){
 			dequeue1(fifo);
+
 		}
 	}
 	releaseLock(&fifo->lock);
@@ -60,11 +71,12 @@ static int peekOrReadFIFO(FIFO *fifo, uintptr_t *data, int readFlag){
 }
 
 int peekFIFO(FIFO *fifo, uintptr_t *data){
-	return peekOrReadFIFO(fifo, data, 0);
+	return _readFIFO(fifo, data, 0);
 }
 
 int readFIFO(FIFO *fifo, uintptr_t *data){
-	return peekOrReadFIFO(fifo, data, 1);
+	acquireSemaphore(fifo->semaphore); // wait until readable
+	return _readFIFO(fifo, data, 1);
 }
 
 FIFO *createFIFO(int length){
@@ -75,5 +87,6 @@ FIFO *createFIFO(int length){
 	fifo->bufferLength = length;
 	fifo->begin = 0;
 	fifo->dataLength = 0;
+	fifo->semaphore = createSemaphore(0);
 	return fifo;
 }

@@ -76,12 +76,20 @@ void disablePIC8259(void){
 	resetPIC8259(0);
 }
 
+static void pic8259_interruptAllOther(
+	__attribute__((__unused__)) struct InterruptController *pic,
+	__attribute__((__unused__)) InterruptVector *vector
+){
+}
+
 PIC8259 *initPIC8259(InterruptTable *t){
 	PIC8259 *NEW(pic);
 	pic->this.pic8259 = pic;
 	pic->this.endOfInterrupt = pic8259_endOfInterrupt;
 	pic->this.irqToVector = pic8259_irqToVector;
 	pic->this.setPICMask = pic8259_setPICMask;
+	pic->this.interruptAllOther = pic8259_interruptAllOther;
+
 	pic->interruptTable = t;
 	pic->vectorBase = registerIRQs(t, 0, 16);
 	pic->masterMask = 0xff;

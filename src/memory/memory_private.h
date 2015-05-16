@@ -59,8 +59,8 @@ typedef struct LinearMemoryManager{
 
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
 void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
-void *_mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size);
-void _unmapPages(LinearMemoryManager *m, void *address);
+void *_mapPage_P(LinearMemoryManager *m, PhysicalAddress address, size_t size);
+void _unmapPage_P(LinearMemoryManager *m, void *address);
 void *_allocateAndMapPages(LinearMemoryManager *m, size_t size);
 void _unmapAndReleasePages(LinearMemoryManager *m, void* address);
 

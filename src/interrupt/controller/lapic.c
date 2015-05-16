@@ -48,16 +48,14 @@ static void apicSpuriousHandler(InterruptParam *param){
 	// not eoi
 }
 
-static InterruptVector *registerAPICSpurious(const uintptr_t base, const uint32_t lapicID, InterruptTable *t){
+static void setAPICSpurious(const uintptr_t base, InterruptVector *v){
 	MemoryMappedRegister svr = (MemoryMappedRegister)(base + SPURIOUS_VECTOR);
 	printk("SVR = %x\n", *svr);
 
-	InterruptVector *vector = registerInterrupt(t, SPURIOUS_INTERRUPT, apicSpuriousHandler, (uintptr_t)lapicID);
 	if(((*svr) & (1 << 8)) == 0){
 		printk("enable APIC in SVR\n");
 	}
-	*svr = (((*svr) & (~0x000001ff)) | 0x00000100 | toChar(vector));
-	return vector;
+	*svr = (((*svr) & (~0x000001ff)) | 0x00000100 | toChar(v));
 }
 
 static void apicErrorHandler(InterruptParam *p){
@@ -68,11 +66,9 @@ static void apicErrorHandler(InterruptParam *p){
 	sti();
 }
 
-static InterruptVector *registerAPICError(const uintptr_t base, uint32_t lapicID, InterruptTable *t){
+static void setAPICError(const uintptr_t base, InterruptVector *v){
 	MemoryMappedRegister lvt_error = (MemoryMappedRegister)(base + LVT_ERROR_VECTOR);
-	InterruptVector *errorVector = registerGeneralInterrupt(t, apicErrorHandler, (uintptr_t)lapicID);
-	*lvt_error = (((*lvt_error) & (~0x000100ff)) /*| 0x00010000*/ | toChar(errorVector));
-	return errorVector;
+	*lvt_error = (((*lvt_error) & (~0x000100ff)) /*| 0x00010000*/ | toChar(v));
 }
 
 static volatile uint32_t sleepTicks;
@@ -83,12 +79,10 @@ static void tempSleepHandler(InterruptParam *p){
 	//sti();
 }
 
-static InterruptVector *registerAPICTimer(const uintptr_t base, InterruptTable *t){
+static void setAPICTimer(const uintptr_t base, InterruptVector *v){
 	MemoryMappedRegister lvt_timer = (MemoryMappedRegister)(base + LVT_TIMER_VECTOR);
 	// mask timer interrupt and set vector
-	InterruptVector *timerVector = registerGeneralInterrupt(t, defaultInterruptHandler, 0);
-	*lvt_timer = (((*lvt_timer) & (~0x000700ff)) | 0x00020000 | toChar(timerVector));
-	return timerVector;
+	*lvt_timer = (((*lvt_timer) & (~0x000700ff)) | 0x00020000 | toChar(v));
 }
 
 enum IPIDeliveryMode{
@@ -101,14 +95,20 @@ enum IPIDeliveryMode{
 	INIT = 5,
 	STARTUP = 6
 };
-enum IPIShortHand{
+enum IPIShorthand{
 	NONE = 0,
 	SELF = 1,
 	ALL_INCLUDING_SELF = 2,
 	ALL_EXCLUDING_SELF = 3
 };
 
-static void deliverIPI(const uintptr_t base, uint32_t targetLAPICID, enum IPIDeliveryMode mode, uint16_t vector){
+static void deliverIPI(
+	const uintptr_t base,
+	uint32_t targetLAPICID,
+	enum IPIDeliveryMode mode,
+	enum IPIShorthand shorthand,
+	uint16_t vector
+){
 	/*
 	bit 8~0: vector number
 	11~8: delivery mode
@@ -123,7 +123,7 @@ static void deliverIPI(const uintptr_t base, uint32_t targetLAPICID, enum IPIDel
 	icr0_32 = (MemoryMappedRegister)(base + ICR_LOW),
 	icr32_64 = (MemoryMappedRegister)(base + ICR_HIGH);
 	*icr32_64 = (((*icr32_64) & (~0xff000000)) | (targetLAPICID << 24));
-	*icr0_32 = (((*icr0_32) & (~0x000ccfff)) | 0x00004000 | (mode << 8) | vector);
+	*icr0_32 = (((*icr0_32) & (~0x000ccfff)) | 0x00004000 | (mode << 8) | (shorthand << 18) | vector);
 	while((*icr0_32) & (1<<12));
 }
 
@@ -132,17 +132,17 @@ struct LAPIC{
 	// see uintptr_t apicLinearBase
 	uintptr_t linearBase;
 	uint32_t lapicID;
-	InterruptVector *spuriousVector;
-	InterruptVector *timerVector;
-	InterruptVector *errorVector;
 };
+static InterruptVector *lapicSpuriousVector;
+static InterruptVector *lapicTimerVector;
+static InterruptVector *lapicErrorVector;
 
 int isBSP(LAPIC *lapic){
 	return lapic->isBSP;
 }
 
-InterruptVector *getTimerVector(LAPIC *lapic){
-	return lapic->timerVector;
+InterruptVector *getTimerVector(__attribute__((__unused__)) LAPIC *lapic){
+	return lapicTimerVector;
 }
 
 uint32_t getLAPICID(LAPIC *lapic){
@@ -213,11 +213,15 @@ void resetLAPICTimer(LAPIC *lapic){
 }
 
 void interprocessorINIT(LAPIC *lapic, uint32_t targetLAPICID){
-	deliverIPI(lapic->linearBase, targetLAPICID, INIT, 0);
+	deliverIPI(lapic->linearBase, targetLAPICID, INIT, NONE, 0);
 }
 void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entryAddress){
 	assert((entryAddress & (~0x000ff000)) == 0);
-	deliverIPI(lapic->linearBase, targetLAPICID, STARTUP, (entryAddress >> 12));
+	deliverIPI(lapic->linearBase, targetLAPICID, STARTUP, NONE, (entryAddress >> 12));
+}
+
+void apic_interruptAllOther(PIC *pic, InterruptVector *vector){
+	deliverIPI(pic->apic->lapic->linearBase, 0, FIXED, ALL_EXCLUDING_SELF, toChar(vector));
 }
 
 // linear address of APIC_BASE
@@ -261,8 +265,14 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	lapic->linearBase = apicLinearBase;
 	assert(lapic->linearBase = (APIC_PHYSICAL_BASE & 0xfffff000));
 	lapic->lapicID = getMemoryMappedLAPICID();
-	lapic->spuriousVector = registerAPICSpurious(lapic->linearBase, lapic->lapicID, t);
-	lapic->errorVector = registerAPICError(lapic->linearBase, lapic->lapicID, t);
-	lapic->timerVector = registerAPICTimer(lapic->linearBase, t);
+
+	if(lapic->isBSP){
+		lapicSpuriousVector = registerInterrupt(t, SPURIOUS_INTERRUPT, apicSpuriousHandler, (uintptr_t)lapic->lapicID);
+		lapicErrorVector = registerGeneralInterrupt(t, apicErrorHandler, (uintptr_t)lapic->lapicID);
+		lapicTimerVector = registerGeneralInterrupt(t, defaultInterruptHandler, (uintptr_t)lapic->lapicID);
+	}
+	setAPICSpurious(lapic->linearBase, lapicSpuriousVector);
+	setAPICError(lapic->linearBase, lapicErrorVector);
+	setAPICTimer(lapic->linearBase, lapicTimerVector);
 	return lapic;
 }

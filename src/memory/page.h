@@ -6,8 +6,6 @@ typedef struct MemoryBlockManager MemoryBlockManager;
 
 #define PAGE_SIZE (4096)
 
-PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress);
-
 typedef struct LinearMemoryManager LinearMemoryManager;
 
 #define USER_PAGE_FLAG (1 << 1)

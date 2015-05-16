@@ -46,7 +46,7 @@ static Task *popBlockingQueue(struct Semaphore *s){
 
 static void _acquireSemaphore(InterruptParam *p){
 	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
-	acquireSemaphore(s, getProcessorLocal()->taskManager);
+	acquireSemaphore(s);
 	sti();
 }
 
@@ -56,12 +56,15 @@ static void _releaseSemaphore(InterruptParam *p){
 	sti();
 }
 
-void acquireSemaphore(Semaphore *s, TaskManager *tm){
+void acquireSemaphore(Semaphore *s){
+	TaskManager *tm;
 	BlockingTask *NEW(w);
-assert(w!=NULL); // TODO
+assert(w!=NULL); // TODO: terminate?
 	assert(w != NULL);
 	int acquired;
+	cli();
 	acquireLock(&s->lock);
+	tm = getProcessorLocal()->taskManager;
 	if(s->quota > 0){
 		s->quota--;
 		acquired = 1;
@@ -72,10 +75,10 @@ assert(w!=NULL); // TODO
 	}
 	releaseLock(&s->lock);
 	if(acquired == 0){
-		schedule(tm);
+		schedule(getProcessorLocal()->taskManager);
 	}
-	DELETE(w);
 	sti();
+	DELETE(w);
 }
 
 void releaseSemaphore(Semaphore *s){
@@ -89,7 +92,6 @@ void releaseSemaphore(Semaphore *s){
 	if(t != NULL){
 		resume(t);
 	}
-	sti();
 }
 
 Semaphore *createSemaphore(unsigned initialQuota){

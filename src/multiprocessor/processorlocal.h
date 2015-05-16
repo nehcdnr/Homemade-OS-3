@@ -16,7 +16,6 @@ GetProcessorLocal initProcessorLocal(void);
 typedef struct SystemGlobal{
 	struct InterruptTable *idt;
 	struct SystemCallTable *syscallTable;
-	struct PageDirectory *kernelPaging;
 }SystemGlobal;
 
 extern SystemGlobal global;

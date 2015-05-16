@@ -1,7 +1,5 @@
 #include<std.h>
 
-void initMultiprocessor(void);
-
 typedef struct Spinlock{
 	volatile uint32_t acquirable;
 	int interruptFlag;

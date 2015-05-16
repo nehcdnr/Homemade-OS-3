@@ -45,15 +45,14 @@ void releaseLock(Spinlock *spinlock){
 		sti();
 	}
 }
-
-void initMultiprocessor(void){
-	#ifndef NDEBUG
-	{
-		Spinlock s = initialSpinlock;
-		acquireLock(&s);
-		assert(isAcquirable(&s) == 0);
-		releaseLock(&s);
-		assert(isAcquirable(&s) == 1);
-	}
-	#endif
+/*
+#ifndef NDEBUG
+void testSpinlock(void){
+	Spinlock s = initialSpinlock;
+	acquireLock(&s);
+	assert(isAcquirable(&s) == 0);
+	releaseLock(&s);
+	assert(isAcquirable(&s) == 1);
 }
+#endif
+*/

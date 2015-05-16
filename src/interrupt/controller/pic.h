@@ -12,11 +12,15 @@ typedef struct InterruptController{
 	InterruptVector *(*irqToVector)(struct InterruptController *pic, enum IRQ irq);
 	void (*setPICMask)(struct InterruptController *pic, enum IRQ irq, int setMask);
 	void (*endOfInterrupt)(InterruptParam *p);
+	void (*interruptAllOther)(struct InterruptController *pic, InterruptVector *vector);
 }PIC;
 
 typedef struct InterruptTable InterruptTable;
 typedef struct TimerEventList TimerEventList;
 typedef struct ProcessorLocal ProcessorLocal;
 // use PIC8259 or APIC
-PIC *initPIC(InterruptTable *t);
-void initLocalTimer(PIC *pic, TimerEventList *timer);
+PIC *createPIC(InterruptTable *t);
+
+void initMultiprocessorPaging(InterruptTable *t);
+
+void initLocalTimer(PIC *pic, InterruptTable *t, TimerEventList *timer);

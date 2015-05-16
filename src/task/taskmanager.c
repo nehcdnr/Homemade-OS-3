@@ -116,7 +116,7 @@ void initV8086Memory(void){
 	p = getProcessorLocal()->taskManager->current->pageManager;
 	sti();
 	if(mapPage_LP(p, (void*)v8086MemoryBegin.value, v8086MemoryBegin, v8086MemorySize) == 0){
-		panic("0~1MB error");// TODO: call terminateTask
+		panic("0~1MB error");// TODO: terminateTask
 	}
 	memcpy((void*)0, (void*)KERNEL_LINEAR_BEGIN, v8086MemorySize);
 }
@@ -208,7 +208,6 @@ static Task *createUserTask(
 
 	unmapPageToPhysical((void*)mappedStackBegin);
 	unmapUserPageTableSet(pageManager);
-
 	return t;
 	//DELETE(t);
 	ON_ERROR;

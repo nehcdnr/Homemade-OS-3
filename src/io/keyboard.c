@@ -1,4 +1,3 @@
-#include <task/semaphore.h>
 #include"interrupt/handler.h"
 #include"assembly/assembly.h"
 #include"interrupt/systemcall.h"
@@ -6,7 +5,6 @@
 #include"multiprocessor/processorlocal.h"
 #include"io.h"
 #include"task/task.h"
-#include"task/semaphore.h"
 #include"common.h"
 #include"fifo.h"
 
@@ -162,7 +160,6 @@ static void writeData(uint16_t port, uint8_t data){
 
 typedef struct PS2Data{
 	FIFO *intFIFO, *sysFIFO;
-	Semaphore *intSemaphore, *sysSemaphore;
 	Task *driver;
 }PS2Data;
 
@@ -173,9 +170,7 @@ static void ps2Handler(InterruptParam *p){
 	if((status & READABLE_FLAG) != 0){
 		uintptr_t data = readData();
 		PS2Data *ps2 = (PS2Data*)(p->argument);
-		if(writeFIFO(ps2->intFIFO, (status | (data << 8)))){
-			releaseSemaphore(ps2->intSemaphore);
-		}
+		writeFIFO(ps2->intFIFO, (status | (data << 8)));
 	}
 	getProcessorLocal()->pic->endOfInterrupt(p);
 	sti();
@@ -185,7 +180,6 @@ static void syscall_keyboard(InterruptParam *p){
 	printk("%d\n",p->regs.eax);
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
-	acquireSemaphore(ps2Data->sysSemaphore, getProcessorLocal()->taskManager);
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
 		panic("ps2 sysFIFO");
 	}
@@ -200,20 +194,17 @@ static void keyboardInput(uint8_t data, PS2Data *ps2Data){
 	int release = 0;
 	unsigned int key = scanCodeToKey(data, &release);
 	if(key != NO_KEY && key < 128 && release == 0){
-		if(overwriteFIFO(ps2Data->sysFIFO, key)){
-			syscall_releaseSemaphore(ps2Data->sysSemaphore);
-		}
+		overwriteFIFO(ps2Data->sysFIFO, key);
 		printk("%c", key);
 	}
 }
 
-static PS2Data ps2 = {NULL, NULL, NULL, NULL, NULL};
+static PS2Data ps2 = {NULL, NULL, NULL};
 
 static void ps2Driver(void){
 	while(1){
 		uintptr_t ds;
 		uint8_t data, status;
-		syscall_acquireSemaphore(ps2.intSemaphore);
 		if(readFIFO(ps2.intFIFO, &ds) == 0){
 			panic("ps2 intFIFO");
 		}
@@ -267,8 +258,6 @@ void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	initKeyboard();
 	ps2.intFIFO = createFIFO(64);
 	ps2.sysFIFO = createFIFO(128);
-	ps2.intSemaphore = createSemaphore(0); // TODO: RW lock
-	ps2.sysSemaphore = createSemaphore(0);
 	ps2.driver = createKernelTask(ps2Driver);
 	resume(ps2.driver);
 

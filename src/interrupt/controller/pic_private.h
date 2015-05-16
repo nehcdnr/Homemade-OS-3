@@ -35,6 +35,7 @@ void testAndResetLAPICTimer(LAPIC *lapic, PIC* pic);
 void resetLAPICTimer(LAPIC *lapic);
 void interprocessorINIT(LAPIC *lapic, uint32_t targetLAPICID);
 void interprocessorSTARTUP(LAPIC *lapic, uint32_t targetLAPICID, uintptr_t entryAddress);
+void apic_interruptAllOther(PIC *pic, InterruptVector *vector);
 
 void apic_endOfInterrupt(InterruptParam *p);
 
