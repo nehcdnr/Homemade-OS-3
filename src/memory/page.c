@@ -111,7 +111,7 @@ static void setCR0PagingBit(void){
 }
 
 static void invlpgOrSetCR3(uintptr_t linearAddress, size_t size){
-	if(size >= 128 * PAGE_SIZE){
+	if(size >= 512 * PAGE_SIZE){
 		setCR3(getCR3());
 	}
 	else{
@@ -169,6 +169,8 @@ static void setPTE(
 
 static void invalidatePTE(volatile PageTableEntry *targetPTE){
 	PageTableEntry pte = *targetPTE;
+	// keep the address in page table
+	// see unmapPage_LP
 	pte.present = 0;
 	assert(targetPTE->present == 1);
 	(*targetPTE) = pte;
@@ -204,7 +206,7 @@ struct PageManager{
 	const PageTableSet *pageInUserSpace;
 };
 
-PageManager *kernelPageManager;
+PageManager *kernelPageManager = NULL;
 static uintptr_t kLinearBegin, kLinearEnd;
 
 
@@ -410,6 +412,7 @@ PageManager *initKernelPageTable(
 	assert(kernelLinearBegin % (PAGE_SIZE * PAGE_TABLE_LENGTH) == 0 && kernelLinearEnd % PAGE_SIZE == 0);
 	assert(manageBase >= kernelLinearBegin && manageEnd <= kernelLinearEnd);
 	assert(kernelLinearBegin == KERNEL_LINEAR_BEGIN);
+	assert(kernelPageManager == NULL);
 
 	kernelPageManager = (PageManager*)manageBegin;
 	kLinearBegin = kernelLinearBegin;
@@ -484,6 +487,7 @@ void initMultiprocessorPaging(InterruptTable *t){
 // user page table
 
 const size_t sizeOfPageTableSet = sizeof(PageTableSet);
+#define MAX_USER_RESERVED_PAGES (4)
 
 // create an page table in kernel linear memory
 // with manageBase ~ manageEnd (linear address) mapped to physical address
@@ -496,6 +500,7 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	EXPECT(p != NULL);
 	size_t evalSize = evaluateSizeOfPageTableSet(targetBegin, targetEnd);
 	EXPECT(targetAddress >= targetBegin && targetAddress + evalSize <= targetEnd);
+	assert(evalSize <= MAX_USER_RESERVED_PAGES);
 	PageTableSet *pts = allocateAndMapPages(evalSize);
 	EXPECT(pts != NULL);
 	initPageManager(
@@ -515,15 +520,21 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	return NULL;
 }
 
-// TODO
-/*
+// assume: p remains only reservedBase ~ reservedEnd, the other pages are not present
 void deleteUserPageTable(PageManager *p){
 	assert(getCR3() == p->physicalPD.value);
+	PhysicalAddress reservedPhysical[MAX_USER_RESERVED_PAGES];
+	assert(p->reservedBase % PAGE_SIZE == 0 && p->reservedEnd % PAGE_SIZE == 0);
+	uintptr_t r;
+	for(r = p->reservedBase; r < p->reservedEnd; r += PAGE_SIZE){
+		reservedPhysical[r / PAGE_SIZE] = translatePage(p, r, 1);
+	}
+	for(r = p->reservedBase; r < p->reservedEnd; r += PAGE_SIZE){
 
-
+	}
 	DELETE(p);
 }
-*/
+
 int _mapPage_LP(
 	PageManager *p, MemoryBlockManager *physical,
 	void *linearAddress, PhysicalAddress physicalAddress, size_t size
@@ -553,7 +564,7 @@ void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAdd
 	sendINVLPG(p->physicalPD.value, (uintptr_t)linearAddress, size);
 }
 
-int _mapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
+int _mapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
 	uintptr_t l_addr = (uintptr_t)linearAddress;
 	assert(size % PAGE_SIZE == 0);
 	size_t s;
@@ -573,20 +584,19 @@ int _mapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linea
 	return 1;
 
 	ON_ERROR;
-	_unmapPageFromLinear(p, physical, linearAddress, s);
+	_unmapPage_L(p, physical, linearAddress, s);
 	return 0;
 }
 
-void _unmapPageFromLinear(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
+void _unmapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
 	_unmapPage_LP(p, physical, linearAddress, size);
 	// the pages are not yet released by linear memory manager,
-	// so assume safe to separate _unmapPAge_LP and releasePhysicalPages
+	// it is safe to separate _unmapPage_LP and releasePhysicalPages
 	size_t s = size;
 	while(s != 0){
 		s -= PAGE_SIZE;
 		PhysicalAddress p_addr = translatePage(p, ((uintptr_t)linearAddress) + s, 0);
 		assert(p_addr.value %PAGE_SIZE == 0 && p_addr.value != 0);
-		__asm__("nop"::"a"(p_addr.value));
 		_releasePhysicalPages(physical, p_addr);
 	}
 }

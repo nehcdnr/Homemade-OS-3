@@ -111,6 +111,8 @@ void startTask(void){
 void initV8086Memory(void){
 	const size_t v8086MemorySize = (1<<20) + 0x10000;
 	PhysicalAddress v8086MemoryBegin = {0};
+	//PhysicalAddress v8086UsableBegin = 0x1000;
+	//PhysicalAddress v8086UsableEnd = 0x80000;
 	PageManager *p;
 	cli();
 	p = getProcessorLocal()->taskManager->current->pageManager;
@@ -261,6 +263,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
+	// do not put into the queue because the task is running
 	tm->current->state = READY;
 	tm->gdt = gdt;
 	//pushQueue(globalQueue, createTask(b, testTask, 0));

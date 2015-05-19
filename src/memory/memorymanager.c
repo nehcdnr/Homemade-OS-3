@@ -118,7 +118,7 @@ void *_allocateAndMapPages(LinearMemoryManager *m, size_t size){
 	void *linearAddress = (void*)allocateBlock(m->linear, &l_size);
 	EXPECT(linearAddress != NULL);
 	// physical
-	int result = _mapPageFromLinear(m->page, m->physical, linearAddress, l_size);
+	int result = _mapPage_L(m->page, m->physical, linearAddress, l_size);
 	EXPECT(result == 1);
 
 	return linearAddress;
@@ -131,7 +131,7 @@ void *_allocateAndMapPages(LinearMemoryManager *m, size_t size){
 
 void _unmapAndReleasePages(LinearMemoryManager *m, void* l_address){
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)l_address);
-	_unmapPageFromLinear(m->page, m->physical, l_address, s);
+	_unmapPage_L(m->page, m->physical, l_address, s);
 	releaseBlock(m->linear, (uintptr_t)l_address);
 }
 
@@ -192,10 +192,10 @@ size_t getKernelMemoryUsage(){
 */
 
 int mapPage_L(PageManager *p, void *linearAddress, size_t size){
-	return _mapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
+	return _mapPage_L(p, kernelMemory.physical, linearAddress, size);
 }
 void unmapPage_L(PageManager *p, void *linearAddress, size_t size){
-	_unmapPageFromLinear(p, kernelMemory.physical, linearAddress, size);
+	_unmapPage_L(p, kernelMemory.physical, linearAddress, size);
 }
 int mapPage_LP(PageManager *p, void *linearAddress, PhysicalAddress physicalAddress, size_t size){
 	return _mapPage_LP(p, kernelMemory.physical, linearAddress, physicalAddress, size);

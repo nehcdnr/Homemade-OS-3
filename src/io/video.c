@@ -310,7 +310,7 @@ static void setVBEDisplayStart_in(InterruptParam *p){
 static void setVBEDisplayStart_out(InterruptParam *p){
 	printk("setVBEDisplayStart: %x\n",p->regs.eax);
 	int a;
-	for(a=0;a<65536;a++){// TODO:map to real address
+	for(a=0;a<65536;a++){
 		((volatile uint8_t*)0xa0000)[a]=(a%3==2?0xff:0);
 	}
 }
