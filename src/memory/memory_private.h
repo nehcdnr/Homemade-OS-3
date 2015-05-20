@@ -2,7 +2,7 @@
 
 // buddy.c (physical memory)
 typedef struct MemoryBlockManager MemoryBlockManager;
-// if failure, return NULL
+// if failure, return NULL or UINTPTR_NULL
 // if success, return address and *size = allocated size, which is >= input value
 uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size);
 size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address);
@@ -17,6 +17,8 @@ MemoryBlockManager *createMemoryBlockManager(
 );
 size_t getBlockManagerMetaSize(MemoryBlockManager *m);
 int getBlockCount(MemoryBlockManager *m);
+#define getTotalBlockSize(M) (getBlockCount(M) * MIN_BLOCK_SIZE)
+int getFreeBlockSize(MemoryBlockManager *m);
 
 // 4K~8M
 // block is always aligned to MIN_BLOCK_SIZE
@@ -36,18 +38,24 @@ PageManager *initKernelPageTable(
 	uintptr_t kernelLinearEnd
 );
 
-int _mapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
+int _mapPage_L(
+	PageManager *p, MemoryBlockManager *physical,
+	void *linearAddress, size_t size,
+	PageAttribute attribute
+);
 void _unmapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
 
 int _mapPage_LP(
 	PageManager *p, MemoryBlockManager *physical,
-	void *linearAddress, PhysicalAddress physicalAddress, size_t size
+	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
+	PageAttribute attribute
 );
 void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size);
 
-int _mapExistingPages(
+int _mapExistingPages_L(
 	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
-	uintptr_t dstLinear, uintptr_t srcLinear, size_t size
+	void *dstLinear, uintptr_t srcLinear, size_t size,
+	PageAttribute attribute
 );
 
 // linear + physical + page
@@ -56,13 +64,6 @@ typedef struct LinearMemoryManager{
 	MemoryBlockManager *linear;
 	PageManager *page;
 }LinearMemoryManager;
-
-PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
-void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
-void *_mapPage_P(LinearMemoryManager *m, PhysicalAddress address, size_t size);
-void _unmapPage_P(LinearMemoryManager *m, void *address);
-void *_allocateAndMapPages(LinearMemoryManager *m, size_t size);
-void _unmapAndReleasePages(LinearMemoryManager *m, void* address);
 
 // slab.c (linear memory)
 typedef struct SlabManager SlabManager;

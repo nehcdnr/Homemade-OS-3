@@ -130,6 +130,10 @@ int getBlockCount(MemoryBlockManager *m){
 	return m->blockCount;
 }
 
+int getFreeBlockSize(MemoryBlockManager *m){
+	return m->freeSize;
+}
+
 MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,

@@ -105,9 +105,10 @@ void startTask(void){
 	releaseLock(&globalQueueLock); // after contextSwitch in schedule
 	sti(); // acquireLock
 	// return to eip assigned in initTaskStack
+	//TODO: move this
 	initV8086Memory();
 }
-//TODO: move this
+
 void initV8086Memory(void){
 	const size_t v8086MemorySize = (1<<20) + 0x10000;
 	PhysicalAddress v8086MemoryBegin = {0};
@@ -117,13 +118,14 @@ void initV8086Memory(void){
 	cli();
 	p = getProcessorLocal()->taskManager->current->pageManager;
 	sti();
-	if(mapPage_LP(p, (void*)v8086MemoryBegin.value, v8086MemoryBegin, v8086MemorySize) == 0){
+	if(mapPage_LP(p, (void*)v8086MemoryBegin.value, v8086MemoryBegin, v8086MemorySize, USER_WRITABLE_PAGE) == 0){
 		panic("0~1MB error");// TODO: terminateTask
 	}
-	memcpy((void*)0, (void*)KERNEL_LINEAR_BEGIN, v8086MemorySize);
+	//memcpy((void*)0, (void*)KERNEL_LINEAR_BEGIN, v8086MemorySize);
 }
 
-//void startUserMode(PrivilegeChangeInterruptParam p);
+// see interrupt/interruptentry.asm
+// void startUserMode(PrivilegeChangeInterruptParam p);
 void startVirtual8086Mode(InterruptParam p);
 
 void switchToVirtual8086Mode(void (*cs_ip)(void), uintptr_t ss_sp){
@@ -181,7 +183,7 @@ static Task *createTask(uint32_t esp0, uint32_t espInterrupt, PageManager *pageT
 	return NULL;
 }
 
-#define KERNEL_STACK_SIZE (8192)
+#define KERNEL_STACK_SIZE ((size_t)8192)
 static Task *createUserTask(
 	void (*eip0)(void),
 	int priority
@@ -193,13 +195,10 @@ static Task *createUserTask(
 	EXPECT(pageManager != NULL);
 	// 2. kernel stack for task
 	// TODO: use current page table, not kernel
-	void *mappedStackBegin = allocateAndMapPages(KERNEL_STACK_SIZE);
+	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBegin, KERNEL_STACK_SIZE, KERNEL_PAGE);
+	EXPECT(allocateStackOK != 0);
+	void *mappedStackBegin = mapKernelPagesFromExisting(pageManager, targetStackBegin, KERNEL_STACK_SIZE);
 	EXPECT(mappedStackBegin != NULL);
-	int mapOK = mapExistingPages(
-		pageManager, kernelPageManager,
-		targetStackBegin, ((uintptr_t)mappedStackBegin), KERNEL_STACK_SIZE
-	);
-	EXPECT(mapOK != 0);
 	// 3. create task
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
@@ -208,17 +207,17 @@ static Task *createUserTask(
 	Task *t = createTask(initialESP0, targetESP0 - 4, pageManager, priority);
 	EXPECT(t != NULL);
 
-	unmapPageToPhysical((void*)mappedStackBegin);
+	unmapKernelPage((void*)mappedStackBegin);
 	unmapUserPageTableSet(pageManager);
 	return t;
 	//DELETE(t);
 	ON_ERROR;
-	// unmapPages(pageManager, targetStackBegin) or delete with userPageTable
+	unmapKernelPage((void*)mappedStackBegin);
 	ON_ERROR;
 	// TODO: use current page table, not kernel
-	unmapAndReleasePages(mappedStackBegin);
+	unmapPage_L(pageManager, (void*)targetStackBegin, KERNEL_STACK_SIZE);
 	ON_ERROR;
-	// deleteUserPageTable(pageManager); TODO
+	deleteUserPageTable(pageManager);
 	ON_ERROR;
 	return NULL;
 }

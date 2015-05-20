@@ -114,7 +114,7 @@ ConsoleDisplay *initKernelConsole(void){
 	cd->cursor = 0;
 	cd->maxRow = 25;
 	cd->maxColumn = 80;
-	cd->video = mapPageToPhysical(defaultTextVideoAddress, VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
+	cd->video = mapKernelPage(defaultTextVideoAddress, VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
 	cd->lock = initialSpinlock;
 	updateVideoAddress(cd);
 	updateCursor(cd);
