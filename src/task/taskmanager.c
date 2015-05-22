@@ -104,7 +104,7 @@ void startTask(void);
 void initV8086Memory(void);
 void startTask(void){
 	releaseLock(&globalQueueLock); // after contextSwitch in schedule
-	sti();// acquireLock
+	sti(); // acquireLock
 	// return to eip assigned in initTaskStack
 	//TODO: move this
 	initV8086Memory();

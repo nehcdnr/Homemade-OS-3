@@ -159,6 +159,14 @@ int printk(const char* format, ...){
 
 void printAndHalt(const char *condition, const char *file, int line){
 	printk("failure: %s %s %d", condition, file, line);
-	while(1)
+	// if the console does not display, use vm debugger to watch registers
+	while(1){
+		__asm__(
+		"subl $0xf000be00, %1\n"
+		"subl $0xf000be00, %2\n"
+		:
+		:"a"(line),"b"(file),"c"(condition)
+		);
 		hlt();
+	}
 }
