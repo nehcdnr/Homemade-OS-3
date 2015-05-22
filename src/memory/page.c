@@ -27,13 +27,17 @@ typedef struct{
 	uint8_t zero: 1;
 	uint8_t global: 1;
 	uint8_t unused: 2; // available for OS; unused
-	uint8_t releaseWithManager: 1; // OS-defined
+	uint8_t autoReleasePhysical: 1; // OS-defined
 	uint8_t address0_4: 4;
 	uint16_t address4_20: 16;
 }PageTableEntry;
 typedef struct PageTable{
 	volatile PageTableEntry entry[PAGE_TABLE_LENGTH];
 }PageTable;
+
+#define PAGE_TABLE_REGION_SIZE (PAGE_SIZE * PAGE_TABLE_LENGTH)
+
+#define PAGE_DIRECTORY_LENGTH (1024)
 
 typedef struct{
 	uint8_t present: 1;
@@ -50,7 +54,7 @@ typedef struct{
 	uint16_t address4_20: 16;
 }PageDirectoryEntry;
 typedef struct PageDirectory{
-	volatile PageDirectoryEntry entry[PAGE_TABLE_LENGTH];
+	volatile PageDirectoryEntry entry[PAGE_DIRECTORY_LENGTH];
 }PageDirectory;
 
 static_assert(sizeof(PageDirectoryEntry) == 4);
@@ -64,7 +68,6 @@ static_assert(USER_LINEAR_BEGIN % PAGE_SIZE == 0);
 // static_assert(USER_LINEAR_END % PAGE_SIZE == 0);
 // static_assert(KERNEL_LINEAR_BEGIN % PAGE_SIZE == 0);
 // static_assert(KERNEL_LINEAR_END % PAGE_SIZE == 0);
-
 
 #define SET_ENTRY_ADDRESS(E, A) ((*(uint32_t*)(E)) = (((*(uint32_t*)(E)) & (4095)) | ((uint32_t)(A))))
 #define GET_ENTRY_ADDRESS(E) ((*(uint32_t*)(E)) & (~4095))
@@ -132,7 +135,7 @@ static void invlpgOrSetCR3(uintptr_t linearAddress, size_t size){
 }
 
 // not necessary to invlpg when changing present flag from 0 to 1
-#define PD_INDEX(ADDRESS) ((int)(((ADDRESS) >> 22) & (PAGE_TABLE_LENGTH - 1)))
+#define PD_INDEX(ADDRESS) ((int)(((ADDRESS) >> 22) & (PAGE_DIRECTORY_LENGTH - 1)))
 #define PT_INDEX(ADDRESS) ((int)(((ADDRESS) >> 12) & (PAGE_TABLE_LENGTH - 1)))
 
 static void setPDE(
@@ -154,6 +157,13 @@ static void setPDE(
 	(*targetPDE) = pde;
 }
 
+static void invalidatePDE(volatile PageDirectoryEntry *targetPDE){
+	PageDirectoryEntry pde = *targetPDE;
+	pde.present = 0;
+	assert(targetPDE->present == 1);
+	(*targetPDE) = pde;
+}
+
 static void setPTE(
 	volatile PageTableEntry *targetPTE, PageAttribute attribute, ExtraPageAttribute extraAttribute,
 	PhysicalAddress physicalAddress
@@ -169,7 +179,7 @@ static void setPTE(
 	pte.zero = 0;
 	pte.global = 0;//(type & GLOBAL_PAGE_FLAG? 1: 0);
 	pte.unused = 0;
-	pte.releaseWithManager = (extraAttribute & AUTO_RELEASE_PAGE_FLAG? 1: 0);
+	pte.autoReleasePhysical = (extraAttribute & AUTO_RELEASE_PAGE_FLAG? 1: 0);
 	setPTEAddress(&pte, physicalAddress);
 	(*targetPTE) = pte;
 }
@@ -196,13 +206,29 @@ static int isPTEPresent(volatile PageTableEntry *e){
 	return e->present;
 }
 
+static int isPageAutoRelease(volatile PageTableEntry *e){
+	return e->autoReleasePhysical;
+}
+
 // kernel page table
+
+// if external == 1, deleteWhenEmpty has to be 0 and presentCount is ignored
+typedef struct{
+	uint16_t presentCount;
+	uint16_t releaseWhenEmpty: 1;
+	uint16_t external: 1;
+	uint16_t unused: 14;
+}PageTableAttribute;
+
 typedef struct PageTableSet{
 	PageDirectory pd;
-	PageTable pt[PAGE_TABLE_LENGTH];
+	PageTableAttribute ptAttribute[PAGE_DIRECTORY_LENGTH];
+	PageTable pt[PAGE_DIRECTORY_LENGTH];
 }PageTableSet;
 
-// pd->entry[i] map to pt[(i + ptIndexBase) % PAGE_TABLE_LENGTH]
+static_assert((sizeof(PageTableAttribute) * PAGE_DIRECTORY_LENGTH) % PAGE_SIZE == 0);
+
+// pd->entry[i] map to pt[(i + ptIndexBase) % PAGE_DIRECTORY_LENGTH]
 // pdIndexBase = (4G-&pageManager)>>22, so that &pageManager is at pt[0]
 struct PageManager{
 	PhysicalAddress physicalPD;
@@ -223,10 +249,16 @@ uint32_t toCR3(PageManager *p){
 	return p->physicalPD.value;
 }
 
+#define PD_INDEX_ADD_BASE(LINEAR) ((PD_INDEX(linear) + p->pdIndexBase) & (PAGE_DIRECTORY_LENGTH - 1))
+
 static PageTable *linearAddressOfPageTable(PageManager *p, uintptr_t linear){
-	int index = ((PD_INDEX(linear) + p->pdIndexBase) & (PAGE_TABLE_LENGTH - 1));
-	return p->page->pt + index;
+	return p->page->pt + PD_INDEX_ADD_BASE(linear);
 }
+static PageTableAttribute *linearAddressOfPageTableAttribute(PageManager *p, uintptr_t linear){
+	return p->page->ptAttribute + PD_INDEX_ADD_BASE(linear);
+}
+
+#undef PD_INDEX_ADD_BASE
 
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
 	size_t p_size = size;
@@ -237,7 +269,6 @@ PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size
 void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address){
 	releaseBlock(physical, address.value);
 }
-
 
 static PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress, int isPresent){
 	int i1 = PD_INDEX(linearAddress);
@@ -263,12 +294,21 @@ static int setPage(
 	int i1 = PD_INDEX(linearAddress);
 	int i2 = PT_INDEX(linearAddress);
 	PageTable *pt_linear = linearAddressOfPageTable(p, linearAddress);
+	PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p, linearAddress);
 	if(isPDEPresent(p->page->pd.entry + i1) == 0){
+		if(physical == NULL){
+			panic("physical memory manager == NULL");
+			return 0;
+		}
 		PhysicalAddress pt_physical = _allocatePhysicalPages(physical, sizeof(PageTable));
 		if(pt_physical.value == UINTPTR_NULL){
 			return 0;
 		}
 		// the userAccesible/writable bits in all page levels must be 1 to allow the operations
+		PageTableAttribute *pta = linearAddressOfPageTableAttribute(p, linearAddress);
+		pta->presentCount = 0;
+		pta->releaseWhenEmpty = 1;
+		pta->external = 0;
 		setPDE(p->page->pd.entry + i1, USER_WRITABLE_PAGE, pt_physical);
 #ifndef NDEBUG
 		uintptr_t pt_i1 = PD_INDEX((uintptr_t)pt_linear);
@@ -277,7 +317,7 @@ static int setPage(
 		size_t s;
 		for(s = 0; s < sizeof(PageTable); s += PAGE_SIZE){
 			PhysicalAddress pt_physical_s = {pt_physical.value + s};
-			if(setPage(p, physical, ((uintptr_t)pt_linear) + s, pt_physical_s,
+			if(setPage(p, NULL, ((uintptr_t)pt_linear) + s, pt_physical_s,
 					KERNEL_PAGE, NONE_AUTO_RELEASE_PAGE) == 0){
 				panic("pt_linear must present in kernel page directory");
 			}
@@ -285,7 +325,10 @@ static int setPage(
 		MEMSET0(pt_linear);
 	}
 	assert((((uintptr_t)pt_linear) & 4095) == 0);
-
+	if(pt_attribute->external == 0){
+		//TODO: multiprocessor spinlock
+		pt_attribute->presentCount++;
+	}
 	setPTE(pt_linear->entry + i2, attribute, extraAttribute, physicalAddress);
 	assert(pt_linear->entry[i2].present == 1);
 
@@ -294,27 +337,45 @@ static int setPage(
 
 static void invalidatePage(
 	PageManager *p,
+	uintptr_t linear
+){
+	int i2 = PT_INDEX(linear);
+	PageTable *pt_linear = linearAddressOfPageTable(p, linear);
+	assert(isPTEPresent(pt_linear->entry + i2));
+	invalidatePTE(pt_linear->entry + i2);
+}
+
+static void releaseInvalidatedPage(
+	PageManager *p,
 	MemoryBlockManager *physical,
 	uintptr_t linear
 ){
 	int i1 = PD_INDEX(linear);
 	int i2 = PT_INDEX(linear);
-	PageTable *pt_linear = linearAddressOfPageTable(p, linear);
-	PhysicalAddress pt_physical = getPDEAddress(p->page->pd.entry + i1);
-	assert(isPDEPresent(p->page->pd.entry + i1));
-	assert(isPTEPresent(pt_linear->entry + i2));
 
-	invalidatePTE(pt_linear->entry + i2);
-	if(0){// do not release even if the PageTable is empty
-		//invalidatePDE(p->page->pd.entry + i1);
-		releaseBlock(physical , pt_physical.value);
+	PageTable *pt_linear = linearAddressOfPageTable(p, linear);
+	PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p ,linear);
+	assert(isPDEPresent(p->page->pd.entry + i1));
+	assert(isPTEPresent(pt_linear->entry + i2) == 0);
+
+	if(isPageAutoRelease(pt_linear->entry + i2)){
+		PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
+		_releasePhysicalPages(physical, page_physical);
+	}
+	if(pt_attribute->external == 0){
+		pt_attribute->presentCount--;
+		if(pt_attribute->presentCount == 0 && pt_attribute->releaseWhenEmpty != 0){
+			PhysicalAddress pt_physical = getPDEAddress(p->page->pd.entry + i1);
+			invalidatePDE(p->page->pd.entry + i1);
+			_releasePhysicalPages(physical , pt_physical);
+		}
 	}
 }
 
 static size_t evaluateSizeOfPageTableSet(uintptr_t reservedBase, uintptr_t reservedEnd){
 	size_t s = 0;
 	// PageDirectory
-	s += sizeof(PageDirectory);
+	s += (uintptr_t)(((PageTableSet*)0)->pt);
 	// PageTable
 	uintptr_t manageBaseIndex =  PD_INDEX(reservedBase);
 	uintptr_t manageEndIndex = PD_INDEX(reservedEnd - 1 >= reservedBase? reservedEnd - 1: reservedEnd);
@@ -355,7 +416,7 @@ static void initPageManager(
 	p->page = tables;
 	p->pageInUserSpace = tablesLoadAddress;
 	p->physicalPD = linearToPhysical(mapping, &(tables->pd));
-	p->pdIndexBase = (PAGE_TABLE_LENGTH - PD_INDEX(reservedBase)) & (PAGE_TABLE_LENGTH - 1);
+	p->pdIndexBase = (PAGE_DIRECTORY_LENGTH - PD_INDEX(reservedBase)) & (PAGE_DIRECTORY_LENGTH - 1);
 	assert(linearAddressOfPageTable(p, reservedBase) == tables->pt + 0);
 	PageDirectory *kpd = &tables->pd;
 	MEMSET0(kpd);
@@ -370,9 +431,13 @@ static void initPageManagerPD(
 	// avoid overflow
 	const uintptr_t b = PD_INDEX(linearBase), e = PD_INDEX(linearEnd - 1);
 	for(a = b; a <= e; a++){
-		int pdIndex = PD_INDEX(a * PAGE_SIZE * PAGE_TABLE_LENGTH);
-		PageTable *kpt = linearAddressOfPageTable(p, a * PAGE_SIZE * PAGE_TABLE_LENGTH);
+		int pdIndex = PD_INDEX(a * PAGE_TABLE_REGION_SIZE);
+		PageTable *kpt = linearAddressOfPageTable(p, a * PAGE_TABLE_REGION_SIZE);
+		PageTableAttribute *kpta = linearAddressOfPageTableAttribute(p, a * PAGE_TABLE_REGION_SIZE);
 		MEMSET0(kpt);
+		kpta->presentCount = 0;
+		kpta->releaseWhenEmpty = 0;
+		kpta->external = 0;
 		PhysicalAddress kpt_physical = linearToPhysical(mapping, kpt);
 		setPDE(pts->pd.entry + pdIndex, KERNEL_PAGE, kpt_physical);
 	}
@@ -382,10 +447,14 @@ static void copyPageManagerPD(
 	PageManager *dst, const PageManager *src,
 	uintptr_t linearBegin, uintptr_t linearEnd
 ){
-	uintptr_t a, b = PD_INDEX(linearBegin), e = PD_INDEX(linearEnd);
-	for(a = b; a<=e; a++){
+	uintptr_t a, b = PD_INDEX(linearBegin), e = PD_INDEX(linearEnd - 1);
+	for(a = b; a <= e; a++){
 		assert(isPDEPresent(dst->page->pd.entry + a) == 0);
 		assert(isPDEPresent(src->page->pd.entry + a) != 0);
+		PageTableAttribute *pta = linearAddressOfPageTableAttribute(dst, a * PAGE_TABLE_REGION_SIZE);
+		pta->releaseWhenEmpty = 0;
+		pta->presentCount = 0;
+		pta->external = 1;
 		dst->page->pd.entry[a] = src->page->pd.entry[a];
 	}
 }
@@ -397,10 +466,8 @@ static void initPageManagerPT(
 	uintptr_t a;
 	for(a = linearBegin; a < linearEnd; a += PAGE_SIZE){
 		assert(isPDEPresent(p->page->pd.entry + PD_INDEX(a)));
-		PageTable *kpt = linearAddressOfPageTable(p, a);
-		int ptIndex = PT_INDEX(a);
 		PhysicalAddress kp_physical = linearToPhysical(mapping, (void*)(a - linearBegin + mappedlinearBegin));
-		setPTE(kpt->entry + ptIndex, KERNEL_PAGE, NONE_AUTO_RELEASE_PAGE, kp_physical);
+		setPage(p, NULL, a, kp_physical, KERNEL_PAGE, NONE_AUTO_RELEASE_PAGE);
 	}
 }
 
@@ -412,8 +479,8 @@ int _mapExistingPages_L(
 	assert(srcLinear % PAGE_SIZE == 0 && ((uintptr_t)dstLinear) % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
 	uintptr_t s;
 	for(s = 0; s < size; s += PAGE_SIZE){
-		PhysicalAddress p = translatePage(src, srcLinear + s, 1);
-		if(setPage(dst, physical, ((uintptr_t)dstLinear) + s, p, attribute, NONE_AUTO_RELEASE_PAGE) == 0){
+		PhysicalAddress srcPhysical = translatePage(src, srcLinear + s, 1);
+		if(setPage(dst, physical, ((uintptr_t)dstLinear) + s, srcPhysical, attribute, NONE_AUTO_RELEASE_PAGE) == 0){
 			break;
 		}
 	}
@@ -435,7 +502,7 @@ PageManager *initKernelPageTable(
 	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
 	uintptr_t kernelLinearBegin, uintptr_t kernelLinearEnd
 ){
-	assert(kernelLinearBegin % (PAGE_SIZE * PAGE_TABLE_LENGTH) == 0 && kernelLinearEnd % PAGE_SIZE == 0);
+	assert(kernelLinearBegin % PAGE_TABLE_REGION_SIZE == 0 && kernelLinearEnd % PAGE_SIZE == 0);
 	assert(manageBase >= kernelLinearBegin && manageEnd <= kernelLinearEnd);
 	assert(kernelLinearBegin == KERNEL_LINEAR_BEGIN);
 	assert(kernelPageManager == NULL);
@@ -559,7 +626,6 @@ void deleteUserPageTable(PageManager *p){
 	for(r = p->reservedBase, i = 0; r < p->reservedEnd; r += PAGE_SIZE, i++){
 		releasePhysicalPages(reservedPhysical[i]);
 	}
-	/*TODO: auto release, delete PT*/
 	DELETE(p);
 }
 
@@ -588,9 +654,18 @@ void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAdd
 	size_t s = size;
 	while(s != 0){
 		s -= PAGE_SIZE;
-		invalidatePage(p, physical, ((uintptr_t)linearAddress) + s);
+		invalidatePage(p, ((uintptr_t)linearAddress) + s);
 	}
 	sendINVLPG(p->physicalPD.value, (uintptr_t)linearAddress, size);
+	// the pages are not yet released by linear memory manager
+	// it is safe to keep address in PTE, and
+	// separate _unmapPage_LP & releasePhysicalPages
+	// TODO:
+	s = size;
+	while(s != 0){
+		s -= PAGE_SIZE;
+		releaseInvalidatedPage(p, physical, ((uintptr_t)linearAddress) + s);
+	}
 }
 
 int _mapPage_L(
@@ -623,15 +698,6 @@ int _mapPage_L(
 
 void _unmapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
 	_unmapPage_LP(p, physical, linearAddress, size);
-	// the pages are not yet released by linear memory manager
-	// it is safe to keep address in PTE, and
-	// separate _unmapPage_LP & releasePhysicalPages
-	size_t s = size;
-	while(s != 0){
-		s -= PAGE_SIZE;
-		PhysicalAddress p_addr = translatePage(p, ((uintptr_t)linearAddress) + s, 0);
-		assert(p_addr.value %PAGE_SIZE == 0 && p_addr.value != 0);
-		_releasePhysicalPages(physical, p_addr);
-	}
+	//TODO: remove this function
 }
 

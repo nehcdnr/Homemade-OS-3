@@ -15,8 +15,9 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
+	uintptr_t userStackTop, userStackBottom;
+	uintptr_t userHeapTop; // userHeapBottom = 0
 	PageManager *pageManager;
-	// PageDirectory *kernelPageTable;
 	// queue data
 	enum TaskState{
 		// RUNNING,
@@ -103,7 +104,7 @@ void startTask(void);
 void initV8086Memory(void);
 void startTask(void){
 	releaseLock(&globalQueueLock); // after contextSwitch in schedule
-	sti(); // acquireLock
+	sti();// acquireLock
 	// return to eip assigned in initTaskStack
 	//TODO: move this
 	initV8086Memory();
@@ -165,11 +166,16 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
-static Task *createTask(uint32_t esp0, uint32_t espInterrupt, PageManager *pageTable, int priority){
+static Task *createTask(
+	uint32_t esp0, uint32_t espInterrupt, uintptr_t userStackTop,
+	PageManager *pageTable, int priority
+){
 	Task *NEW(t);
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
 	t->espInterrupt = espInterrupt;
+	t->userStackBottom = t->userStackTop = userStackTop;
+	t->userHeapTop = 0;
 	t->pageManager = pageTable;
 	t->state = SUSPENDED;
 	t->priority = priority;
@@ -189,33 +195,34 @@ static Task *createUserTask(
 	int priority
 ){
 	const uintptr_t targetESP0 = USER_LINEAR_END - sizeOfPageTableSet;
-	const uintptr_t targetStackBegin = targetESP0 - KERNEL_STACK_SIZE;
+	const uintptr_t targetStackBottom = targetESP0 - KERNEL_STACK_SIZE;
 	// 1. task page table
 	PageManager *pageManager = createAndMapUserPageTable(targetESP0);
 	EXPECT(pageManager != NULL);
 	// 2. kernel stack for task
 	// TODO: use current page table, not kernel
-	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBegin, KERNEL_STACK_SIZE, KERNEL_PAGE);
+	printk("%x\n", (void*)targetStackBottom);
+	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(allocateStackOK != 0);
-	void *mappedStackBegin = mapKernelPagesFromExisting(pageManager, targetStackBegin, KERNEL_STACK_SIZE);
-	EXPECT(mappedStackBegin != NULL);
+	void *mappedStackBottom = mapKernelPagesFromExisting(pageManager, targetStackBottom, KERNEL_STACK_SIZE);
+	EXPECT(mappedStackBottom != NULL);
 	// 3. create task
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
 	uintptr_t initialESP0 = targetESP0 -
-	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBegin) + (targetESP0 - targetStackBegin));
-	Task *t = createTask(initialESP0, targetESP0 - 4, pageManager, priority);
+	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBottom) + (targetESP0 - targetStackBottom));
+	Task *t = createTask(initialESP0, targetESP0 - 4, (uintptr_t)targetStackBottom, pageManager, priority);
 	EXPECT(t != NULL);
 
-	unmapKernelPage((void*)mappedStackBegin);
+	unmapKernelPage((void*)mappedStackBottom);
 	unmapUserPageTableSet(pageManager);
 	return t;
 	//DELETE(t);
 	ON_ERROR;
-	unmapKernelPage((void*)mappedStackBegin);
+	unmapKernelPage((void*)mappedStackBottom);
 	ON_ERROR;
 	// TODO: use current page table, not kernel
-	unmapPage_L(pageManager, (void*)targetStackBegin, KERNEL_STACK_SIZE);
+	unmapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE);
 	ON_ERROR;
 	deleteUserPageTable(pageManager);
 	ON_ERROR;
@@ -258,7 +265,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
 	TaskManager *NEW(tm);
 	// create a task for this, eip and esp are irrelevant
-	tm->current = createTask(0, 0, kernelPageManager, 3);
+	tm->current = createTask(0, 0, 0, kernelPageManager, 3);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
