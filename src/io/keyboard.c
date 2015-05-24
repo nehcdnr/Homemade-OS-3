@@ -181,7 +181,8 @@ static void syscall_keyboard(InterruptParam *p){
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
-		panic("ps2 sysFIFO");
+		printk("warning: cannot read keyboard fifo");
+		key = NO_KEY;
 	}
 	SYSTEM_CALL_RETURN_VALUE_0(p) = key;
 }
