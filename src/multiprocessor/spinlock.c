@@ -7,8 +7,8 @@
 #define ACQUIRABLE (1)
 #define IGNORED (2)
 
-const Spinlock initialSpinlock = {acquirable: ACQUIRABLE, interruptFlag: 0};
-const Spinlock nullSpinlock = {acquirable: IGNORED, interruptFlag: 0};
+const Spinlock initialSpinlock = INITIAL_SPINLOCK;
+const Spinlock nullSpinlock = NULL_SPINLOCK;
 
 int isAcquirable(Spinlock *spinlock){
 	if(spinlock->acquirable == IGNORED)
@@ -24,7 +24,7 @@ int acquireLock(Spinlock *spinlock){
 	int tryCount = 0;
 	while(1){
 		cli();
-		int acquired = xchg(&spinlock->acquirable, NOT_ACQUIRABLE);
+		int acquired = xchg8(&spinlock->acquirable, NOT_ACQUIRABLE);
 		if(acquired == ACQUIRABLE)
 			return tryCount;
 		if(spinlock->interruptFlag)
@@ -40,7 +40,7 @@ void releaseLock(Spinlock *spinlock){
 	if(spinlock->acquirable == IGNORED){
 		return;
 	}
-	xchg(&spinlock->acquirable, ACQUIRABLE);
+	xchg8(&spinlock->acquirable, ACQUIRABLE);
 	if(spinlock->interruptFlag){
 		sti();
 	}

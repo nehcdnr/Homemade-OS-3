@@ -1,11 +1,11 @@
 [BITS 32]
 [SECTION .text]
 
-global _xchg
-_xchg:
+global _xchg8
+_xchg8:
 	mov edx, [esp + 4]
-	mov eax, [esp + 8]
-	xchg [edx], eax
+	mov al, [esp + 8]
+	xchg [edx], al
 	ret
 
 global _getEFlags

@@ -15,8 +15,7 @@ typedef struct HeapManager{
 }HeapManager;
 
 #define HEAP_MANAGER_SIZE (PAGE_SIZE)
-// because heap section may start from 0,
-// NULL is a valid  address for HeapAllocationList
+// NULL is a valid address for HeapManager because heap section may start from 0
 #define INVALID_HEAP_ADDRESS ((HeapManager*)0xffffffff)
 #undef NULL
 
