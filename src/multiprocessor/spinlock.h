@@ -1,8 +1,8 @@
 #include<std.h>
 
 typedef struct Spinlock{
-	volatile uint32_t acquirable;
-	int interruptFlag;
+	volatile uint8_t acquirable;
+	uint8_t interruptFlag;
 }Spinlock;
 
 #define INITIAL_SPINLOCK {acquirable: 1, interruptFlag: 0}

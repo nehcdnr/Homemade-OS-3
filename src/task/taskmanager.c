@@ -15,9 +15,7 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	uintptr_t userStackTop, userStackBottom;
-	uintptr_t userHeapTop; // userHeapBottom = 0
-	PageManager *pageManager;
+	TaskMemoryManager taskMemory;
 	// queue data
 	enum TaskState{
 		// RUNNING,
@@ -94,7 +92,7 @@ void schedule(TaskManager *tm){
 	tm->current = popQueue(globalQueue);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(oldTask != tm->current){
-		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(tm->current->pageManager));
+		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(getPageManager(&(tm->current->taskMemory))));
 		// may go to startTask or return here
 	}
 	releaseLock(&globalQueueLock);
@@ -117,7 +115,7 @@ void initV8086Memory(void){
 	//PhysicalAddress v8086UsableEnd = 0x80000;
 	PageManager *p;
 	cli();
-	p = getProcessorLocal()->taskManager->current->pageManager;
+	p = getProcessorLocal()->taskManager->current->taskMemory.pageManager;
 	sti();
 	if(mapPage_LP(p, (void*)v8086MemoryBegin.value, v8086MemoryBegin, v8086MemorySize, USER_WRITABLE_PAGE) == 0){
 		panic("0~1MB error");// TODO: terminateTask
@@ -167,16 +165,15 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
 static Task *createTask(
-	uint32_t esp0, uint32_t espInterrupt, uintptr_t userStackTop,
+	uint32_t esp0, uint32_t espInterrupt, uintptr_t userStackTop, uintptr_t userHeapBottom,
 	PageManager *pageTable, int priority
 ){
 	Task *NEW(t);
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
 	t->espInterrupt = espInterrupt;
-	t->userStackBottom = t->userStackTop = userStackTop;
-	t->userHeapTop = 0;
-	t->pageManager = pageTable;
+	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageTable, userStackTop, userHeapBottom);
+	EXPECT(initTaskMemoryOK != 0);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
@@ -185,6 +182,9 @@ static Task *createTask(
 	t->prev = NULL;
 
 	return t;
+
+	ON_ERROR;
+	DELETE(t);
 	ON_ERROR;
 	return NULL;
 }
@@ -211,7 +211,9 @@ static Task *createUserTask(
 	eflags.bit.interrupt = 0;
 	uintptr_t initialESP0 = targetESP0 -
 	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBottom) + (targetESP0 - targetStackBottom));
-	Task *t = createTask(initialESP0, targetESP0 - 4, (uintptr_t)targetStackBottom, pageManager, priority);
+	Task *t = createTask(initialESP0, targetESP0 - 4,
+	(uintptr_t)targetStackBottom, (2<<20),
+	pageManager, priority);
 	EXPECT(t != NULL);
 
 	unmapKernelPage((void*)mappedStackBottom);
@@ -265,7 +267,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
 	TaskManager *NEW(tm);
 	// create a task for this, eip and esp are irrelevant
-	tm->current = createTask(0, 0, 0, kernelPageManager, 3);
+	tm->current = createTask(0, 0, 0, 0, kernelPageManager, 3);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
@@ -298,8 +300,8 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	}
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
 	/*
-	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_PAGE, syscallAllocatePage, 0);
-	registerSystemCall(systemCallTable, SYSCALL_FREE_PAGE, syscallFreePage, 0);
+	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, syscallAllocatePage, 0);
+	registerSystemCall(systemCallTable, SYSCALL_FREE_HEAP, syscallFreePage, 0);
 	*/
 	initSemaphore(systemCallTable);
 }

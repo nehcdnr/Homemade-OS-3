@@ -1,3 +1,6 @@
+#ifndef MEMORY_H_INCLUDED
+#define MEMORY_H_INCLUDED
+
 #include<std.h>
 
 // physical
@@ -85,3 +88,5 @@ extern char KERNEL_LINEAR_END_SYMBOL;
 
 #define USER_LINEAR_BEGIN ((uintptr_t)0)
 #define USER_LINEAR_END KERNEL_LINEAR_BEGIN
+
+#endif
