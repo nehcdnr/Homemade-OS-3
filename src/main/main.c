@@ -60,10 +60,10 @@ void apEntry(void){
 	local->gdt = gdt;
 	local->taskManager = taskManager;
 	// 10. driver
+	initLocalTimer(local->pic, global.idt, createTimer());
 	if(isBSP){
 		initService(local->pic, global.syscallTable);
 	}
-	initLocalTimer(local->pic, global.idt, createTimer());
 	//initMultiprocessor();
 //printk("kernel memory usage: %u\n", getAllocatedSize());
 printk("start accepting interrupt...\n");

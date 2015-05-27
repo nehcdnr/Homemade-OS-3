@@ -70,7 +70,7 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 
 static void initMultiprocessor(
 	int isBSP, InterruptTable *t,
-	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
+	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){	return;//TODO: stack for AP
 	static SpinlockBarrier barrier1, barrier2;
 	if(isBSP){
 		resetBarrier(&barrier1);

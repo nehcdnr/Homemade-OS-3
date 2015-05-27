@@ -21,6 +21,7 @@ size_t physicalMemoryUsage(size_t *totalSize);
 //size_t getKernelMemoryUsage(size_t *totalSize);
 
 // page
+#define PAGE_SIZE (4096)
 typedef struct PageManager PageManager;
 extern PageManager *kernelPageManager;
 

@@ -1,8 +1,6 @@
 #include<common.h>
 #include"task_private.h"
 #include"memory/memory.h"
-// XXX: move this file to memory to access PAGE_SIZE?
-#include"memory/page.h"
 
 typedef struct HeapManager{
 	struct HeapManager *next;

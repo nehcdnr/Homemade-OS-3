@@ -92,52 +92,41 @@ typedef struct SlabManager{
 	LinearMemoryManager *memory;
 }SlabManager;
 
-static int findSlab(SlabManager *m, size_t size){
+static int findSlab(size_t size){
 	int i;
 	for(i = 0; 1; i++){
 		if((unsigned)i >= NUMBER_OF_SLAB_UNIT){
 			panic("error allocating memory");
 		}
 		if(SlabUnit[i] >= size){
-			break;
+			return i;
 		}
 	}
-	acquireLock(&(m->lock));
-	Slab *p = m->usableSlab[i];
-	releaseLock(&m->lock);
-	if(p != NULL){
-		return i;
-	}
-
-	p = createSlab(m->memory, SlabUnit[i]);
-	if(p == NULL){
-		return -1;
-	}
-	acquireLock(&(m->lock));
-	ADD_TO_DQUEUE(p, m->usableSlab + i);
-	releaseLock(&m->lock);
-	return i;
 }
 
 void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
 		return _allocateKernelPages(m->memory, size);
 	}
-	int i = findSlab(m, size);
-	if(i < 0)
-		return NULL;
-	Slab *p = m->usableSlab[i];
-	if(p == NULL){
-		return NULL;
-	}
-	void *r;
-	acquireLock(&m->lock);
-	r = allocateUnit(p);
-	// r can be NULL
-	if(isTotallyUsed(p)){
-		REMOVE_FROM_DQUEUE(p);
-		ADD_TO_DQUEUE(p, m->usedSlab + i);
-	}
+	int i = findSlab(size);
+	void *r = NULL;
+	acquireLock(&(m->lock));
+	do{
+		Slab *p = m->usableSlab[i];
+		if(p == NULL){
+			p = createSlab(m->memory, SlabUnit[i]);
+			if(p == NULL){
+				break;
+			}
+			ADD_TO_DQUEUE(p, m->usableSlab + i);
+		}
+		r = allocateUnit(p);
+		// r can be NULL
+		if(isTotallyUsed(p)){
+			REMOVE_FROM_DQUEUE(p);
+			ADD_TO_DQUEUE(p, m->usedSlab + i);
+		}
+	}while(0);
 	releaseLock(&(m->lock));
 	assert(((uintptr_t)r) % MIN_BLOCK_SIZE != 0);
 	return r;

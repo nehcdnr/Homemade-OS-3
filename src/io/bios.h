@@ -1,7 +1,7 @@
 
 #include<std.h>
 
-uintptr_t findAddressOfEBDA(void);
+uintptr_t findAddressOfEBDA(uintptr_t kernelLinearBegin);
 #define EBDA_END (0xa0000)
 
 uint8_t checksum(const void *data, size_t size);

@@ -18,7 +18,7 @@ typedef struct{
 
 typedef struct{
 	SDTHeader header;
-	SDTHeader *entry[0];
+	/*SDTHeader **/uint32_t entry[0];
 }RSDT;
 
 // from ACPI spec
@@ -28,7 +28,7 @@ typedef struct{
 	uint8_t checksum;
 	uint8_t oemID[6];
 	uint8_t revision;
-	RSDT *rsdtAddress;
+	/* RSDT **/uint32_t rsdtAddress;
 	// ACPI 2.0 (revision = 2) (unsupported)
 	uint32_t length;
 	uint32_t xsdtAddress_0_32;
@@ -122,6 +122,7 @@ struct IOAPIC{
 	struct IOAPICProfile{
 		IOAPICStruct *ioAPIC;
 		int interruptCount;
+		MemoryMappedRegister mappedRegister;
 		InterruptVector *vectorBase;
 	}*io;
 
@@ -145,24 +146,29 @@ static uint32_t readIOAPIC(MemoryMappedRegister ioRegSel, uint32_t selector){
 	return *ioWin;
 }
 
+#define IOAPIC_MAPPING_SIZE (PAGE_SIZE)
+
 static void parseIOAPIC(
 	struct IOAPICProfile *profile,
 	IOAPICStruct *ias,
 	InterruptTable *t
 ){
-	// printf("id = %d, interrupt base = %d, address = %x\n",
-	// ias->ioAPICID, ias->globalSystemInterruptBase, ias->ioAPICAddress);
-	MemoryMappedRegister address = (MemoryMappedRegister)ias->ioAPICAddress;
+	printk("IOAPIC id = %d, interrupt base = %d, address = %x\n",
+	ias->ioAPICID, ias->globalSystemInterruptBase, ias->ioAPICAddress);
+	PhysicalAddress ioapicPhysical = {FLOOR(ias->ioAPICAddress, IOAPIC_MAPPING_SIZE)};
+	void *ioapicMappedBegin = mapKernelPage(ioapicPhysical, PAGE_SIZE);
+	(*(volatile uint32_t**)&profile->mappedRegister) =
+	(MemoryMappedRegister)(((uintptr_t)ioapicMappedBegin) + ias->ioAPICAddress % PAGE_SIZE);
 	// bit 24~28 = I/O APIC ID
 	// printf("%x\n", readIOAPIC(address, 0));
 	// bit 0~8 = APIC version, bit 16~24 = redirection entry count - 1
 	profile->ioAPIC = ias;
-	profile->interruptCount = ((readIOAPIC(address, IOAPICVER) >> 16) & 0xff) + 1;
+	profile->interruptCount = ((readIOAPIC(profile->mappedRegister, IOAPICVER) >> 16) & 0xff) + 1;
 	profile->vectorBase = registerIRQs(t, ias->globalSystemInterruptBase, profile->interruptCount);
 	//printf("%d interrupts registered to IDT\n", profile->interruptCount);
 	int v;
 	for(v = 0; v < profile->interruptCount; v++){
-		uint32_t redir0_32 = readIOAPIC(address, IOREDTBL0_32(v));
+		uint32_t redir0_32 = readIOAPIC(profile->mappedRegister, IOREDTBL0_32(v));
 		//uint32_t redir32_64 = readIOAPIC(address, IOREDTBL32_64(v));
 		//printf(" %x %x/", redir0_32, redir32_64);
 		/*
@@ -183,7 +189,7 @@ static void parseIOAPIC(
 		bit 7~0: vector
 		*/
 		redir0_32 = ((redir0_32 & ~(0x000100ff)) | 0x00010000 | (toChar(profile->vectorBase) + v));
-		writeIOAPIC(address, 0x10 + v * 2 + 0, redir0_32);
+		writeIOAPIC(profile->mappedRegister, 0x10 + v * 2 + 0, redir0_32);
 	}
 }
 
@@ -210,12 +216,12 @@ void apic_setPICMask(PIC *pic, enum IRQ irq, int setMask){
 	IOAPIC *apic = pic->apic->ioapic;
 	int i = irq;
 	struct IOAPICProfile *iap = getIOAPICProfile(apic, &i);
-	uint32_t r = readIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i));
+	uint32_t r = readIOAPIC(iap->mappedRegister, IOREDTBL0_32(i));
 	if(setMask)
 		r |= 0x00010000;
 	else
 		r &= (~0x00010000);
-	writeIOAPIC((MemoryMappedRegister)iap->ioAPIC->ioAPICAddress, IOREDTBL0_32(i), r);
+	writeIOAPIC(iap->mappedRegister, IOREDTBL0_32(i), r);
 }
 
 InterruptVector *apic_irqToVector(PIC *pic, enum IRQ irq){
@@ -245,7 +251,7 @@ static IOAPIC *parseMADT(const MADT *madt, InterruptTable *t){
 	offset = sizeof(MADT);
 	while(offset < madt->header.length){
 		ICSHeader *icsHeader = (ICSHeader*)(((uintptr_t)madt) + offset);
-		offset+=icsHeader->length;
+		offset += icsHeader->length;
 		if(icsHeader->type < NUMBER_OF_APIC_STRUCT_TYPE)
 			typeCount[icsHeader->type]++;
 	}
@@ -306,14 +312,16 @@ static IOAPIC *parseMADT(const MADT *madt, InterruptTable *t){
 	return apic;
 }
 
-static const RSDT *findRSDT(void){
+static uintptr_t findRSDT(void){
 	const RSDP *rsdp = NULL;
 	if(rsdp == NULL)
-		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ", findAddressOfEBDA(), EBDA_END);
+		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ",
+			findAddressOfEBDA(KERNEL_LINEAR_BEGIN), KERNEL_LINEAR_BEGIN + EBDA_END);
 	if(rsdp == NULL)
-		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ", 0xe0000, 0x100000);
+		rsdp = searchStructure(RSDP_REVISION_0_SIZE, "RSD PTR ",
+			KERNEL_LINEAR_BEGIN + 0xe0000, KERNEL_LINEAR_BEGIN + 0x100000);
 	if(rsdp == NULL){
-		return NULL;
+		return UINTPTR_NULL;
 	}
 	printk("found Root System Description Pointer at %x\n", rsdp);
 	printk("RSDP version = %d\n", rsdp->revision);
@@ -323,35 +331,64 @@ static const RSDT *findRSDT(void){
 		rsdp->xsdtAddress_32_64, rsdp->xsdtAddress_0_32);
 		printk("warning: long mode and ACPI 2.0 are not supported\n");
 	}
-	const RSDT * rsdt = rsdp->rsdtAddress;
-	if(strncmp(rsdt->header.signature, "RSDT", 4) != 0){
-		printk("bad RSDT signature\n");
+	return rsdp->rsdtAddress;
+}
+
+static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
+	RSDT *rsdt;
+	PhysicalAddress rsdtPageBegin = {FLOOR(rsdtPhysical, PAGE_SIZE)};
+
+	void *rsdtMappedBegin = mapKernelPage(rsdtPageBegin, PAGE_SIZE * 2);
+	if(rsdtMappedBegin == NULL){
+		panic("fail allocating memory");
 	}
-	if(checksum(rsdt, rsdt->header.length) != 0){
-		panic("bad RSDT checksum");
+	rsdt = (RSDT*)(((uintptr_t)rsdtMappedBegin) + rsdtPhysical % PAGE_SIZE);
+	size_t rsdtMappedSize= CEIL(rsdtPhysical % PAGE_SIZE + rsdt->header.length, PAGE_SIZE);
+	unmapKernelPage(rsdtMappedBegin);
+
+	rsdtMappedBegin = mapKernelPage(rsdtPageBegin, rsdtMappedSize);
+	if(rsdtMappedBegin == NULL){
+		panic("fail allocating memory");
 	}
-	assert((rsdt->header.length - sizeof(RSDT)) % sizeof(SDTHeader*) == 0);
+	rsdt = (RSDT*)(((uintptr_t)rsdtMappedBegin) + rsdtPhysical % PAGE_SIZE);
 	return rsdt;
 }
 
 IOAPIC *initAPIC(InterruptTable *t){
-	IOAPIC *apic = NULL;
-	const RSDT *rsdt = findRSDT();
+	uintptr_t rsdtPhysical = findRSDT();
+	const RSDT *rsdt = mapRSDT(rsdtPhysical);
+	if(strncmp(rsdt->header.signature, "RSDT", 4) != 0){
+		printk("warning: bad RSDT signature\n");
+	}
+	if(checksum(rsdt, rsdt->header.length) != 0){
+		panic("bad RSDT checksum");
+	}
+
 	assert(rsdt != NULL);
-	int rsdtEntryCount = (rsdt->header.length - sizeof(RSDT)) / sizeof(SDTHeader*);
+	int rsdtEntryCount = (rsdt->header.length - sizeof(*rsdt)) / sizeof(rsdt->entry[0]);
+	IOAPIC *apic = NULL;
 	int i;
 	for(i = 0; i < rsdtEntryCount; i++){
-		SDTHeader* madt = rsdt->entry[i];
-		if(strncmp(madt->signature, "APIC", 4) != 0){
+		const uintptr_t madtPhysical = rsdt->entry[i];
+		PhysicalAddress madtPageBegin = {FLOOR(madtPhysical, PAGE_SIZE)};
+		void *madtMappedBegin = mapKernelPage(madtPageBegin, PAGE_SIZE * 2);
+		SDTHeader *madt = (SDTHeader*)(((uintptr_t)madtMappedBegin) + madtPhysical % PAGE_SIZE);
+		size_t madtMappedSize = CEIL(madtPhysical % PAGE_SIZE + madt->length, PAGE_SIZE);
+		int signatureOK = (strncmp(madt->signature, "APIC", 4) == 0);
+		unmapKernelPage(madtMappedBegin);
+		if(signatureOK == 0){
 			continue;
 		}
+		madtMappedBegin = mapKernelPage(madtPageBegin, madtMappedSize);
+		madt = (SDTHeader*)(((uintptr_t)madtMappedBegin) + madtPhysical % PAGE_SIZE);
 		if(checksum(madt, madt->length) != 0){
 			panic("bad MADT checksum");
 		}
 		if(apic != NULL){
-			panic("found more than 1 MADTs");
+			printk("warning: found more than 1 MADTs");
+			continue;
 		}
-		apic = parseMADT((const MADT*)(rsdt->entry[i]), t);
+		apic = parseMADT((const MADT*)(madt), t);
 	}
 	return apic;
 }

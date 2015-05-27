@@ -116,7 +116,7 @@ static void systemCallHandler(InterruptParam *p){
 
 static void syscall_registerService(InterruptParam *p){
 	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
-	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p); //TODO: check argument
+	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
 	SystemCallFunction func = (SystemCallFunction)SYSTEM_CALL_ARGUMENT_1(p);
 	uintptr_t arg = SYSTEM_CALL_ARGUMENT_2(p);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = registerSystemService(systemCallTable, name, func, arg);
@@ -124,7 +124,7 @@ static void syscall_registerService(InterruptParam *p){
 
 static void syscall_queryService(InterruptParam *p){
 	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
-	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check argument
+	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
 	unsigned int number = SYSTEM_CALL_ARGUMENT_1(p); //TODO: address check
 	SYSTEM_CALL_RETURN_VALUE_0(p) = querySystemService(systemCallTable, name, &number);
 	SYSTEM_CALL_RETURN_VALUE_1(p) = number;

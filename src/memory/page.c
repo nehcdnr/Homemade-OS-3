@@ -718,5 +718,4 @@ int _mapExistingPages_L(
 
 void _unmapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
 	_unmapPage_(p, physical, linearAddress, size, 1);
-	//TODO: remove this function
 }

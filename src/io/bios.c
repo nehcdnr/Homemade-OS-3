@@ -5,14 +5,14 @@
 #include"common.h"
 
 #define DEFAULT_EBDA_BEGIN (0x9fc00)
-uintptr_t findAddressOfEBDA(void){
-	uintptr_t address = ((*(uint16_t*)0x40e)<<4);
+uintptr_t findAddressOfEBDA(uintptr_t kernelLinearBegin){
+	uintptr_t address = ((*(uint16_t*)(kernelLinearBegin + 0x40e))<<4);
 	if(address >= EBDA_END || address < 0x80000){
 		printk("suspicious EBDA address: %x\n", address);
 		address = DEFAULT_EBDA_BEGIN;
 	}
 	printk("address of EBDA = %x\n", address);
-	return address;
+	return kernelLinearBegin + address;
 }
 
 uint8_t checksum(const void *data, size_t size){

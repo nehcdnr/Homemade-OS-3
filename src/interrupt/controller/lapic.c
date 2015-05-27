@@ -24,7 +24,7 @@ enum APICRegisterOffset{
 	LVT_LINT1 = 0x360
 };
 
-int isAPICSupported(void){return 0;
+int isAPICSupported(void){
 	static char result = 2;
 	if(result != 2)
 		return result;
@@ -50,8 +50,8 @@ static void apicSpuriousHandler(InterruptParam *param){
 
 static void setAPICSpurious(const uintptr_t base, InterruptVector *v){
 	MemoryMappedRegister svr = (MemoryMappedRegister)(base + SPURIOUS_VECTOR);
-	printk("SVR = %x\n", *svr);
 
+	printk("SVR = %x\n", *svr);
 	if(((*svr) & (1 << 8)) == 0){
 		printk("enable APIC in SVR\n");
 	}
@@ -225,8 +225,8 @@ void apic_interruptAllOther(PIC *pic, InterruptVector *vector){
 }
 
 // linear address of APIC_BASE
-#define APIC_PHYSICAL_BASE ((uintptr_t)0xfee00000)
-#define APIC_MAPPING_SIZE ((size_t)4096)
+#define LAPIC_PHYSICAL_BASE ((uintptr_t)0xfee00000)
+#define LAPIC_MAPPING_SIZE (PAGE_SIZE)
 static uintptr_t apicLinearBase;
 
 uint32_t getMemoryMappedLAPICID(void){
@@ -245,10 +245,10 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	uint32_t edx, eax;
 	rdmsr(IA32_APIC_BASE, &edx, &eax);
 	printk("IA32_APIC_BASE MSR = %x:%x\n", edx, eax);
-	if((edx & 0xf) != 0 || (eax & 0xfffff000) != APIC_PHYSICAL_BASE){
-		printk("relocate apic base address to %x", APIC_PHYSICAL_BASE);
+	if((edx & 0xf) != 0 || (eax & 0xfffff000) != LAPIC_PHYSICAL_BASE){
+		printk("relocate apic base address to %x", LAPIC_PHYSICAL_BASE);
 		edx = (edx & ~0xf);
-		eax = ((eax & ~0xfffff000) | APIC_PHYSICAL_BASE);
+		eax = ((eax & ~0xfffff000) | LAPIC_PHYSICAL_BASE);
 		wrmsr(IA32_APIC_BASE, edx, eax);
 	}
 	if(((eax >> 11) & 1) == 0){ // is APIC enabled
@@ -259,11 +259,10 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 
 	lapic->isBSP = ((eax >> 8) & 1);
 	if(lapic->isBSP){
-		PhysicalAddress apicPhysicalBase = {APIC_PHYSICAL_BASE};
-		apicLinearBase = (uintptr_t)mapKernelPage(apicPhysicalBase, APIC_MAPPING_SIZE);
+		PhysicalAddress apicPhysicalBase = {LAPIC_PHYSICAL_BASE};
+		apicLinearBase = (uintptr_t)mapKernelPage(apicPhysicalBase, LAPIC_MAPPING_SIZE);
 	}
 	lapic->linearBase = apicLinearBase;
-	assert(lapic->linearBase = (APIC_PHYSICAL_BASE & 0xfffff000));
 	lapic->lapicID = getMemoryMappedLAPICID();
 
 	if(lapic->isBSP){
@@ -271,6 +270,7 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 		lapicErrorVector = registerGeneralInterrupt(t, apicErrorHandler, (uintptr_t)lapic->lapicID);
 		lapicTimerVector = registerGeneralInterrupt(t, defaultInterruptHandler, (uintptr_t)lapic->lapicID);
 	}
+
 	setAPICSpurious(lapic->linearBase, lapicSpuriousVector);
 	setAPICError(lapic->linearBase, lapicErrorVector);
 	setAPICTimer(lapic->linearBase, lapicTimerVector);

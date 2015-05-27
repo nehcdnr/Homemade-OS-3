@@ -45,13 +45,13 @@ static Task *popBlockingQueue(struct Semaphore *s){
 }
 
 static void _acquireSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
+	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p);
 	acquireSemaphore(s);
 	sti();
 }
 
 static void _releaseSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p); // TODO: check parameter
+	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p);
 	releaseSemaphore(s);
 	sti();
 }
