@@ -20,13 +20,13 @@ typedef struct HeapManager{
 #define HEAP_ALLOCATION_LENGTH ((HEAP_MANAGER_SIZE - sizeof(struct HeapManager))/sizeof(struct HeapAllocation))
 
 static HeapManager *initHeapAllocationList(PageManager *p, uintptr_t heapBottom, HeapManager *nextHeap){
-	HeapManager *ha = (HeapManager*)heapBottom;
-	if(mapPage_L(p, ha, HEAP_MANAGER_SIZE, KERNEL_PAGE) == 0){
+	HeapManager *h = (HeapManager*)heapBottom;
+	if(mapPage_L(p, h, HEAP_MANAGER_SIZE, KERNEL_PAGE) == 0){
 		return INVALID_HEAP_ADDRESS;
 	}
-	ha->count = 0;
-	ha->next = nextHeap;
-	return ha;
+	h->count = 0;
+	h->next = nextHeap;
+	return h;
 }
 static uintptr_t heapAllocationEnd(HeapManager *ha){
 	if(ha->count > 0)
@@ -37,39 +37,46 @@ static uintptr_t heapAllocationEnd(HeapManager *ha){
 
 static HeapManager *addHeapAllocation(
 	PageManager *p,
-	HeapManager *ha,
+	HeapManager *h,
 	size_t size, PageAttribute attribute
 ){
 	struct HeapAllocation *newAllocation;
-	if(ha != INVALID_HEAP_ADDRESS && ha->count > 0 && ha->allocation[ha->count - 1].attribute == attribute){
-		newAllocation = &(ha->allocation[ha->count - 1]);
+	HeapManager *currentHeap = h;
+	if(h->count > 0 && h->allocation[h->count - 1].attribute == attribute){
+		newAllocation = &(h->allocation[h->count - 1]);
 	}
-	if(ha->count == HEAP_ALLOCATION_LENGTH){
-		HeapManager *newHeap = initHeapAllocationList(p, ha->allocation[ha->count-1].endAddress, ha);
-		if(newHeap == INVALID_HEAP_ADDRESS){
-			return INVALID_HEAP_ADDRESS;
+	else{
+		if(h->count == HEAP_ALLOCATION_LENGTH){
+			currentHeap = initHeapAllocationList(p, h->allocation[h->count-1].endAddress, h);
+			if(currentHeap == INVALID_HEAP_ADDRESS){
+				return INVALID_HEAP_ADDRESS;
+			}
 		}
-		newAllocation = newHeap->allocation + 0;
+		else{
+			currentHeap = h;
+		}
+		newAllocation = currentHeap->allocation + currentHeap->count;
 		newAllocation->beginAddress =
-		newAllocation->endAddress = heapAllocationEnd(newHeap);
+		newAllocation->endAddress = heapAllocationEnd(currentHeap);
 		newAllocation->attribute = attribute;
-		newHeap->count++;
+		currentHeap->count++;
 	}
 	int mapPageOK = mapPage_L(p, (void*)(newAllocation->endAddress), size, attribute);
 	// on failure, leave a new heapManger with count == 0
 	EXPECT(mapPageOK != 0);
 	newAllocation->endAddress += size;
-	return ha;
+
+	return currentHeap;
 
 	ON_ERROR;
 	return INVALID_HEAP_ADDRESS;
 }
 
-static HeapManager *removeHeapAllocation(PageManager *p, HeapManager *ha, uintptr_t size){
+static HeapManager *removeHeapAllocation(PageManager *p, HeapManager *h, uintptr_t size){
 	while(size != 0){
-		assert(ha != INVALID_HEAP_ADDRESS);
-		while(size != 0 && ha->count != 0){
-			struct HeapAllocation *al = ha->allocation + ha->count - 1;
+		assert(h != INVALID_HEAP_ADDRESS);
+		while(size != 0 && h->count != 0){
+			struct HeapAllocation *al = h->allocation + h->count - 1;
 			size_t releaseSize = (size < al->endAddress - al->beginAddress? size: al->endAddress - al->beginAddress);
 			al->endAddress -= releaseSize;
 			// if(al->attribute == ??)
@@ -77,16 +84,16 @@ static HeapManager *removeHeapAllocation(PageManager *p, HeapManager *ha, uintpt
 			size -= releaseSize;
 			assert((size == 0) || (al->endAddress == al->beginAddress));
 			if(al->endAddress == al->beginAddress){
-				ha->count--;
+				h->count--;
 			}
 		}
-		if(ha->count == 0){
-			HeapManager *ha2 = ha;
-			ha = ha->next;
+		if(h->count == 0){
+			HeapManager *ha2 = h;
+			h = h->next;
 			unmapPage_L(p, ha2, HEAP_MANAGER_SIZE);
 		}
 	}
-	return ha;
+	return h;
 }
 
 // TaskMemoryManager
@@ -125,10 +132,11 @@ int extendHeap(TaskMemoryManager *m, size_t size, PageAttribute attribute){
 	HeapManager *newHeap;
 	if(m->heapAllocation == INVALID_HEAP_ADDRESS){
 		newHeap = initHeapAllocationList(m->pageManager, m->userHeapBottom, INVALID_HEAP_ADDRESS);
+		if(newHeap == INVALID_HEAP_ADDRESS)
+			return 0;
+		m->heapAllocation = newHeap;
 	}
-	else{
-		newHeap = addHeapAllocation(m->pageManager, m->heapAllocation, size, attribute);
-	}
+	newHeap = addHeapAllocation(m->pageManager, m->heapAllocation, size, attribute);
 	if(newHeap == INVALID_HEAP_ADDRESS)
 		return 0;
 	m->heapAllocation = newHeap;

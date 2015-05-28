@@ -25,7 +25,7 @@ static void syncBarrier(SpinlockBarrier *b, int threadCount){
 	int continueFlag = 1;
 	while(continueFlag){
 		acquireLock(&b->lock);
-		if(b->count < threadCount){
+		if(b->count >= threadCount){
 			continueFlag = 0;
 		}
 		releaseLock(&b->lock);
@@ -70,7 +70,7 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 
 static void initMultiprocessor(
 	int isBSP, InterruptTable *t,
-	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){	return;//TODO: stack for AP
+	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
 	static SpinlockBarrier barrier1, barrier2;
 	if(isBSP){
 		resetBarrier(&barrier1);

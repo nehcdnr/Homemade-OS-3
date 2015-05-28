@@ -227,7 +227,8 @@ struct PageManager{
 
 PageManager *kernelPageManager = NULL;
 static uintptr_t kLinearBegin, kLinearEnd;
-
+// see entry.asm
+uint32_t kernelCR3;
 
 uint32_t toCR3(PageManager *p){
 	// bit 3: write through
@@ -412,6 +413,7 @@ static PhysicalAddress linearToPhysical(enum PhyscialMapping mapping, void *line
 		physical.value = (((uintptr_t)(linear)) - kLinearBegin);
 		break;
 	default:
+		physical.value = 0xffffffff;
 		panic("invalid argument");
 	}
 	return physical;
@@ -519,7 +521,8 @@ PageManager *initKernelPageTable(
 	);
 	initPageManagerPD(kernelPageManager, kLinearBegin, kernelLinearEnd, MAP_TO_KERNEL_RESERVED);
 	initPageManagerPT(kernelPageManager, manageBase, manageEnd, manageBase, MAP_TO_KERNEL_RESERVED);
-	setCR3(toCR3(kernelPageManager));
+	kernelCR3 = toCR3(kernelPageManager);
+	setCR3(kernelCR3);
 	setCR0PagingBit();
 	return kernelPageManager;
 }

@@ -201,7 +201,6 @@ static Task *createUserTask(
 	EXPECT(pageManager != NULL);
 	// 2. kernel stack for task
 	// TODO: use current page table, not kernel
-	printk("%x\n", (void*)targetStackBottom);
 	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(allocateStackOK != 0);
 	void *mappedStackBottom = mapKernelPagesFromExisting(pageManager, targetStackBottom, KERNEL_STACK_SIZE);

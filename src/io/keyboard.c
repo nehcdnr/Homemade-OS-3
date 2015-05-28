@@ -254,7 +254,7 @@ static void initKeyboard(void){
 void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	// interrupt
 	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);
-	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);printk("");
+	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
 	initMouse();
 	initKeyboard();
 	ps2.intFIFO = createFIFO(64);

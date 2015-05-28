@@ -66,10 +66,8 @@ void apEntry(void){
 	}
 	//initMultiprocessor();
 //printk("kernel memory usage: %u\n", getAllocatedSize());
-printk("start accepting interrupt...\n");
-
+	printk("start accepting interrupt...\n");
 	sti();
-	printk("halt...\n");
 
 	while(1){
 		//printk("main %d\n", cpuid_getInitialAPICID());

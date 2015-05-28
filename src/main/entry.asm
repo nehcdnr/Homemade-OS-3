@@ -95,13 +95,13 @@ initbssloop:
 
 ; --------set temporary page table--------
 entry4:
-	cmp BYTE [init_flag], 0
-	jne loadpage
-
 	mov esi, linear_pde_begin
 	mov edi, linear_pde_end
 	sub esi, _KERNEL_LINEAR_BEGIN_SYMBOL ; esi = physical_pde_begin
 	sub edi, _KERNEL_LINEAR_BEGIN_SYMBOL ; edi = physical_pde_end
+	cmp BYTE [init_flag], 0
+	jne loadpage
+
 	mov eax, esi
 	mov edx, 0
 initpdeloop:
@@ -116,10 +116,10 @@ nextpde:
 	cmp eax, edi
 	jne initpdeloop
 loadpage:
-	mov cr3, esi
 	mov eax, cr4
-	or eax, (1<<4) ; pse=1 allow 4MB page TODO
+	or eax, (1<<4) ; pse=1 allow 4MB page
 	mov cr4, eax
+	mov cr3, esi
 	mov eax, cr0
 	or eax, 0x80000000 ; paging=1
 	mov cr0, eax
@@ -146,7 +146,6 @@ loadgdt2:
 ; --------set stack registers if this is AP--------
 extern _bspEntry ; main.c
 extern _apEntry ; main.c
-extern _initialESP ; pic.c
 
 entry5:
 acquirelock:
@@ -163,12 +162,6 @@ waitlock:
 criticalsection:
 	mov ecx, [initnumber]
 	add DWORD [initnumber], 1
-	cmp ecx, 0
-	je releaselock
-initapstack:
-	mov ebx, [_initialESP]
-	mov esp, [ebx + ecx * 4]
-	mov ebp, esp
 
 releaselock:
 	mov eax, 1
@@ -176,13 +169,9 @@ releaselock:
 
 ; go to main.c
 	cmp ecx, 0
-	je bspinitalized
-	jmp _apEntry
-bspinitalized:
-	add esp, _KERNEL_LINEAR_BEGIN_SYMBOL
+	jne initapstack
 	mov BYTE [init_flag], 1
-
-	jmp _bspEntry
+	jmp initbspstack
 
 spinlock:
 	dd 1
@@ -223,6 +212,22 @@ physical_lgdtargument:
 linear_lgdtargument:
 	dw 0; limit
 	dd 0; base
+
+[SECTION .text]
+
+initbspstack: ; esp += KERNEL_LINEAR_BEGIN
+	add esp, _KERNEL_LINEAR_BEGIN_SYMBOL
+	jmp _bspEntry
+
+extern _initialESP ; pic.c
+extern _kernelCR3 ; page.c
+initapstack: ; esp = initialESP[ecx]
+	mov eax, [_kernelCR3]
+	mov cr3, eax
+	mov ebx, [_initialESP]
+	mov esp, [ebx + ecx * 4]
+	mov ebp, esp
+	jmp _apEntry
 
 [SECTION .bss]
 	align 4096
