@@ -538,12 +538,13 @@ static void sendINVLPG_disabled(
 
 struct INVLPGArguments{
 	// int finishCount;
-	uint32_t cr3;
-	uintptr_t linearAddress;
-	size_t size;
-	int isGlobal;
+	volatile uint32_t cr3;
+	volatile uintptr_t linearAddress;
+	volatile size_t size;
+	volatile int isGlobal;
+	SpinlockBarrier barrier;
 };
-volatile struct INVLPGArguments args;
+struct INVLPGArguments args;
 static InterruptVector *invlpgVector = NULL;
 static void (*sendINVLPG)(uint32_t cr3, uintptr_t linearAddress, size_t size) = sendINVLPG_disabled;
 
@@ -552,11 +553,14 @@ static void invlpgHandler(InterruptParam *p){
 		invlpgOrSetCR3(args.linearAddress, args.size);
 	}
 	getProcessorLocal()->pic->endOfInterrupt(p);
+	waitAtBarrier(&(args.barrier), 1); // do not wait for the thread generating this interrupt
 	sti();
 }
 
 static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t size){
 	static Spinlock lock = INITIAL_SPINLOCK;
+	// disabling interrupt during sendINVLPG may result in deadlock
+	assert(getEFlags().bit.interrupt == 1);
 	acquireLock(&lock);
 	{
 		PIC *pic = getProcessorLocal()->pic;
@@ -564,8 +568,10 @@ static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t siz
 		args.linearAddress = linearAddress;
 		args.size = size;
 		args.isGlobal = (linearAddress >= KERNEL_LINEAR_BEGIN? 1: 0);
+		resetBarrier(&(args.barrier));
 		pic->interruptAllOther(pic, invlpgVector);
 		invlpgOrSetCR3(linearAddress, size);
+		waitAtBarrier(&(args.barrier), pic->numberOfProcessors); // see invlpgHandler
 	}
 	releaseLock(&lock);
 }
@@ -628,7 +634,7 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	return NULL;
 }
 
-// assume the page manager remains only reservedBase ~ reservedEnd; the other pages does not need to be released
+// assume the page manager remains only reservedBase ~ reservedEnd; the other pages do not need to be released
 void deleteUserPageTable(PageManager *p){
 	assert(getCR3() == p->physicalPD.value);
 	PhysicalAddress reservedPhysical[MAX_USER_RESERVED_PAGES];

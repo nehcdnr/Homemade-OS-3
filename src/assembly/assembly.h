@@ -8,6 +8,7 @@
 #define cli() do{__asm__("cli\n");}while(0)
 #define sti() do{__asm__("sti\n");}while(0)
 #define nop() do{__asm__("nop\n");}while(0)
+#define pause() do{__asm__("pause\n");}while(0)
 
 uint16_t getCS(void);
 uint16_t getDS(void);

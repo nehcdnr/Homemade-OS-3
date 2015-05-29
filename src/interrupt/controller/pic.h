@@ -9,6 +9,7 @@ typedef struct InterruptController{
 		APIC *apic;
 		PIC8259 *pic8259;
 	};
+	int numberOfProcessors;
 	InterruptVector *(*irqToVector)(struct InterruptController *pic, enum IRQ irq);
 	void (*setPICMask)(struct InterruptController *pic, enum IRQ irq, int setMask);
 	void (*endOfInterrupt)(InterruptParam *p);

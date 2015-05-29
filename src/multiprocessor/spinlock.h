@@ -1,5 +1,7 @@
 #include<std.h>
 
+// spinlock
+
 typedef struct Spinlock{
 	volatile uint8_t acquirable;
 	uint8_t interruptFlag;
@@ -13,3 +15,13 @@ extern const Spinlock nullSpinlock;
 int isAcquirable(Spinlock *spinlock);
 int acquireLock(Spinlock *spinlock);
 void releaseLock(Spinlock *spinlock);
+
+// barrier
+
+typedef struct SpinlockBarrier{
+	Spinlock lock;
+	volatile int count;
+}SpinlockBarrier;
+
+void resetBarrier(SpinlockBarrier *b);
+void waitAtBarrier(SpinlockBarrier *b, int threadCount);

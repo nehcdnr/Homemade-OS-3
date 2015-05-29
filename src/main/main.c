@@ -61,13 +61,14 @@ void apEntry(void){
 	local->taskManager = taskManager;
 	// 10. driver
 	initLocalTimer(local->pic, global.idt, createTimer());
+
+	//printk("kernel memory usage: %u\n", getAllocatedSize());
+	printk("start accepting interrupt...\n");
+	sti();
+
 	if(isBSP){
 		initService(local->pic, global.syscallTable);
 	}
-	//initMultiprocessor();
-//printk("kernel memory usage: %u\n", getAllocatedSize());
-	printk("start accepting interrupt...\n");
-	sti();
 
 	while(1){
 		//printk("main %d\n", cpuid_getInitialAPICID());

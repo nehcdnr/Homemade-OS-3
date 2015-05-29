@@ -85,6 +85,7 @@ static void pic8259_interruptAllOther(
 PIC8259 *initPIC8259(InterruptTable *t){
 	PIC8259 *NEW(pic);
 	pic->this.pic8259 = pic;
+	pic->this.numberOfProcessors = 1;
 	pic->this.endOfInterrupt = pic8259_endOfInterrupt;
 	pic->this.irqToVector = pic8259_irqToVector;
 	pic->this.setPICMask = pic8259_setPICMask;

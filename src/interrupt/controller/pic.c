@@ -8,30 +8,6 @@
 // see entry.asm
 uintptr_t *initialESP = NULL;
 
-typedef struct SpinlockBarrier{
-	Spinlock lock;
-	volatile int count;
-}SpinlockBarrier;
-
-static void resetBarrier(SpinlockBarrier *b){
-	b->lock = initialSpinlock;
-	b->count = 0;
-}
-
-static void syncBarrier(SpinlockBarrier *b, int threadCount){
-	acquireLock(&b->lock);
-	b->count++;
-	releaseLock(&b->lock);
-	int continueFlag = 1;
-	while(continueFlag){
-		acquireLock(&b->lock);
-		if(b->count >= threadCount){
-			continueFlag = 0;
-		}
-		releaseLock(&b->lock);
-	}
-}
-
 #define KERNEL_STACK_SIZE (8192)
 static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
 	const uint32_t lapicID = getLAPICID(lapic);
@@ -78,12 +54,12 @@ static void initMultiprocessor(
 		wakeupOtherProcessors(lapic, ioapic, timer);
 	}
 	// synchronize
-	syncBarrier(&barrier1, getNumberOfLAPIC(ioapic));
+	waitAtBarrier(&barrier1, getNumberOfLAPIC(ioapic));
 	if(isBSP){
 		assert(t == global.idt);
 		initMultiprocessorPaging(t);
 	}
-	syncBarrier(&barrier2, getNumberOfLAPIC(ioapic));
+	waitAtBarrier(&barrier2, getNumberOfLAPIC(ioapic));
 }
 
 PIC *castAPIC(APIC *apic){
@@ -135,12 +111,10 @@ PIC *createPIC(InterruptTable *t){
 	if(isBSP(lapic)){
 		disablePIC8259();
 		ioapic = initAPIC(t);
-		apic->ioapic = ioapic;
 		printk("number of processors = %d\n", getNumberOfLAPIC(ioapic));
 	}
-	else{
-		apic->ioapic = ioapic;
-	}
+	apic->ioapic = ioapic;
+	apic->this.numberOfProcessors = getNumberOfLAPIC(ioapic);
 	return castAPIC(apic);
 }
 

@@ -31,7 +31,7 @@ int acquireLock(Spinlock *spinlock){
 			sti();
 		do{
 			tryCount++;
-			__asm__("pause\n");
+			pause();
 		}while(spinlock->acquirable == NOT_ACQUIRABLE);
 	}
 }
@@ -56,3 +56,26 @@ void testSpinlock(void){
 }
 #endif
 */
+
+// barrier
+
+void resetBarrier(SpinlockBarrier *b){
+	b->lock = initialSpinlock;
+	b->count = 0;
+}
+
+void waitAtBarrier(SpinlockBarrier *b, int threadCount){
+	acquireLock(&b->lock);
+	b->count++;
+	releaseLock(&b->lock);
+	int continueFlag = 1;
+	while(continueFlag){
+		acquireLock(&b->lock);
+		if(b->count >= threadCount){
+			continueFlag = 0;
+		}
+		releaseLock(&b->lock);
+		pause();
+	}
+}
+
