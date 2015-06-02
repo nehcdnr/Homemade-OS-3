@@ -552,7 +552,7 @@ static void invlpgHandler(InterruptParam *p){
 	if(args.isGlobal || args.cr3 == getCR3()){
 		invlpgOrSetCR3(args.linearAddress, args.size);
 	}
-	getProcessorLocal()->pic->endOfInterrupt(p);
+	processorLocalPIC()->endOfInterrupt(p);
 	waitAtBarrier(&(args.barrier), 1); // do not wait for the thread generating this interrupt
 	sti();
 }
@@ -563,7 +563,7 @@ static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t siz
 	assert(getEFlags().bit.interrupt == 1);
 	acquireLock(&lock);
 	{
-		PIC *pic = getProcessorLocal()->pic;
+		PIC *pic = processorLocalPIC();
 		args.cr3 = cr3;
 		args.linearAddress = linearAddress;
 		args.size = size;

@@ -14,8 +14,7 @@ void kernelSleep(TimerEventList *tel, unsigned millisecond);
 typedef struct ConsoleDisplay ConsoleDisplay;
 int printConsole(ConsoleDisplay *cd, const char *s);
 ConsoleDisplay *initKernelConsole(void);
+void vbeDriver(void);
 
 // keyboard.c
-typedef struct InterruptController PIC;
-typedef struct SystemCallTable SystemCallTable;
-void initPS2Driver(PIC *pic, SystemCallTable *syscallTable);
+void ps2Driver(void);

@@ -22,6 +22,7 @@ typedef struct ProcessorLocal ProcessorLocal;
 // use PIC8259 or APIC
 PIC *createPIC(InterruptTable *t);
 
+// see page.c
 void initMultiprocessorPaging(InterruptTable *t);
 
 void initLocalTimer(PIC *pic, InterruptTable *t, TimerEventList *timer);

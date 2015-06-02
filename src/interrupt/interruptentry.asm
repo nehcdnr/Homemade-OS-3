@@ -65,17 +65,17 @@ _intEntriesAddress:
 	dd _intEntries ; operand: _intEntries
 
 	add eax, edx
-	push DWORD 0
+	push DWORD 0 ; TODO: remove this
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
 	mov edx, esp
 	push edx ; &InterruptParam
 	call [eax + 4] ; handler
 
+; see taskmanager.c.h
+global _returnFromInterrupt
+_returnFromInterrupt:
 	cli
-; see task.h
-global _startVirtual8086Mode
-_startVirtual8086Mode:
 	add esp, 16
 	pop gs
 	pop fs

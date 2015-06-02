@@ -9,12 +9,19 @@
 #include"task/task.h"
 #include"assembly/assembly.h"
 #include"io/io.h"
-#include"io/bios.h"
 
 void bspEntry(void);
 void apEntry(void);
 
 SystemGlobal global;
+
+static void initService(void){
+	Task *t;
+	t = createKernelTask(ps2Driver);
+	resume(t);
+	t = createKernelTask(vbeDriver);
+	resume(t);
+}
 
 void bspEntry(void){
 	// 1. memory
@@ -23,11 +30,6 @@ void bspEntry(void){
 	initKernelConsole();
 	//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
 	apEntry();
-}
-
-static void initService(PIC *pic, SystemCallTable *syscallTable){
-	initPS2Driver(pic, syscallTable);
-	initVideoDriver(syscallTable);
 }
 
 void apEntry(void){
@@ -54,22 +56,17 @@ void apEntry(void){
 	// 7. PIC
 	PIC *pic = createPIC(global.idt);
 	// 8. processorLocal
-	initProcessorLocal();
-	ProcessorLocal *local = getProcessorLocal();
-	local->pic = pic;
-	local->gdt = gdt;
-	local->taskManager = taskManager;
+	setProcessorLocal(pic, gdt, taskManager);
 	// 10. driver
-	initLocalTimer(local->pic, global.idt, createTimer());
+	initLocalTimer(pic, global.idt, createTimer());
 
 	//printk("kernel memory usage: %u\n", getAllocatedSize());
 	printk("start accepting interrupt...\n");
 	sti();
 
 	if(isBSP){
-		initService(local->pic, global.syscallTable);
+		initService();
 	}
-
 	while(1){
 		//printk("main %d\n", cpuid_getInitialAPICID());
 		hlt();

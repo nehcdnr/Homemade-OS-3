@@ -160,7 +160,6 @@ static void writeData(uint16_t port, uint8_t data){
 
 typedef struct PS2Data{
 	FIFO *intFIFO, *sysFIFO;
-	Task *driver;
 }PS2Data;
 
 // ps2Handler -> ps2Driver -> keyboardInput ->syscall_keyboard
@@ -172,7 +171,7 @@ static void ps2Handler(InterruptParam *p){
 		PS2Data *ps2 = (PS2Data*)(p->argument);
 		writeFIFO(ps2->intFIFO, (status | (data << 8)));
 	}
-	getProcessorLocal()->pic->endOfInterrupt(p);
+	processorLocalPIC()->endOfInterrupt(p);
 	sti();
 }
 
@@ -197,26 +196,6 @@ static void keyboardInput(uint8_t data, PS2Data *ps2Data){
 	if(key != NO_KEY && key < 128 && release == 0){
 		overwriteFIFO(ps2Data->sysFIFO, key);
 		printk("%c", key);
-	}
-}
-
-static PS2Data ps2 = {NULL, NULL, NULL};
-
-static void ps2Driver(void){
-	while(1){
-		uintptr_t ds;
-		uint8_t data, status;
-		if(readFIFO(ps2.intFIFO, &ds) == 0){
-			panic("ps2 intFIFO");
-		}
-		data = ((ds >> 8) & 0xff);
-		status = (ds & 0xff);
-		if(status & DATA_FROM_MOUSE_FLAG){
-			mouseInput(data);
-		}
-		else{
-			keyboardInput(data, &ps2);
-		}
 	}
 }
 
@@ -251,7 +230,12 @@ static void initKeyboard(void){
 	}
 }
 
-void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
+static PS2Data ps2 = {NULL, NULL};
+
+typedef struct InterruptController PIC;
+typedef struct SystemCallTable SystemCallTable;
+
+static void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	// interrupt
 	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);
 	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
@@ -259,8 +243,6 @@ void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	initKeyboard();
 	ps2.intFIFO = createFIFO(64);
 	ps2.sysFIFO = createFIFO(128);
-	ps2.driver = createKernelTask(ps2Driver);
-	resume(ps2.driver);
 
 	setHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
 	setHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
@@ -269,4 +251,23 @@ void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	// system call
 	registerSystemService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard, (uintptr_t)&ps2);
 	registerSystemService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse, (uintptr_t)&ps2);
+}
+
+void ps2Driver(void){
+	initPS2Driver(processorLocalPIC(), global.syscallTable);
+	while(1){
+		uintptr_t ds;
+		uint8_t data, status;
+		if(readFIFO(ps2.intFIFO, &ds) == 0){
+			panic("ps2 intFIFO");
+		}
+		data = ((ds >> 8) & 0xff);
+		status = (ds & 0xff);
+		if(status & DATA_FROM_MOUSE_FLAG){
+			mouseInput(data);
+		}
+		else{
+			keyboardInput(data, &ps2);
+		}
+	}
 }

@@ -46,7 +46,8 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 
 static void initMultiprocessor(
 	int isBSP, InterruptTable *t,
-	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
+	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer
+){
 	static SpinlockBarrier barrier1, barrier2;
 	if(isBSP){
 		resetBarrier(&barrier1);
@@ -66,36 +67,10 @@ PIC *castAPIC(APIC *apic){
 	return &apic->this;
 }
 
-static ProcessorLocal *lapicToProcLocal = NULL;
-GetProcessorLocal getProcessorLocal = NULL;
-
-static ProcessorLocal *getProcessorLocalByLAPIC(void){
-	assert(getEFlags().bit.interrupt == 0);
-	uint32_t id = getMemoryMappedLAPICID();
-	return &lapicToProcLocal[id];
-}
-
-static ProcessorLocal *getProcessorLocal0(void){
-	return &lapicToProcLocal[0];
-}
-
-GetProcessorLocal initProcessorLocal(void){
-	if(lapicToProcLocal == NULL){
-		NEW_ARRAY(lapicToProcLocal, MAX_LAPIC_ID);
-		memset(lapicToProcLocal, 0, MAX_LAPIC_ID * sizeof(lapicToProcLocal[0]));
-	}
-	if(isAPICSupported() == 0){
-		getProcessorLocal = getProcessorLocal0;
-	}
-	else{
-		getProcessorLocal = getProcessorLocalByLAPIC;
-	}
-	return getProcessorLocal;
-}
-
 PIC *createPIC(InterruptTable *t){
 	if(isAPICSupported() == 0){
 		PIC8259 *pic8259 = initPIC8259(t);
+		initProcessorLocal(1);
 		return castPIC8259(pic8259);
 	}
 	static IOAPIC *ioapic = NULL;
@@ -112,6 +87,7 @@ PIC *createPIC(InterruptTable *t){
 		disablePIC8259();
 		ioapic = initAPIC(t);
 		printk("number of processors = %d\n", getNumberOfLAPIC(ioapic));
+		initProcessorLocal(MAX_LAPIC_ID); //
 	}
 	apic->ioapic = ioapic;
 	apic->this.numberOfProcessors = getNumberOfLAPIC(ioapic);

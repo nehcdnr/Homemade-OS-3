@@ -1,17 +1,20 @@
 #ifndef PROCESSORLOCAL_H_
 //#define PROCESSORLOCAL_H_
+typedef struct SegmentTable SegmentTable;
+typedef struct InterruptController PIC;
+typedef struct TaskManager TaskManager;
+typedef struct Task Task;
+// processorlocal.c
+struct InterruptController *processorLocalPIC(void);
+SegmentTable *processorLocalGDT(void);
+TaskManager *processorLocalTaskManager(void);
+Task *processorLocalTask(void);
 
-typedef struct ProcessorLocal{
-	struct SegmentTable *gdt;
-	struct InterruptController *pic;
-	struct TaskManager *taskManager;
-}ProcessorLocal;
+void initProcessorLocal(uint32_t maxProcessorCount);
+void setProcessorLocal(PIC *pic, SegmentTable *gdt, TaskManager *taskManager);
 
 // see pic.c
-typedef ProcessorLocal *(*GetProcessorLocal)(void);
-extern GetProcessorLocal getProcessorLocal;
-
-GetProcessorLocal initProcessorLocal(void);
+uint32_t getMemoryMappedLAPICID(void);
 
 typedef struct SystemGlobal{
 	struct InterruptTable *idt;

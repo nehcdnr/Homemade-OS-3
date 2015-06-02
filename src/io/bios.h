@@ -12,5 +12,3 @@ void *searchStructure(
 	uintptr_t searchBegin,
 	uintptr_t searchEnd
 );
-typedef struct SystemCallTable SystemCallTable;
-void initVideoDriver(SystemCallTable *systemCallTable);

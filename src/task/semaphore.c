@@ -60,22 +60,23 @@ void acquireSemaphore(Semaphore *s){
 	TaskManager *tm;
 	BlockingTask *NEW(w);
 assert(w!=NULL); // TODO: terminate?
-	assert(w != NULL);
 	int acquired;
 	cli();
 	acquireLock(&s->lock);
-	tm = getProcessorLocal()->taskManager;
+	tm = processorLocalTaskManager();
 	if(s->quota > 0){
 		s->quota--;
 		acquired = 1;
 	}
 	else{
-		pushBlockingQueue(s, w, suspendCurrent(tm));
+		Task *current = currentTask(tm);
+		suspend(current);
+		pushBlockingQueue(s, w, current);
 		acquired = 0;
 	}
 	releaseLock(&s->lock);
 	if(acquired == 0){
-		schedule(getProcessorLocal()->taskManager);
+		schedule(tm);
 	}
 	sti();
 	DELETE(w);

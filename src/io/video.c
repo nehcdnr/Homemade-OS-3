@@ -169,18 +169,12 @@ enum VBEFunction{
 };
 
 // TODO: paging & dynamic allocate stack
-#define V8086_STACK_TOP (0x4000)
 typedef struct Video{
 	FIFO *biosFIFO;
 }Video;
 static Video video = {NULL};
 
 static enum VBEFunction lastData = NO_FUNCTION;
-
-void callBIOS(void);
-static void startVBETask(void){
-	switchToVirtual8086Mode(callBIOS, V8086_STACK_TOP - 4);
-}
 
 // VBE 2.0
 typedef struct{
@@ -201,13 +195,13 @@ static_assert(sizeof(VBEInfo) == 512);
 
 static void getVBEInfo_in(InterruptParam *p){
 	p->regs.eax = 0x4f00;
-	p->es8086 = (V8086_STACK_TOP >> 4);
-	p->regs.edi = (V8086_STACK_TOP & 0xf);
-	memcpy((void*)V8086_STACK_TOP, "    ", 4);
+	p->es8086 = (V8086_STACK_BOTTOM >> 4);
+	p->regs.edi = (V8086_STACK_BOTTOM & 0xf);
+	memcpy((void*)V8086_STACK_BOTTOM, "    ", 4);
 }
 
 static void getVBEInfo_out(__attribute__((__unused__)) InterruptParam *p){
-	VBEInfo *vbeInfo = (VBEInfo*)V8086_STACK_TOP;
+	VBEInfo *vbeInfo = (VBEInfo*)V8086_STACK_BOTTOM;
 	printk("VBE version = %x\n", p->regs.eax, vbeInfo->version);
 	/* the virtual machines does not provide complete VBEInfo
 	uint16_t * modePtr;
@@ -270,12 +264,12 @@ static_assert(sizeof(struct VBEModeInfo) == 256);
 static void getVBEModeInfo_in(InterruptParam *p){
 	p->regs.eax = 0x4f01;
 	p->regs.ecx = TEST_MODE_NO;
-	p->es8086 = (V8086_STACK_TOP >> 4);
-	p->regs.edi = (V8086_STACK_TOP & 0xf);
+	p->es8086 = (V8086_STACK_BOTTOM >> 4);
+	p->regs.edi = (V8086_STACK_BOTTOM & 0xf);
 }
 
 static void getVBEModeInfo_out(__attribute__((__unused__)) InterruptParam *p){
-	struct VBEModeInfo *info = (void*)V8086_STACK_TOP;
+	struct VBEModeInfo *info = (void*)V8086_STACK_BOTTOM;
 	printk("granularity = %u KB\n", info->windowGranularity);
 	printk("window A segment = %x\n", info->windowAStartSegment);
 	printk("window B segment = %x\n", info->windowBStartSegment);
@@ -391,15 +385,20 @@ static void syscall_video(InterruptParam *p){
 	}
 }
 
-void initVideoDriver(SystemCallTable *systemCallTable){
+// see virtual8086.asm
+void callBIOS(void);
+
+void vbeDriver(void){
 	video.biosFIFO = createFIFO(32);
-	Task *t = createKernelTask(startVBETask);
-	setTaskSystemCall(t, setVBEArgument, (uintptr_t)&video);
+	setTaskSystemCall(processorLocalTask(), setVBEArgument, (uintptr_t)&video);
 	writeFIFO(video.biosFIFO, GET_VBE_INFO);
 	writeFIFO(video.biosFIFO, GET_VBE_MODE_INFO);
 	//writeFIFO(video.biosFIFO, SET_VBE_MODE);
 	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_WINDOW);
 	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
-	registerSystemService(systemCallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
-	resume(t);
+	registerSystemService(global.syscallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
+
+	if(switchToVirtual8086Mode(callBIOS) == 0){
+		panic("switch to v8086 error");//TODO: terminate task
+	}
 }
