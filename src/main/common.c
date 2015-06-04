@@ -63,7 +63,7 @@ char *strncpy(char *dst, const char *src, size_t n){
 	return dst;
 }
 
-int printString(const char *s);
+int printString(const char *s, size_t length);
 
 static int printHexadecimal(unsigned n){
 	char s[12];
@@ -74,7 +74,7 @@ static int printHexadecimal(unsigned n){
 		s[a] = (b >= 10? b - 10 + 'a': b + '0');
 		n = (n >> 4);
 	}
-	return printString(s);
+	return printString(s, 8);
 }
 
 static int printUnsigned(unsigned n){
@@ -87,13 +87,13 @@ static int printUnsigned(unsigned n){
 		s[a] = (n % 10) + '0';
 		n /= 10;
 	}while(n != 0);
-	return printString(s + a);
+	return printString(s + a, 12 - a);
 }
 
 static int printSigned(int n){
 	int printMinus = 0;
 	if(n < 0){
-		printString("-");
+		printString("-", 1);
 		printMinus = 1;
 		n = -n;
 	}
@@ -104,7 +104,7 @@ static int printCharacter(int c){
 	char t[4];
 	t[0] = (char)c;
 	t[1] = '\0';
-	return printString(t);
+	return printString(t, 1);
 }
 
 int printk(const char* format, ...){
@@ -123,7 +123,7 @@ int printk(const char* format, ...){
 			char s[4];
 			s[0] = format[i];
 			s[1] = '\0';
-			printCount += printString(s);
+			printCount += printString(s, 1);
 			continue;
 		}
 		if(format[i] >= '0' && format[i] <= '9'){
@@ -133,7 +133,7 @@ int printk(const char* format, ...){
 		percentFlag = 0;
 		switch(format[i]){
 		case '%':
-			printCount += printString("%");
+			printCount += printString("%", 1);
 			break;
 		case 'd':
 			printCount += printSigned(va_arg(argList, int));
@@ -145,7 +145,10 @@ int printk(const char* format, ...){
 			printCount += printUnsigned(va_arg(argList, unsigned));
 			break;
 		case 's':
-			printCount += printString(va_arg(argList, const char*));
+			{
+				const char *string  = va_arg(argList, const char*);
+				printCount += printString(string, strlen(string));
+			}
 			break;
 		case 'c':
 			/*char is promoted to int when passed through ...*/

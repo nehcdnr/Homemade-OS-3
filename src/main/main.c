@@ -21,6 +21,8 @@ static void initService(void){
 	resume(t);
 	t = createKernelTask(vbeDriver);
 	resume(t);
+	t = createKernelTask(kernelConsoleService);
+	resume(t);
 }
 
 void bspEntry(void){

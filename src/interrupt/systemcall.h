@@ -22,14 +22,15 @@ enum SystemCall{
 typedef InterruptHandler SystemCallFunction;
 
 // see interruptdescriptor.c
-void systemCall0(/*enum SystemCall*/int systemCallNumber);
-void systemCall1(int systemCallNumber, uintptr_t param0);
+uint32_t systemCall0(/*enum SystemCall*/int systemCallNumber);
+uint32_t systemCall1(int systemCallNumber, uintptr_t arg0);
+uint32_t systemCall2(int systemCallNumber, uintptr_t arg0, uintptr_t arg1);
+uint32_t systemCall3(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2);
 #define SYSTEM_CALL_ARGUMENT_0(P) ((P)->regs.edx)
 #define SYSTEM_CALL_ARGUMENT_1(P) ((P)->regs.ecx)
 #define SYSTEM_CALL_ARGUMENT_2(P) ((P)->regs.ebx)
 
 #define SYSTEM_CALL_RETURN_VALUE_0(P) ((P)->regs.eax)
-#define SYSTEM_CALL_RETURN_VALUE_1(P) ((P)->regs.edx)
 
 typedef struct SystemCallTable SystemCallTable;
 // reserved system call
@@ -41,23 +42,22 @@ void registerSystemCall(
 );
 // runtime registration system call
 enum ServiceNameError{
-	SUCCESS,
-	INVALID_NAME,
+	INVALID_NAME = -1024,
 	SERVICE_EXISTING,
 	SERVICE_NOT_EXISTING,
-	TOO_MANY_SERVICE,
+	TOO_MANY_SERVICES,
 };
 #define MAX_NAME_LENGTH (16)
-enum ServiceNameError registerSystemService(
+// return system call number
+int registerSystemService(
 	SystemCallTable *systemCallTable,
 	const char *name,
 	SystemCallFunction func,
 	uintptr_t arg
 );
-enum ServiceNameError querySystemService(
+int querySystemService(
 	SystemCallTable *systemCallTable,
-	const char *name,
-	unsigned int *syscallNumber
+	const char *name
 );
 
 typedef struct InterruptTable InterruptTable;
@@ -66,5 +66,6 @@ SystemCallTable *initSystemCall(InterruptTable *t);
 #define KEYBOARD_SERVICE_NAME ("keyboard")
 #define MOUSE_SERVICE_NAME ("mouse")
 #define VIDEO_SERVICE_NAME ("video")
+#define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
 
 #endif

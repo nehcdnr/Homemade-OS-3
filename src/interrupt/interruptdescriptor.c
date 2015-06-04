@@ -124,20 +124,44 @@ InterruptVector *getVector(InterruptVector *base, int irq){
 	return base + irq;
 }
 
-void systemCall0(int systemCallNumber){
+uint32_t systemCall0(int systemCallNumber){
+	uint32_t r;
 	__asm__(
 	"int $"SYSTEM_CALL_VECTOR_STRING
-	:
+	:"=a"(r)
 	:"a"(systemCallNumber)
 	);
+	return r;
 }
 
-void systemCall1(int systemCallNumber, uintptr_t param0){
+uint32_t systemCall1(int systemCallNumber, uintptr_t arg0){
+	uint32_t r;
 	__asm__(
 	"int $"SYSTEM_CALL_VECTOR_STRING
-	:
-	:"a"(systemCallNumber), "d"(param0)
+	:"=a"(r)
+	:"a"(systemCallNumber), "d"(arg0)
 	);
+	return r;
+}
+
+uint32_t systemCall2(int systemCallNumber, uintptr_t arg0, uintptr_t arg1){
+	uint32_t r;
+	__asm__(
+	"int $"SYSTEM_CALL_VECTOR_STRING
+	:"=a"(r)
+	:"a"(systemCallNumber), "d"(arg0), "c"(arg1)
+	);
+	return r;
+}
+
+uint32_t systemCall3(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2){
+	uint32_t r;
+	__asm__(
+	"int $"SYSTEM_CALL_VECTOR_STRING
+	:"=a"(r)
+	:"a"(systemCallNumber), "d"(arg0), "c"(arg1), "b"(arg2)
+	);
+	return r;
 }
 
 uint8_t toChar(InterruptVector *v){

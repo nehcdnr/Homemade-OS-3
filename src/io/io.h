@@ -10,10 +10,11 @@ TimerEventList *createTimer(void);
 void replaceTimerHandler(TimerEventList *tel, InterruptVector *v);
 void kernelSleep(TimerEventList *tel, unsigned millisecond);
 
+//console.h
+void initKernelConsole(void);
+void kernelConsoleService(void);
+
 // video.c
-typedef struct ConsoleDisplay ConsoleDisplay;
-int printConsole(ConsoleDisplay *cd, const char *s);
-ConsoleDisplay *initKernelConsole(void);
 void vbeDriver(void);
 
 // keyboard.c

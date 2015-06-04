@@ -176,7 +176,6 @@ static void ps2Handler(InterruptParam *p){
 }
 
 static void syscall_keyboard(InterruptParam *p){
-	printk("%d\n",p->regs.eax);
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
@@ -195,7 +194,6 @@ static void keyboardInput(uint8_t data, PS2Data *ps2Data){
 	unsigned int key = scanCodeToKey(data, &release);
 	if(key != NO_KEY && key < 128 && release == 0){
 		overwriteFIFO(ps2Data->sysFIFO, key);
-		printk("%c", key);
 	}
 }
 
