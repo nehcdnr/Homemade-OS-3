@@ -32,7 +32,7 @@ void registerSystemCall(
 	releaseLock(&s->lock);
 }
 
-static int _querySystemService(struct SystemCallTable *s, const char *name){
+static int querySystemServiceIndex(struct SystemCallTable *s, const char *name){
 	unsigned int i;
 	for(i = SYSCALL_SERVICE_BEGIN; i < s->usedCount; i++){
 		if(strncmp(name, s->entry[i].name, MAX_NAME_LENGTH) == 0){
@@ -62,7 +62,7 @@ enum ServiceNameError registerSystemService(
 	}
 	int r;
 	acquireLock(&systemCallTable->lock);
-	if(_querySystemService(systemCallTable, name) < NUMBER_OF_SYSTEM_CALLS){
+	if(querySystemServiceIndex(systemCallTable, name) < NUMBER_OF_SYSTEM_CALLS){
 		r = SERVICE_EXISTING;
 	}
 	else{
@@ -90,7 +90,7 @@ int querySystemService(SystemCallTable *systemCallTable, const char *name){
 		return INVALID_NAME;
 	}
 	acquireLock(&systemCallTable->lock);
-	r = _querySystemService(systemCallTable, name);
+	r = querySystemServiceIndex(systemCallTable, name);
 	releaseLock(&systemCallTable->lock);
 
 	if(r < NUMBER_OF_SYSTEM_CALLS){

@@ -4,6 +4,7 @@
 #include"interrupt/controller/pic.h"
 #include"multiprocessor/processorlocal.h"
 #include"io.h"
+#include"keyboard.h"
 #include"task/task.h"
 #include"common.h"
 #include"fifo.h"
@@ -30,33 +31,7 @@ static void mouseInput(uint8_t newData){
 	prev0 = data[0];
 	state = 0;
 }
-enum SpecialKey{
-	NO_KEY = 0,
-	BACKSPACE = 8,
-	ENTER = '\n',
-	ESC = 27,
-	CAPS_LOCK = 256,
-	SCROLL_LOCK,
-	NUM_LOCK,
-	INSERT,
-	BREAK,
-	HOME, END,
-	PAGE_UP, PAGE_DOWN,
-	UP, DOWN, LEFT, RIGHT,
-	F1, F2, F3, F4, F5, F6,
-	F7, F8, F9, F10, F11, F12,
-	LEFT_SHIFT, RIGHT_SHIFT,
-	LEFT_CTRL, RIGHT_CTRL,
-	LEFT_ALT, RIGHT_ALT,
-	LEFT_GUI, RIGHT_GUI,
-	APP,
-	PAD_ASTERISK, PAD_DIVIDE, PAD_PLUS, PAD_MINUS,
-	PAD_0, PAD_1, PAD_2, PAD_3, PAD_4,
-	PAD_5, PAD_6, PAD_7, PAD_8, PAD_9,
-	PAD_ENTER, PAD_DOT,
-	PRINT_SCREEN,
-	PAUSE
-};
+
 static const unsigned short scan1[][2] = {
 	{ESC, 0x01}, {F1, 0x3b}, {F2, 0x3c}, {F3, 0x3d}, {F4, 0x3e},
 	{F5, 0x3f}, {F6, 0x40}, {F7, 0x41}, {F8, 0x42}, {F9, 0x43},
