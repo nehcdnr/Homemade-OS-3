@@ -87,7 +87,7 @@ static int printUnsigned(unsigned n){
 		s[a] = (n % 10) + '0';
 		n /= 10;
 	}while(n != 0);
-	return printString(s + a, 12 - a);
+	return printString(s + a, 11 - a);
 }
 
 static int printSigned(int n){

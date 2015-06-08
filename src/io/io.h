@@ -19,3 +19,6 @@ void vbeDriver(void);
 
 // keyboard.c
 void ps2Driver(void);
+
+// pci.c
+void pciDriver(void);

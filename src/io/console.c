@@ -184,7 +184,7 @@ static int printHandler(char *cmdLine, int index, int key){
 	if(index >= MAX_COMMAND_LINE_LENGTH - 1){
 		return index;
 	}
-	if(key > 256){
+	if(key >= 256){
 		key = '?';
 	}
 	cmdLine[index] = (key & 0xff);

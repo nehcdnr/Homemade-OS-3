@@ -16,13 +16,15 @@ void apEntry(void);
 SystemGlobal global;
 
 static void initService(void){
+	void (*services[])(void) = {
+		ps2Driver, /*vbeDriver, */kernelConsoleService, pciDriver
+	};
+	unsigned int i;
 	Task *t;
-	t = createKernelTask(ps2Driver);
-	resume(t);
-	t = createKernelTask(vbeDriver);
-	resume(t);
-	t = createKernelTask(kernelConsoleService);
-	resume(t);
+	for(i = 0; i < LENGTH_OF(services); i++){
+		t = createKernelTask(services[i]);
+		resume(t);
+	}
 }
 
 void bspEntry(void){
