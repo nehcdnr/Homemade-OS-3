@@ -20,15 +20,19 @@ int acquireLock(Spinlock *spinlock){
 	if(spinlock->acquirable == IGNORED){
 		return 0;
 	}
-	spinlock->interruptFlag = (getEFlags().bit.interrupt);
+	unsigned interruptEnabled = getEFlags().bit.interrupt;
+
 	int tryCount = 0;
 	while(1){
 		cli();
 		int acquired = xchg8(&spinlock->acquirable, NOT_ACQUIRABLE);
-		if(acquired == ACQUIRABLE)
+		if(acquired == ACQUIRABLE){
+			spinlock->interruptFlag = interruptEnabled;
 			return tryCount;
-		if(spinlock->interruptFlag)
+		}
+		if(interruptEnabled){
 			sti();
+		}
 		do{
 			tryCount++;
 			pause();
