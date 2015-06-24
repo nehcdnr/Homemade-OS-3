@@ -6,6 +6,9 @@ typedef struct SystemCallTable SystemCallTable;
 typedef struct SegmentTable SegmentTable;
 typedef struct TaskManager TaskManager;
 typedef struct Task Task;
+typedef struct PageManager PageManager;
+
+PageManager *getPageManager(Task *t);
 
 // pause current task and put it into queue
 void schedule(TaskManager *tm);
@@ -13,6 +16,7 @@ void schedule(TaskManager *tm);
 void suspend(Task *t);
 Task *currentTask(TaskManager *tm);
 void resume(/*TaskManager *tm, */Task *t);
+int sleep(uint64_t millisecond);
 
 TaskManager *createTaskManager(SegmentTable *gdt);
 void initTaskManagement(SystemCallTable *systemCallTable);

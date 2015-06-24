@@ -13,8 +13,6 @@ typedef struct{
 	PageManager *pageManager;
 }TaskMemoryManager;
 
-#define getPageManager(TASK_MEMORY) ((TASK_MEMORY)->pageManager)
-
 // allocate physical memory for 0 ~ userHeapBottom
 int initTaskMemory(TaskMemoryManager *m, PageManager *p, uintptr_t userStackTop, uintptr_t userHeapBottom);
 int extendHeap(TaskMemoryManager *m, size_t size, PageAttribute attribute);

@@ -12,6 +12,9 @@
 static void mouseInput(uint8_t newData){
 	static int state = 0;
 	static uint8_t prev0, data[3];
+	if(state == 0 && (newData & (1<<3)) == 0){ // lost mouse data
+		return;
+	}
 	data[state] = newData;
 	if(state < 2){
 		state++;
@@ -81,7 +84,7 @@ static const struct{
 };
 
 static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
-	static int e0Flag, sp[NUMBER_OF_SPECIAL_SCAN];
+	static int e0Flag = 0, sp[NUMBER_OF_SPECIAL_SCAN] = {0, 0, 0};
 	unsigned short key = NO_KEY, re = 0;
 	int i;
 	for(i = 0; i < NUMBER_OF_SPECIAL_SCAN; i++){
@@ -95,18 +98,13 @@ static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
 			re = scanSpecial[i].released;
 		}
 	}
-	if(key == NO_KEY && sp[2] == 0/*scanSpecial[2] = PAUSE*/){
-		if(e0Flag == 0 && scanCode == 0xe0){
-			e0Flag = 1;
-		}
-		else{
-			key = (e0Flag == 1? scanE0ToKey[scanCode & 0x7f]: scan1ToKey[scanCode & 0x7f]);
-			re = ((scanCode >> 7) & 1);
-		}
+	if(key == NO_KEY){
+		key = (e0Flag == 1? scanE0ToKey[scanCode & 0x7f]: scan1ToKey[scanCode & 0x7f]);
+		re = ((scanCode >> 7) & 1);
 	}
+	e0Flag = (scanCode == 0xe0? 1: 0);
 	if(key == NO_KEY)
 		return key;
-	e0Flag = 0;
 	for(i = 0; i < NUMBER_OF_SPECIAL_SCAN; i++){
 		sp[i] = 0;
 	}
@@ -140,8 +138,8 @@ typedef struct PS2Data{
 // ps2Handler -> ps2Driver -> keyboardInput ->syscall_keyboard
 
 static void ps2Handler(InterruptParam *p){
-	uintptr_t status = in8(PS2_CMD_PORT);
-	if((status & READABLE_FLAG) != 0){
+	uint8_t status = in8(PS2_CMD_PORT);
+	if(status & READABLE_FLAG){
 		uintptr_t data = readData();
 		PS2Data *ps2 = (PS2Data*)(p->argument);
 		writeFIFO(ps2->intFIFO, (status | (data << 8)));
@@ -214,6 +212,7 @@ static void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
 	initMouse();
 	initKeyboard();
+
 	ps2.intFIFO = createFIFO(64);
 	ps2.sysFIFO = createFIFO(128);
 
@@ -230,12 +229,11 @@ void ps2Driver(void){
 	initPS2Driver(processorLocalPIC(), global.syscallTable);
 	while(1){
 		uintptr_t ds;
-		uint8_t data, status;
+
 		if(readFIFO(ps2.intFIFO, &ds) == 0){
 			panic("ps2 intFIFO");
 		}
-		data = ((ds >> 8) & 0xff);
-		status = (ds & 0xff);
+		uint8_t data = ((ds >> 8) & 0xff), status = (ds & 0xff);
 		if(status & DATA_FROM_MOUSE_FLAG){
 			mouseInput(data);
 		}

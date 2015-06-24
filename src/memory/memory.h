@@ -32,8 +32,10 @@ void deleteUserPageTable(PageManager *p);
 
 #define USER_PAGE_FLAG (1 << 1)
 #define WRITABLE_PAGE_FLAG (1 << 2)
+#define NON_CACHED_PAGE_FLAG (1 << 4)
 typedef enum{
 	KERNEL_PAGE = WRITABLE_PAGE_FLAG,
+	KERNEL_NON_CACHED_PAGE = WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
 	USER_READ_ONLY_PAGE = USER_PAGE_FLAG,
 	USER_WRITABLE_PAGE = USER_PAGE_FLAG + WRITABLE_PAGE_FLAG
 }PageAttribute;
@@ -61,19 +63,21 @@ extern LinearMemoryManager *kernelLinear;
 void *allocateKernelMemory(size_t size);
 void releaseKernelMemory(void *address);
 
-void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress address, size_t size);
-#define mapKernelPage(ADDRESS, SIZE) _mapKernelPage(kernelLinear, ADDRESS, SIZE)
+void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
+#define mapKernelPage(ADDRESS, SIZE, ATTRIBUTE) _mapKernelPage(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
 void *_mapKernelPagesFromExisting(
 	LinearMemoryManager *dst, PageManager *src,
-	uintptr_t srcLinear, size_t size
+	uintptr_t srcLinear, size_t size, PageAttribute Attribute
 );
-#define mapKernelPagesFromExisting(SRC, SRC_LINEAR, SIZE) \
-_mapKernelPagesFromExisting(kernelLinear, SRC, SRC_LINEAR, SIZE)
+#define mapKernelPagesFromExisting(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
+_mapKernelPagesFromExisting(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
+PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
+#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
 void _unmapKernelPage(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPage(ADDRESS) _unmapKernelPage(kernelLinear, ADDRESS)
 
-void *_allocateKernelPages(LinearMemoryManager *m, size_t size);
-#define allocateKernelPages(SIZE) _allocateKernelPages(kernelLinear, SIZE)
+void *_allocateKernelPages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
+#define allocateKernelPages(SIZE, ATTRIBUTE) _allocateKernelPages(kernelLinear, SIZE, ATTRIBUTE)
 void _releaseKernelPages(LinearMemoryManager *m, void *linearAddress);
 #define releaseKernelPages(ADDRESS) _releaseKernelPages(kernelLinear, ADDRESS)
 

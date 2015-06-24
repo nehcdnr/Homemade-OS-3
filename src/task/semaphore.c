@@ -3,20 +3,14 @@
 #include"interrupt/systemcall.h"
 #include"memory/memory.h"
 #include"multiprocessor/processorlocal.h"
-#include"multiprocessor/spinlock.h"
 #include"assembly/assembly.h"
 #include"task.h"
 
-typedef struct BlockingTask{
+struct BlockingTask{
 	Task *task;
 	volatile struct BlockingTask *prev, *next;
-}BlockingTask;
-
-struct Semaphore{
-	volatile int quota;
-	Spinlock lock;
-	volatile BlockingTask *firstWaiting, *lastWaiting;
 };
+const Semaphore initialSemaphore = INITIAL_SEMAPHORE;
 
 static void pushBlockingQueue(struct Semaphore *s, volatile BlockingTask *w, Task *t){
 	w->task = t;
@@ -61,7 +55,10 @@ void acquireSemaphore(Semaphore *s){
 	BlockingTask *NEW(w);
 assert(w!=NULL); // TODO: terminate?
 	int acquired;
-	cli();
+	int interruptFlag = getEFlags().bit.interrupt;
+	if(interruptFlag){
+		cli();
+	}
 	acquireLock(&s->lock);
 	tm = processorLocalTaskManager();
 	if(s->quota > 0){
@@ -78,7 +75,9 @@ assert(w!=NULL); // TODO: terminate?
 	if(acquired == 0){
 		schedule(tm);
 	}
-	sti();
+	if(interruptFlag){
+		sti();
+	}
 	DELETE(w);
 }
 
@@ -93,15 +92,6 @@ void releaseSemaphore(Semaphore *s){
 	if(t != NULL){
 		resume(t);
 	}
-}
-
-Semaphore *createSemaphore(unsigned initialQuota){
-	Semaphore *NEW(s);
-	s->quota = initialQuota;
-	s->lock = initialSpinlock;
-	s->firstWaiting = NULL;
-	s->lastWaiting = NULL;
-	return s;
 }
 
 void syscall_acquireSemaphore(Semaphore *s){

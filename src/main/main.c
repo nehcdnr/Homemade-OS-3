@@ -17,13 +17,14 @@ SystemGlobal global;
 
 static void initService(void){
 	void (*services[])(void) = {
-		ps2Driver, /*vbeDriver, */kernelConsoleService, pciDriver
+		ps2Driver, /*vbeDriver, */kernelConsoleService/*, pciDriver*/
 	};
 	unsigned int i;
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
 		t = createKernelTask(services[i]);
 		resume(t);
+
 	}
 }
 
@@ -60,9 +61,10 @@ void apEntry(void){
 	// 7. PIC
 	PIC *pic = createPIC(global.idt);
 	// 8. processorLocal
-	setProcessorLocal(pic, gdt, taskManager);
+	TimerEventList *timer = createTimer();
+	setProcessorLocal(pic, gdt, taskManager, timer);
 	// 10. driver
-	initLocalTimer(pic, global.idt, createTimer());
+	initLocalTimer(pic, global.idt, timer);
 
 	//printk("kernel memory usage: %u\n", getAllocatedSize());
 	printk("start accepting interrupt...\n");

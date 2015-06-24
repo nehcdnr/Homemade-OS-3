@@ -30,7 +30,7 @@ static int isTotallyUsed(Slab *p){
 }
 
 static Slab *createSlab(LinearMemoryManager *m, size_t unit){
-	Slab *slab = (Slab*)_allocateKernelPages(m, SLAB_SIZE);
+	Slab *slab = (Slab*)_allocateKernelPages(m, SLAB_SIZE, KERNEL_PAGE);
 	if(slab == NULL){
 		return NULL;
 	}
@@ -106,7 +106,7 @@ static int findSlab(size_t size){
 
 void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
-		return _allocateKernelPages(m->memory, size);
+		return _allocateKernelPages(m->memory, size, KERNEL_PAGE);
 	}
 	int i = findSlab(size);
 	void *r = NULL;

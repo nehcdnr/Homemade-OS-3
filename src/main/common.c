@@ -65,30 +65,24 @@ char *strncpy(char *dst, const char *src, size_t n){
 
 int printString(const char *s, size_t length);
 
-static int printHexadecimal(unsigned n){
-	char s[12];
-	int a;
-	s[8] = '\0';
-	for(a = 7; a >= 0; a--){
-		unsigned b = (n & 15);
-		s[a] = (b >= 10? b - 10 + 'a': b + '0');
-		n = (n >> 4);
-	}
-	return printString(s, 8);
+#define printUnsigned(FUNC, BASE, BUFSIZE) \
+static int FUNC(unsigned n){\
+	char s[(BUFSIZE)];\
+	int a;\
+	a = (BUFSIZE) - 1;\
+	s[a]='\0';\
+	do{\
+		unsigned b = n % (BASE);\
+		n /= (BASE);\
+		a--;\
+		s[a] = (b >= 10? b - 10 + 'a': b + '0');\
+	}while(n != 0 && a > 0);\
+	return printString(s + a, BUFSIZE - 1 - a);\
 }
 
-static int printUnsigned(unsigned n){
-	char s[12];
-	int a;
-	a=11;
-	s[a]='\0';
-	do{
-		a--;
-		s[a] = (n % 10) + '0';
-		n /= 10;
-	}while(n != 0);
-	return printString(s + a, 11 - a);
-}
+printUnsigned(printDecimal, 10, 12);
+printUnsigned(printBinary, 2, 36);
+printUnsigned(printHexadecimal, 16, 12);
 
 static int printSigned(int n){
 	int printMinus = 0;
@@ -97,7 +91,7 @@ static int printSigned(int n){
 		printMinus = 1;
 		n = -n;
 	}
-	return printMinus + printUnsigned((unsigned)n);
+	return printMinus + printDecimal((unsigned)n);
 }
 
 static int printCharacter(int c){
@@ -141,8 +135,11 @@ int printk(const char* format, ...){
 		case 'x':
 			printCount += printHexadecimal(va_arg(argList, unsigned));
 			break;
+		case 'b':
+			printCount += printBinary(va_arg(argList, unsigned));
+			break;
 		case 'u':
-			printCount += printUnsigned(va_arg(argList, unsigned));
+			printCount += printDecimal(va_arg(argList, unsigned));
 			break;
 		case 's':
 			{

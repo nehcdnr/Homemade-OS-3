@@ -67,6 +67,7 @@ void defaultInterruptHandler(InterruptParam *param){
 	printk("unhandled interrupt %d; argument = %x\n", toChar(param->vector), param->argument);
 	printk("ds=%u, eax=%x, error=%u, eip=%x, cs=%u, eflags=%x\n",
 	param->regs.ds, param->regs.eax, param->errorCode, param->eip, param->cs, param->eflags.value);
+	printk("task=%x\n", processorLocalTask());
 	panic("unhandled interrupt");
 	sti();
 }

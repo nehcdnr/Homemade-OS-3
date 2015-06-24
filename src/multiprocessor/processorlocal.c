@@ -7,6 +7,7 @@ typedef struct ProcessorLocal{
 	struct SegmentTable *gdt;
 	struct InterruptController *pic;
 	struct TaskManager *taskManager;
+	TimerEventList *timer;
 }ProcessorLocal;
 
 // see pic.c
@@ -29,14 +30,16 @@ GET_PROCESSOR_LOCAL(PIC*, PIC, getProcessorLocal()->pic)
 GET_PROCESSOR_LOCAL(SegmentTable*, GDT, getProcessorLocal()->gdt)
 GET_PROCESSOR_LOCAL(TaskManager*, TaskManager, getProcessorLocal()->taskManager)
 GET_PROCESSOR_LOCAL(Task*, Task, currentTask(getProcessorLocal()->taskManager))
+GET_PROCESSOR_LOCAL(TimerEventList*, Timer, getProcessorLocal()->timer)
 
 static ProcessorLocal *lapicToProcLocal = NULL;
 
-void setProcessorLocal(PIC *pic, SegmentTable *gdt, TaskManager *taskManager){
+void setProcessorLocal(PIC *pic, SegmentTable *gdt, TaskManager *taskManager, TimerEventList *timer){
 	ProcessorLocal *local = getProcessorLocal();
 	local->pic = pic;
 	local->gdt = gdt;
 	local->taskManager = taskManager;
+	local->timer = timer;
 }
 
 static ProcessorLocal *getProcessorLocalByLAPIC(void){

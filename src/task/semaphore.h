@@ -1,6 +1,15 @@
-typedef struct Semaphore Semaphore;
+#include"multiprocessor/spinlock.h"
 
-Semaphore *createSemaphore(unsigned initialQuota);
+typedef struct BlockingTask BlockingTask;
+typedef struct Semaphore{
+	volatile int quota;
+	Spinlock lock;
+	volatile BlockingTask *firstWaiting, *lastWaiting;
+}Semaphore;
+
+#define INITIAL_SEMAPHORE {0, INITIAL_SPINLOCK, NULL, NULL}
+extern const Semaphore initialSemaphore;
+
 void deleteSemaphore(Semaphore *s);
 // system call
 void syscall_acquireSemaphore(Semaphore *s);

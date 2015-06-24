@@ -1,3 +1,6 @@
+#ifndef SPINLOCK_H_INCLUDED
+#define SPINLOCK_H_INCLUDED
+
 #include<std.h>
 
 // spinlock
@@ -25,3 +28,5 @@ typedef struct SpinlockBarrier{
 
 void resetBarrier(SpinlockBarrier *b);
 void waitAtBarrier(SpinlockBarrier *b, int threadCount);
+
+#endif

@@ -45,7 +45,10 @@ void printAndHalt(const char *condition, const char *file, int line);
 
 int printk(const char *format, ...);
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
+#define MEMBER_OFFSET(T, M) ((size_t)&(((T*)0)->M))
 //#define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))
+
+#define IS_IN_DQUEUE(E) ((E)->prev != NULL)
 
 #define REMOVE_FROM_DQUEUE(E) do{\
 	*((E)->prev) = (E)->next;\

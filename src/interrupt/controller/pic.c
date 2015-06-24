@@ -9,7 +9,7 @@
 uintptr_t *initialESP = NULL;
 
 #define KERNEL_STACK_SIZE (8192)
-static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer){
+static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic/*, TimerEventList *timer*/){
 	const uint32_t lapicID = getLAPICID(lapic);
 	const int n = getNumberOfLAPIC(ioapic);
 	// wake up other processors
@@ -37,8 +37,12 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 			}
 		}
 		if(iter == 1){
+			int t;
 			sti();
-			kernelSleep(timer, 200);
+			// sleep TIMER_FREQUENCY / 5 = 250 milliseconds
+			for(t = 0; t < DIV_CEIL(TIMER_FREQUENCY, 4); t++){
+				hlt();
+			}
 			cli();
 		}
 	}
@@ -46,13 +50,13 @@ static void wakeupOtherProcessors(LAPIC *lapic, IOAPIC *ioapic, TimerEventList *
 
 static void initMultiprocessor(
 	int isBSP, InterruptTable *t,
-	LAPIC *lapic, IOAPIC *ioapic, TimerEventList *timer
+	LAPIC *lapic, IOAPIC *ioapic
 ){
 	static SpinlockBarrier barrier1, barrier2;
 	if(isBSP){
 		resetBarrier(&barrier1);
 		resetBarrier(&barrier2);
-		wakeupOtherProcessors(lapic, ioapic, timer);
+		wakeupOtherProcessors(lapic, ioapic);
 	}
 	// synchronize
 	waitAtBarrier(&barrier1, getNumberOfLAPIC(ioapic));
@@ -97,17 +101,18 @@ PIC *createPIC(InterruptTable *t){
 void initLocalTimer(PIC *pic, InterruptTable *t, TimerEventList *timer){
 	if(isAPICSupported() == 0){
 		setTimer8254Frequency(TIMER_FREQUENCY);
-		replaceTimerHandler(timer, pic->irqToVector(pic, TIMER_IRQ));
+		setTimerHandler(timer, pic->irqToVector(pic, TIMER_IRQ));
 		pic->setPICMask(pic, TIMER_IRQ, 0);
 		return;
 	}
 	if(isBSP(pic->apic->lapic)){
+		setTimer8254Frequency(TIMER_FREQUENCY);
 		testAndResetLAPICTimer(pic->apic->lapic, pic);
-		replaceTimerHandler(timer, getTimerVector(pic->apic->lapic));
+		setTimerHandler(timer, getTimerVector(pic->apic->lapic));
 	}
 	else{
 		resetLAPICTimer(pic->apic->lapic);
-		replaceTimerHandler(timer, getTimerVector(pic->apic->lapic));
+		setTimerHandler(timer, getTimerVector(pic->apic->lapic));
 	}
-	initMultiprocessor(isBSP(pic->apic->lapic), t, pic->apic->lapic, pic->apic->ioapic, timer); // TODO: move elsewhere
+	initMultiprocessor(isBSP(pic->apic->lapic), t, pic->apic->lapic, pic->apic->ioapic); // TODO: move elsewhere
 }

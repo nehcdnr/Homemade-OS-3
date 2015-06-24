@@ -8,6 +8,7 @@
 #include"assembly/assembly.h"
 #include"interrupt/systemcall.h"
 #include"interrupt/handler.h"
+#include"task/task.h"
 
 typedef struct ConsoleDisplay{
 	int screen;
@@ -146,7 +147,11 @@ void initKernelConsole(void){
 	cd->cursor = 0;
 	cd->maxColumn = 80;
 	cd->screenArea = cd->maxColumn * 25;
-	cd->video = mapKernelPage(defaultTextVideoAddress, DEFAULT_VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS);
+	cd->video = mapKernelPage(
+		defaultTextVideoAddress,
+		DEFAULT_VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS,
+		KERNEL_NON_CACHED_PAGE
+	);
 	cd->lock = initialSpinlock;
 	updateVideoAddress(cd);
 	updateCursor(cd);
@@ -215,7 +220,15 @@ static void kernelConsoleLoop(int kbService){
 void kernelConsoleService(void){
 	int result;
 	int kbService;
-	kbService = result = systemCall1(SYSCALL_QUERY_SERVICE, (uintptr_t)KEYBOARD_SERVICE_NAME);
+	while(1){
+		kbService = result = systemCall1(SYSCALL_QUERY_SERVICE, (uintptr_t)KEYBOARD_SERVICE_NAME);
+		if(kbService >= 0){
+			break;
+		}
+		printk("warning: keyboard service has not initalized...\n");
+		sleep(100);
+		//TOOD: sleep & retry
+	}
 	EXPECT(result >= 0);
 	result = //systemCall3(SYSCALL_REGISTER_SERVICE,
 	registerSystemService(global.syscallTable,

@@ -1,6 +1,5 @@
 #include"common.h"
 #include"memory.h"
-#include"memory/page.h"
 #include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"
 #include"memory_private.h"
@@ -65,7 +64,7 @@ void releaseKernelMemory(void *linearAddress){
 	releaseSlab(kernelSlab, linearAddress);
 }
 
-void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t size){
+void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute){
 	assert(size % PAGE_SIZE == 0);
 	assert(m->page != NULL && m->linear != NULL);
 	// linear
@@ -76,7 +75,7 @@ void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress physicalAddress, si
 	// assume linear memory manager and page table are consistent
 	// linearAddess[0 ~ l_size] are guaranteed to be available
 	// it is safe to map pages of l_size
-	int result = _mapPage_LP(m->page, m->physical, linearAddress, physicalAddress, l_size, KERNEL_PAGE);
+	int result = _mapPage_LP(m->page, m->physical, linearAddress, physicalAddress, l_size, attribute);
 	EXPECT(result == 1);
 
 	return linearAddress;
@@ -89,12 +88,12 @@ void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress physicalAddress, si
 
 void *_mapKernelPagesFromExisting(
 	LinearMemoryManager *dst, PageManager *src,
-	uintptr_t srcLinear, size_t size
+	uintptr_t srcLinear, size_t size, PageAttribute attribute
 ){
 	size_t l_size = size;
 	void *dstLinear = (void*)allocateBlock(dst->linear, &l_size);
 	EXPECT(dstLinear != NULL);
-	int result = _mapExistingPages_L(dst->physical, dst->page, src, dstLinear, srcLinear, l_size, KERNEL_PAGE);
+	int result = _mapExistingPages_L(dst->physical, dst->page, src, dstLinear, srcLinear, l_size, attribute);
 	EXPECT(result != 0);
 
 	return dstLinear;
@@ -112,13 +111,13 @@ void _unmapKernelPage(LinearMemoryManager *m, void *linearAddress){
 	releaseBlock(m->linear, (uintptr_t)linearAddress);
 }
 
-void *_allocateKernelPages(LinearMemoryManager *m, size_t size){
+void *_allocateKernelPages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
 	// linear
 	size_t l_size = size;
 	void *linearAddress = (void*)allocateBlock(m->linear, &l_size);
 	EXPECT(linearAddress != NULL);
 	// physical
-	int result = _mapPage_L(m->page, m->physical, linearAddress, l_size, KERNEL_PAGE);
+	int result = _mapPage_L(m->page, m->physical, linearAddress, l_size, attribute);
 	EXPECT(result == 1);
 
 	return linearAddress;
@@ -227,7 +226,8 @@ static MemoryBlockManager *initKernelLinearBlock(
 #define testMemoryManager() do{}while(0)
 #else
 #define TEST_N (60)
-static void testMemoryManager(void){
+void testMemoryManager(void);
+void testMemoryManager(void){
 	uint8_t *p[TEST_N];
 	int si[TEST_N];
 	unsigned int r;
@@ -297,5 +297,5 @@ void initKernelMemory(void){
 
 	kernelSlab = createSlabManager(kernelLinear);
 
-	testMemoryManager();
+	//testMemoryManager();
 }

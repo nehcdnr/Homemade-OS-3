@@ -4,14 +4,16 @@ typedef struct SegmentTable SegmentTable;
 typedef struct InterruptController PIC;
 typedef struct TaskManager TaskManager;
 typedef struct Task Task;
+typedef struct TimerEventList TimerEventList;
 // processorlocal.c
 struct InterruptController *processorLocalPIC(void);
 SegmentTable *processorLocalGDT(void);
 TaskManager *processorLocalTaskManager(void);
 Task *processorLocalTask(void);
+TimerEventList *processorLocalTimer(void);
 
 void initProcessorLocal(uint32_t maxProcessorCount);
-void setProcessorLocal(PIC *pic, SegmentTable *gdt, TaskManager *taskManager);
+void setProcessorLocal(PIC *pic, SegmentTable *gdt, TaskManager *taskManager, TimerEventList *timer);
 
 // see pic.c
 uint32_t getMemoryMappedLAPICID(void);

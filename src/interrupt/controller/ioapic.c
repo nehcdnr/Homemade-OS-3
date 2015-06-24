@@ -156,7 +156,7 @@ static void parseIOAPIC(
 	printk("IOAPIC id = %d, interrupt base = %d, address = %x\n",
 	ias->ioAPICID, ias->globalSystemInterruptBase, ias->ioAPICAddress);
 	PhysicalAddress ioapicPhysical = {FLOOR(ias->ioAPICAddress, IOAPIC_MAPPING_SIZE)};
-	void *ioapicMappedBegin = mapKernelPage(ioapicPhysical, PAGE_SIZE);
+	void *ioapicMappedBegin = mapKernelPage(ioapicPhysical, PAGE_SIZE, KERNEL_PAGE);
 	(*(volatile uint32_t**)&profile->mappedRegister) =
 	(MemoryMappedRegister)(((uintptr_t)ioapicMappedBegin) + ias->ioAPICAddress % PAGE_SIZE);
 	// bit 24~28 = I/O APIC ID
@@ -338,7 +338,7 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 	RSDT *rsdt;
 	PhysicalAddress rsdtPageBegin = {FLOOR(rsdtPhysical, PAGE_SIZE)};
 
-	void *rsdtMappedBegin = mapKernelPage(rsdtPageBegin, PAGE_SIZE * 2);
+	void *rsdtMappedBegin = mapKernelPage(rsdtPageBegin, PAGE_SIZE * 2, KERNEL_PAGE);
 	if(rsdtMappedBegin == NULL){
 		panic("fail allocating memory");
 	}
@@ -346,7 +346,7 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 	size_t rsdtMappedSize= CEIL(rsdtPhysical % PAGE_SIZE + rsdt->header.length, PAGE_SIZE);
 	unmapKernelPage(rsdtMappedBegin);
 
-	rsdtMappedBegin = mapKernelPage(rsdtPageBegin, rsdtMappedSize);
+	rsdtMappedBegin = mapKernelPage(rsdtPageBegin, rsdtMappedSize, KERNEL_PAGE);
 	if(rsdtMappedBegin == NULL){
 		panic("fail allocating memory");
 	}
@@ -371,7 +371,7 @@ IOAPIC *initAPIC(InterruptTable *t){
 	for(i = 0; i < rsdtEntryCount; i++){
 		const uintptr_t madtPhysical = rsdt->entry[i];
 		PhysicalAddress madtPageBegin = {FLOOR(madtPhysical, PAGE_SIZE)};
-		void *madtMappedBegin = mapKernelPage(madtPageBegin, PAGE_SIZE * 2);
+		void *madtMappedBegin = mapKernelPage(madtPageBegin, PAGE_SIZE * 2, KERNEL_PAGE);
 		SDTHeader *madt = (SDTHeader*)(((uintptr_t)madtMappedBegin) + madtPhysical % PAGE_SIZE);
 		size_t madtMappedSize = CEIL(madtPhysical % PAGE_SIZE + madt->length, PAGE_SIZE);
 		int signatureOK = (strncmp(madt->signature, "APIC", 4) == 0);
@@ -379,7 +379,7 @@ IOAPIC *initAPIC(InterruptTable *t){
 		if(signatureOK == 0){
 			continue;
 		}
-		madtMappedBegin = mapKernelPage(madtPageBegin, madtMappedSize);
+		madtMappedBegin = mapKernelPage(madtPageBegin, madtMappedSize, KERNEL_PAGE);
 		madt = (SDTHeader*)(((uintptr_t)madtMappedBegin) + madtPhysical % PAGE_SIZE);
 		if(checksum(madt, madt->length) != 0){
 			panic("bad MADT checksum");

@@ -15,6 +15,7 @@ uint16_t getDS(void);
 uint32_t getEBP(void);
 uint32_t getCR0(void);
 void setCR0(uint32_t value);
+uint32_t getCR3(void); // page.c
 uint8_t in8(uint16_t port);
 uint16_t in16(uint16_t port);
 uint32_t in32(uint16_t port);

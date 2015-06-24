@@ -1,7 +1,6 @@
 #include"common.h"
 #include"memory.h"
 #include"memory_private.h"
-#include"page.h"
 #include"assembly/assembly.h"
 #include"interrupt/handler.h"
 #include"interrupt/controller/pic.h"
@@ -140,7 +139,7 @@ static void setPDE(
 	pde.writable = (attribute & WRITABLE_PAGE_FLAG? 1: 0);
 	pde.userAccessible = (attribute & USER_PAGE_FLAG? 1: 0);
 	pde.writeThrough = 0;
-	pde.cacheDisabled = 0;
+	pde.cacheDisabled = (attribute & NON_CACHED_PAGE_FLAG? 1: 0);
 	pde.accessed = 0;
 	pde.zero1 = 0;
 	pde.size4MB = 0;
@@ -167,7 +166,7 @@ static void setPTE(
 	pte.writable = (attribute & WRITABLE_PAGE_FLAG? 1: 0);
 	pte.userAccessible = (attribute & USER_PAGE_FLAG? 1: 0);
 	pte.writeThrough = 0;
-	pte.cacheDisabled = 0;
+	pte.cacheDisabled = (attribute & NON_CACHED_PAGE_FLAG? 1: 0);
 	pte.accessed = 0;
 	pte.dirty = 0;
 	pte.zero = 0;
@@ -280,6 +279,10 @@ static PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress, in
 		panic("translatePage: page present bit differs to expected");
 	}
 	return getPTEAddress(pt->entry + i2);
+}
+
+PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress){
+	return translatePage(p, (uintptr_t)linearAddress, 1);
 }
 
 // return 1 if success, 0 if error
@@ -560,7 +563,11 @@ static void invlpgHandler(InterruptParam *p){
 static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t size){
 	static Spinlock lock = INITIAL_SPINLOCK;
 	// disabling interrupt during sendINVLPG may result in deadlock
-	assert(getEFlags().bit.interrupt == 1);
+	EFlags ef = getEFlags();
+	if(ef.bit.interrupt != 1){
+		printk("%x %x\n", getMemoryMappedLAPICID(),ef.value);
+	}
+	assert(ef.bit.interrupt == 1);
 	acquireLock(&lock);
 	{
 		PIC *pic = processorLocalPIC();
@@ -615,7 +622,7 @@ PageManager *createAndMapUserPageTable(uintptr_t targetAddress){
 	size_t evalSize = evaluateSizeOfPageTableSet(targetBegin, targetEnd);
 	EXPECT(targetAddress >= targetBegin && targetAddress + evalSize <= targetEnd);
 	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE);
-	PageTableSet *pts = allocateKernelPages(evalSize);
+	PageTableSet *pts = allocateKernelPages(evalSize, KERNEL_PAGE);
 	EXPECT(pts != NULL);
 	initPageManager(
 		p, (PageTableSet*)targetAddress, pts,

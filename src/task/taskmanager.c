@@ -1,11 +1,14 @@
 #include"task.h"
 #include"task_private.h"
+#include"semaphore.h"
 #include"segment/segment.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"interrupt/handler.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
+#include"io/fifo.h"
+#include"io/io.h"
 #include"interrupt/systemcall.h"
 #include"common.h"
 
@@ -28,8 +31,15 @@ typedef struct Task{
 	SystemCallFunction taskDefinedSystemCall;
 	uintptr_t taskDefinedArgument;
 
+	Semaphore ioSemaphore;
+	// ioRequest *pendingIOList;
+
 	struct Task *next, *prev;
 }Task;
+
+PageManager *getPageManager(Task *t){
+	return t->taskMemory.pageManager;
+}
 
 #define NUMBER_OF_PRIORITIES (4)
 typedef struct TaskQueue{
@@ -92,7 +102,7 @@ void schedule(TaskManager *tm){
 	tm->current = popQueue(globalQueue);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(oldTask != tm->current){
-		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(getPageManager(&(tm->current->taskMemory))));
+		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current)));
 		// may go to startTask or return here
 	}
 	releaseLock(&globalQueueLock);
@@ -186,6 +196,7 @@ static Task *createTask(
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
 	t->taskDefinedArgument = 0;
+	t->ioSemaphore = initialSemaphore;
 	t->next =
 	t->prev = NULL;
 
@@ -208,11 +219,12 @@ static Task *createUserTask(
 	// 1. task page table
 	PageManager *pageManager = createAndMapUserPageTable(targetESP0);
 	EXPECT(pageManager != NULL);
+
 	// 2. kernel stack for task
 	// TODO: use current page table, not kernel
 	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(allocateStackOK != 0);
-	void *mappedStackBottom = mapKernelPagesFromExisting(pageManager, targetStackBottom, KERNEL_STACK_SIZE);
+	void *mappedStackBottom = mapKernelPagesFromExisting(pageManager, targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(mappedStackBottom != NULL);
 	// 3. create task
 	EFlags eflags = getEFlags();
@@ -223,7 +235,6 @@ static Task *createUserTask(
 	(uintptr_t)targetStackBottom, userHeapBottom,
 	pageManager, priority);
 	EXPECT(t != NULL);
-
 	unmapKernelPage((void*)mappedStackBottom);
 	unmapUserPageTableSet(pageManager);
 	return t;
@@ -251,10 +262,9 @@ void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
 
 void resume(/*TaskManager *tm, */Task *t){
 	acquireLock(&globalQueueLock);
-	if(t->state == SUSPENDED){
-		t->state = READY;
-		pushQueue(globalQueue, t);
-	}
+	assert(t->state == SUSPENDED);
+	t->state = READY;
+	pushQueue(globalQueue, t);
 	releaseLock(&globalQueueLock);
 }
 
@@ -303,6 +313,30 @@ static void syscallReleaseHeap(InterruptParam *p){
 	Task *t = processorLocalTask();
 	int result = shrinkHeap(&(t->taskMemory), size);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = result;
+}
+
+
+// system call
+static void wakeupTask(uintptr_t arg){
+	Task *t = (Task*)arg;
+	releaseSemaphore(&t->ioSemaphore);
+}
+
+int sleep(uint64_t millisecond){
+	if(millisecond > 1000000000 * (uint64_t)1000){
+		return 0;
+	}
+	Task *t = processorLocalTask();
+	IORequest *te = addTimerEvent(
+		processorLocalTimer(), (millisecond * TIMER_FREQUENCY) / 1000, wakeupTask,
+		(uintptr_t)t
+	);
+	if(te == NULL){ // TODO: insufficient memory. terminate task
+		return 0;
+	}
+	acquireSemaphore(&t->ioSemaphore);
+	te->destroy(te);
+	return 1;
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){
