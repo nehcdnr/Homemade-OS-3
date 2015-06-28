@@ -31,7 +31,7 @@ typedef struct Task{
 	SystemCallFunction taskDefinedSystemCall;
 	uintptr_t taskDefinedArgument;
 
-	Semaphore ioSemaphore;
+	Semaphore *ioSemaphore;
 	// ioRequest *pendingIOList;
 
 	struct Task *next, *prev;
@@ -42,46 +42,52 @@ PageManager *getPageManager(Task *t){
 }
 
 #define NUMBER_OF_PRIORITIES (4)
-typedef struct TaskQueue{
-	Task *head[NUMBER_OF_PRIORITIES];
-}TaskQueue;
-static TaskQueue *globalQueue = NULL;
-static Spinlock globalQueueLock = INITIAL_SPINLOCK;
-static int totalBlockCount = 0;
+
+typedef struct TaskPriorityQueue{
+	Spinlock lock;
+	TaskQueue taskQueue[NUMBER_OF_PRIORITIES];
+}TaskPriorityQueue;
+
+static TaskPriorityQueue *globalQueue = NULL;
 
 struct TaskManager{
 	Task *current;
 	SegmentTable *gdt;
-	// TaskQueue *taskQueue;
+
+	Task *oldTask; // see switchCurrent()
+	void (*afterTaskSwitchFunc)(Task*, uintptr_t);
+	uintptr_t afterTaskSwitchArg;
 };
 
-static void pushQueue(struct TaskQueue *q, Task *t){
-	const int p = t->priority;
-	t->state = READY;
-	if(q->head[p] == NULL){
-		q->head[p] =
+
+const TaskQueue initialTaskQueue = INITIAL_TASK_QUEUE;
+
+void pushQueue(TaskQueue *q, Task *t){
+	if(q->head == NULL){
+		q->head =
 		t->next =
 		t->prev = t;
 	}
 	else{
-		t->next = q->head[p];
-		t->prev = q->head[p]->prev;
+		t->next = q->head;
+		t->prev = q->head->prev;
 		t->next->prev = t;
 		t->prev->next = t;
 	}
 }
 
-static Task *popQueue(struct TaskQueue *q){
-	int p;
-	for(p = 0; q->head[p] == NULL; p++){
-		assert(p < NUMBER_OF_PRIORITIES);
+Task *popQueue(TaskQueue *q){
+	struct Task *t;
+	t = q->head;
+	if(t == NULL){
+		return NULL;
 	}
-	struct Task *t = q->head[p];
 	if(t->next == t/* && t->prev == t*/){
-		q->head[p] = NULL;
+		assert(t->prev == t);
+		q->head = NULL;
 	}
 	else{
-		q->head[p] = t->next;
+		q->head = t->next;
 		t->next->prev = t->prev;
 		t->prev->next = t->next;
 	}
@@ -89,30 +95,73 @@ static Task *popQueue(struct TaskQueue *q){
 	return t;
 }
 
+static void pushPriorityQueue(TaskPriorityQueue *q, Task *t){
+	pushQueue(q->taskQueue + t->priority, t);
+}
+
+static Task *popPriorityQueue(TaskPriorityQueue *q){
+	int p;
+	for(p = 0; 1; p++){
+		assert(p < NUMBER_OF_PRIORITIES);
+		Task *t = popQueue(q->taskQueue + p);
+		if(t != NULL)
+			return t;
+	}
+}
+
 void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0, uint32_t newCR3);
 
-// assume interrupt is disabled
-void schedule(TaskManager *tm){
-	struct Task *oldTask = tm->current;
-	int tryCount = acquireLock(&globalQueueLock);
-	totalBlockCount += tryCount;
-	if(oldTask->state == READY){
-		pushQueue(globalQueue, oldTask);
+static void callAfterTaskSwitchFunc(void){
+	releaseLock(&globalQueue->lock); // FIXME: see taskSwitch()
+	TaskManager *tm = processorLocalTaskManager();
+
+	if(tm->afterTaskSwitchFunc != NULL){
+		tm->afterTaskSwitchFunc(tm->oldTask, tm->afterTaskSwitchArg);
+		tm->afterTaskSwitchFunc = NULL;
 	}
-	tm->current = popQueue(globalQueue);
+	tm->afterTaskSwitchArg = 0;
+	tm->oldTask = NULL;
+}
+
+// assume interrupt is disabled
+static void taskSwitch(void (*func)(Task *t, uintptr_t), uintptr_t arg){
+	TaskManager *tm = processorLocalTaskManager();
+	// putting into suspendQueue and switching to another task have to be atomic
+	tm->afterTaskSwitchFunc = func;
+	tm->afterTaskSwitchArg = arg;
+	tm->oldTask = tm->current;
+	acquireLock(&globalQueue->lock);
+	if(func == NULL){
+		pushPriorityQueue(globalQueue, tm->oldTask);
+	}
+	else{
+		tm->oldTask->state = SUSPENDED;
+	}
+	tm->current = popPriorityQueue(globalQueue);
+	// FIXME: if releaseLock() before contextSwitch(), the stack sometimes becomes corrupted
+	// this happens in QEMU only
+	//releaseLock(&readyQueue->lock);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
-	if(oldTask != tm->current){
-		contextSwitch(&oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current)));
+	if(tm->current != tm->oldTask){// otherwise, esp0 will be wrong value
+		contextSwitch(&tm->oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current)));
 		// may go to startTask or return here
 	}
-	releaseLock(&globalQueueLock);
+	callAfterTaskSwitchFunc();
 }
 // see taskswitch.asm
 void startTask(void);
 void startTask(void){
-	releaseLock(&globalQueueLock); // after contextSwitch in schedule
-	sti(); // acquireLock
+	callAfterTaskSwitchFunc();
+	sti();
 	// return to eip assigned in initTaskStack
+}
+
+void suspendCurrent(void (*afterTaskSwitchFunc)(Task*, uintptr_t), uintptr_t arg){
+	taskSwitch(afterTaskSwitchFunc, arg);
+}
+
+void schedule(){
+	taskSwitch(NULL, 0);
 }
 
 static int initV8086Memory(void){
@@ -190,18 +239,21 @@ static Task *createTask(
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
 	t->espInterrupt = espInterrupt;
+	t->ioSemaphore = createSemaphore();
+	EXPECT(t->ioSemaphore != NULL);
 	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageTable, userStackTop, userHeapBottom);
 	EXPECT(initTaskMemoryOK != 0);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
 	t->taskDefinedArgument = 0;
-	t->ioSemaphore = initialSemaphore;
 	t->next =
 	t->prev = NULL;
 
 	return t;
 
+	ON_ERROR;
+	DELETE(t->ioSemaphore);
 	ON_ERROR;
 	DELETE(t);
 	ON_ERROR;
@@ -250,8 +302,8 @@ static Task *createUserTask(
 	return NULL;
 }
 
-Task *createKernelTask(void (*eip0)(void)){
-	Task *t = createUserTask(eip0, (2 << 20), 0);
+Task *createKernelTask(void (*eip0)(void), int priority){
+	Task *t = createUserTask(eip0, (2 << 20), priority);
 	return t;
 }
 
@@ -261,15 +313,11 @@ void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
 }
 
 void resume(/*TaskManager *tm, */Task *t){
-	acquireLock(&globalQueueLock);
 	assert(t->state == SUSPENDED);
 	t->state = READY;
-	pushQueue(globalQueue, t);
-	releaseLock(&globalQueueLock);
-}
-
-void suspend(Task *t){
-	t->state = SUSPENDED;
+	acquireLock(&globalQueue->lock);
+	pushPriorityQueue(globalQueue, t);
+	releaseLock(&globalQueue->lock);
 }
 
 Task *currentTask(TaskManager *tm){
@@ -287,16 +335,22 @@ static void syscallTaskDefined(InterruptParam *p){
 
 TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
+	// each processor needs an idle task
+	// create a task for current running bootstrap thread. not need to initialize eip and esp
 	TaskManager *NEW(tm);
-	// create a task for this, eip and esp are irrelevant
-	tm->current = createTask(0, 0, 0, 0, kernelPageManager, 3);
+	if(tm == NULL){
+		panic("cannot initialize bootstrap task");
+	}
+	tm->current = createTask(0, 0, 0, 0, kernelPageManager, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
 	// do not put into the queue because the task is running
 	tm->current->state = READY;
 	tm->gdt = gdt;
-	//pushQueue(globalQueue, createTask(b, testTask, 0));
+	tm->oldTask = NULL;
+	tm->afterTaskSwitchFunc = NULL;
+	tm->afterTaskSwitchArg = 0;
 	return tm;
 }
 
@@ -319,7 +373,7 @@ static void syscallReleaseHeap(InterruptParam *p){
 // system call
 static void wakeupTask(uintptr_t arg){
 	Task *t = (Task*)arg;
-	releaseSemaphore(&t->ioSemaphore);
+	releaseSemaphore(t->ioSemaphore);
 }
 
 int sleep(uint64_t millisecond){
@@ -328,27 +382,31 @@ int sleep(uint64_t millisecond){
 	}
 	Task *t = processorLocalTask();
 	IORequest *te = addTimerEvent(
-		processorLocalTimer(), (millisecond * TIMER_FREQUENCY) / 1000, wakeupTask,
-		(uintptr_t)t
+		processorLocalTimer(), (millisecond * TIMER_FREQUENCY) / 1000,
+		wakeupTask, (uintptr_t)t
 	);
-	if(te == NULL){ // TODO: insufficient memory. terminate task
+	if(te == NULL){ // TODO: insufficient memory
 		return 0;
 	}
-	acquireSemaphore(&t->ioSemaphore);
+	acquireSemaphore(t->ioSemaphore);
 	te->destroy(te);
 	return 1;
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){
 	NEW(globalQueue);
-	globalQueueLock = initialSpinlock;
-	int t;
-	for(t = 0; t < NUMBER_OF_PRIORITIES; t++){
-		globalQueue->head[t] = NULL;
+	if(globalQueue == NULL){
+		panic("cannot initialize task management");
 	}
+	int p;
+	globalQueue->lock = initialSpinlock;
+	for(p = 0; p < NUMBER_OF_PRIORITIES; p++){
+		globalQueue->taskQueue[p] = initialTaskQueue;
+	}
+
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
 	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, syscallAllocateHeap, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, syscallReleaseHeap, 0);
 
-	initSemaphore(systemCallTable);
+	//initSemaphore(systemCallTable);
 }

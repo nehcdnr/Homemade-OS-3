@@ -1,14 +1,9 @@
 #include"multiprocessor/spinlock.h"
 
-typedef struct BlockingTask BlockingTask;
-typedef struct Semaphore{
-	volatile int quota;
-	Spinlock lock;
-	volatile BlockingTask *firstWaiting, *lastWaiting;
-}Semaphore;
+typedef struct Semaphore Semaphore;
 
-#define INITIAL_SEMAPHORE {0, INITIAL_SPINLOCK, NULL, NULL}
-extern const Semaphore initialSemaphore;
+// Semaphore must be in global kernel memory
+Semaphore *createSemaphore(void);
 
 void deleteSemaphore(Semaphore *s);
 // system call

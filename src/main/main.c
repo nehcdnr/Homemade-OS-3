@@ -17,14 +17,13 @@ SystemGlobal global;
 
 static void initService(void){
 	void (*services[])(void) = {
-		ps2Driver, /*vbeDriver, */kernelConsoleService/*, pciDriver*/
+		ps2Driver,/* vbeDriver, */kernelConsoleService/*, pciDriver*/
 	};
 	unsigned int i;
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
-		t = createKernelTask(services[i]);
+		t = createKernelTask(services[i], 0);
 		resume(t);
-
 	}
 }
 
@@ -74,7 +73,6 @@ void apEntry(void){
 		initService();
 	}
 	while(1){
-		//printk("main %d\n", cpuid_getInitialAPICID());
 		hlt();
 	}
 }

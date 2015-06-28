@@ -89,7 +89,7 @@ static void timerHandler(InterruptParam *p){
 	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
 	processorLocalPIC()->endOfInterrupt(p);
 	handleTimerEvents((TimerEventList*)p->argument);
-	schedule(processorLocalTaskManager());
+	schedule();
 	sti();
 }
 

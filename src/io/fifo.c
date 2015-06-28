@@ -9,7 +9,7 @@ struct FIFO{
 	int bufferLength;
 	Spinlock lock;
 	volatile uintptr_t *buffer;
-	Semaphore semaphore;
+	Semaphore *semaphore;
 };
 
 static void dequeue1(FIFO *fifo){
@@ -43,14 +43,14 @@ static int _writeFIFO(FIFO *fifo, uintptr_t data, int throwOldestFlag){
 int writeFIFO(FIFO *fifo, uintptr_t data){
 	int r = _writeFIFO(fifo, data, 0);
 	if(r){
-		releaseSemaphore(&fifo->semaphore);
+		releaseSemaphore(fifo->semaphore);
 	}
 	return r;
 }
 
 int overwriteFIFO(FIFO *fifo, uintptr_t data){
 	if(_writeFIFO(fifo, data, 1)){
-		releaseSemaphore(&fifo->semaphore);
+		releaseSemaphore(fifo->semaphore);
 	}
 	return 1;
 }
@@ -74,7 +74,7 @@ int peekFIFO(FIFO *fifo, uintptr_t *data){
 }
 
 int readFIFO(FIFO *fifo, uintptr_t *data){
-	acquireSemaphore(&fifo->semaphore); // wait until readable
+	acquireSemaphore(fifo->semaphore); // wait until readable
 	return _readFIFO(fifo, data, 1);
 }
 
@@ -82,15 +82,19 @@ FIFO *createFIFO(int length){
 	assert((length & (length - 1)) == 0);
 	FIFO *NEW(fifo);
 	EXPECT(fifo != NULL);
+
 	NEW_ARRAY(fifo->buffer, length);
 	EXPECT(fifo->buffer != NULL);
 	fifo->lock = initialSpinlock;
 	fifo->bufferLength = length;
 	fifo->begin = 0;
 	fifo->dataLength = 0;
-	fifo->semaphore = initialSemaphore;
+	fifo->semaphore = createSemaphore();
+	EXPECT(fifo->semaphore != NULL);
 	return fifo;
-	// DELETE(fifo->buffer)
+	//DELETE(fifo->semaphore);
+	ON_ERROR;
+	DELETE((void*)fifo->buffer);
 	ON_ERROR;
 	DELETE(fifo);
 	ON_ERROR;

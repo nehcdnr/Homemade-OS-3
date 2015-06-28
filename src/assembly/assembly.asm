@@ -3,6 +3,7 @@
 
 global _xchg8
 _xchg8:
+	xor eax, eax
 	mov edx, [esp + 4]
 	mov al, [esp + 8]
 	xchg [edx], al

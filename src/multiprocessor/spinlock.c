@@ -44,6 +44,7 @@ void releaseLock(Spinlock *spinlock){
 	if(spinlock->acquirable == IGNORED){
 		return;
 	}
+	assert(spinlock->acquirable == NOT_ACQUIRABLE);
 	xchg8(&spinlock->acquirable, ACQUIRABLE);
 	if(spinlock->interruptFlag){
 		sti();

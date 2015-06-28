@@ -6,38 +6,12 @@
 #include"assembly/assembly.h"
 #include"task.h"
 
-struct BlockingTask{
-	Task *task;
-	volatile struct BlockingTask *prev, *next;
-};
-const Semaphore initialSemaphore = INITIAL_SEMAPHORE;
-
-static void pushBlockingQueue(struct Semaphore *s, volatile BlockingTask *w, Task *t){
-	w->task = t;
-	if(s->lastWaiting == NULL){
-		w->next = w->prev = NULL;
-		s->firstWaiting = s->lastWaiting = w;
-	}
-	else{
-		w->prev = s->lastWaiting;
-		w->next = NULL;
-		s->lastWaiting->next = w;
-		s->lastWaiting = w;
-	}
-}
-
-static Task *popBlockingQueue(struct Semaphore *s){
-	volatile BlockingTask *b = s->firstWaiting;
-	if(b == NULL){
-		return NULL;
-	}
-	s->firstWaiting = b->next;
-	if(s->firstWaiting == NULL){
-		s->lastWaiting = NULL;
-	}
-	return b->task;
-}
-
+typedef struct Semaphore{
+	volatile int quota;
+	Spinlock lock;
+	TaskQueue taskQueue;
+}Semaphore;
+/*
 static void _acquireSemaphore(InterruptParam *p){
 	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p);
 	acquireSemaphore(s);
@@ -49,42 +23,36 @@ static void _releaseSemaphore(InterruptParam *p){
 	releaseSemaphore(s);
 	sti();
 }
+*/
+static void pushSemaphoreQueue(Task *t, uintptr_t s_ptr){
+	Semaphore *s = (Semaphore*)s_ptr;
+	pushQueue(&s->taskQueue, t);
+	releaseLock(&s->lock);
+}
 
 void acquireSemaphore(Semaphore *s){
-	TaskManager *tm;
-	BlockingTask *NEW(w);
-assert(w!=NULL); // TODO: terminate?
-	int acquired;
 	int interruptFlag = getEFlags().bit.interrupt;
+	// turn off interrupt to prevent sti in releaseLock in pushSemaphoreQueue
 	if(interruptFlag){
 		cli();
 	}
 	acquireLock(&s->lock);
-	tm = processorLocalTaskManager();
 	if(s->quota > 0){
 		s->quota--;
-		acquired = 1;
+		releaseLock(&s->lock);
 	}
 	else{
-		Task *current = currentTask(tm);
-		suspend(current);
-		pushBlockingQueue(s, w, current);
-		acquired = 0;
-	}
-	releaseLock(&s->lock);
-	if(acquired == 0){
-		schedule(tm);
+		suspendCurrent(pushSemaphoreQueue, (uintptr_t)s);
 	}
 	if(interruptFlag){
 		sti();
 	}
-	DELETE(w);
 }
 
 void releaseSemaphore(Semaphore *s){
 	Task *t;
 	acquireLock(&s->lock);
-	t = popBlockingQueue(s);
+	t = popQueue(&s->taskQueue);
 	if(t == NULL){
 		s->quota++;
 	}
@@ -101,11 +69,22 @@ void syscall_releaseSemaphore(Semaphore *s){
 	systemCall1(SYSCALL_RELEASE_SEMAPHORE, (uintptr_t)s);
 }
 
+Semaphore *createSemaphore(){
+	Semaphore *NEW(s);
+	if(s == NULL)
+		return NULL;
+	s->lock = initialSpinlock;
+	s->quota = 0;
+	s->taskQueue = initialTaskQueue;
+	return s;
+}
+
 void deleteSemaphore(Semaphore *s){
 	s=(void*)s; // TODO:
 }
-
+/*
 void initSemaphore(SystemCallTable *systemCallTable){
 	registerSystemCall(systemCallTable, SYSCALL_ACQUIRE_SEMAPHORE, _acquireSemaphore, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_SEMAPHORE, _releaseSemaphore, 0);
 }
+*/
