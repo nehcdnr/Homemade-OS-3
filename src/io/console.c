@@ -221,7 +221,7 @@ void kernelConsoleService(void){
 	int result;
 	int kbService;
 	while(1){
-		kbService = result = systemCall1(SYSCALL_QUERY_SERVICE, (uintptr_t)KEYBOARD_SERVICE_NAME);
+		kbService = result = systemCall_queryService(KEYBOARD_SERVICE_NAME);
 		if(kbService >= 0){
 			break;
 		}
@@ -231,7 +231,7 @@ void kernelConsoleService(void){
 	}
 	EXPECT(result >= 0);
 	result = //systemCall3(SYSCALL_REGISTER_SERVICE,
-	registerSystemService(global.syscallTable,
+	registerService(global.syscallTable,
 	KERNEL_CONSOLE_SERVICE_NAME, syscall_printConsole, (uintptr_t)&kernelConsole);
 	EXPECT(result >= 0);
 	kernelConsoleLoop(kbService);

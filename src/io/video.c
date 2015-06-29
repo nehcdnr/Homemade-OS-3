@@ -280,7 +280,7 @@ void vbeDriver(void){
 	//writeFIFO(video.biosFIFO, SET_VBE_MODE);
 	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_WINDOW);
 	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
-	registerSystemService(global.syscallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
+	registerService(global.syscallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
 
 	if(switchToVirtual8086Mode(callBIOS) == 0){
 		panic("switch to v8086 error");//TODO: terminate task

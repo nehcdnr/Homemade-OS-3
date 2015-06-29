@@ -32,7 +32,7 @@ void registerSystemCall(
 	releaseLock(&s->lock);
 }
 
-static int querySystemServiceIndex(struct SystemCallTable *s, const char *name){
+static int queryServiceIndex(struct SystemCallTable *s, const char *name){
 	unsigned int i;
 	for(i = SYSCALL_SERVICE_BEGIN; i < s->usedCount; i++){
 		if(strncmp(name, s->entry[i].name, MAX_NAME_LENGTH) == 0){
@@ -51,7 +51,7 @@ static int isValidName(const char *name){
 	return 1;
 }
 
-enum ServiceNameError registerSystemService(
+enum ServiceNameError registerService(
 	SystemCallTable *systemCallTable,
 	const char *name,
 	SystemCallFunction func,
@@ -62,7 +62,7 @@ enum ServiceNameError registerSystemService(
 	}
 	int r;
 	acquireLock(&systemCallTable->lock);
-	if(querySystemServiceIndex(systemCallTable, name) < NUMBER_OF_SYSTEM_CALLS){
+	if(queryServiceIndex(systemCallTable, name) < NUMBER_OF_SYSTEM_CALLS){
 		r = SERVICE_EXISTING;
 	}
 	else{
@@ -84,13 +84,13 @@ enum ServiceNameError registerSystemService(
 	return r;
 }
 
-int querySystemService(SystemCallTable *systemCallTable, const char *name){
+static int queryService(SystemCallTable *systemCallTable, const char *name){
 	int r;
 	if(isValidName(name) == 0){
 		return INVALID_NAME;
 	}
 	acquireLock(&systemCallTable->lock);
-	r = querySystemServiceIndex(systemCallTable, name);
+	r = queryServiceIndex(systemCallTable, name);
 	releaseLock(&systemCallTable->lock);
 
 	if(r < NUMBER_OF_SYSTEM_CALLS){
@@ -114,19 +114,36 @@ static void systemCallHandler(InterruptParam *p){
 	}
 	sti();
 }
-
-static void syscall_registerService(InterruptParam *p){
+/*
+static void registerServiceHandler(InterruptParam *p){
 	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
 	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
 	SystemCallFunction func = (SystemCallFunction)SYSTEM_CALL_ARGUMENT_1(p); // TODO: isValidKernelAddress
 	uintptr_t arg = SYSTEM_CALL_ARGUMENT_2(p);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = registerSystemService(systemCallTable, name, func, arg);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = registerService(systemCallTable, name, func, arg);
+}
+*/
+
+static_assert(MAX_NAME_LENGTH / 4 == 4);
+static void queryServiceHandler(InterruptParam *p){
+	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
+	uint32_t name[MAX_NAME_LENGTH / 4 + 1];
+	name[0] = SYSTEM_CALL_ARGUMENT_0(p);
+	name[1] = SYSTEM_CALL_ARGUMENT_1(p);
+	name[2] = SYSTEM_CALL_ARGUMENT_2(p);
+	name[3] = SYSTEM_CALL_ARGUMENT_3(p);
+	name[4] = '\0';
+	SYSTEM_CALL_RETURN_VALUE_0(p) = queryService(systemCallTable, (const char*)name);
 }
 
-static void syscall_queryService(InterruptParam *p){
-	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
-	const char *name = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = querySystemService(systemCallTable, name);
+enum ServiceNameError systemCall_queryService(const char *name){
+	if(strlen(name) > MAX_NAME_LENGTH){
+		return INVALID_NAME;
+	}
+	uint32_t name4[MAX_NAME_LENGTH / 4];
+	MEMSET0(name4);
+	strncpy((char*)name4, name, MAX_NAME_LENGTH);
+	return (enum ServiceNameError)systemCall4(SYSCALL_QUERY_SERVICE ,name4[0], name4[1], name4[2], name4[4]);
 }
 
 SystemCallTable *initSystemCall(InterruptTable *t){
@@ -141,8 +158,8 @@ SystemCallTable *initSystemCall(InterruptTable *t){
 		systemCallTable->entry[i].number = i;
 		systemCallTable->entry[i].call = NULL;
 	}
-	registerSystemCall(systemCallTable, SYSCALL_REGISTER_SERVICE, syscall_registerService, (uintptr_t)systemCallTable);
-	registerSystemCall(systemCallTable, SYSCALL_QUERY_SERVICE, syscall_queryService, (uintptr_t)systemCallTable);
+	//registerSystemCall(systemCallTable, SYSCALL_REGISTER_SERVICE, registerServiceHandler, (uintptr_t)systemCallTable);
+	registerSystemCall(systemCallTable, SYSCALL_QUERY_SERVICE, queryServiceHandler, (uintptr_t)systemCallTable);
 	registerInterrupt(t, SYSTEM_CALL, systemCallHandler, (uintptr_t)systemCallTable);
 
 	return systemCallTable;

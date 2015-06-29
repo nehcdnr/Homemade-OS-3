@@ -221,8 +221,8 @@ static void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 	// system call
-	registerSystemService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard, (uintptr_t)&ps2);
-	registerSystemService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse, (uintptr_t)&ps2);
+	registerService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard, (uintptr_t)&ps2);
+	registerService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse, (uintptr_t)&ps2);
 }
 
 void ps2Driver(void){

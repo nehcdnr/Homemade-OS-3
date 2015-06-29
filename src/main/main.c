@@ -17,7 +17,7 @@ SystemGlobal global;
 
 static void initService(void){
 	void (*services[])(void) = {
-		ps2Driver,/* vbeDriver, */kernelConsoleService/*, pciDriver*/
+		ps2Driver,/* vbeDriver, */kernelConsoleService, pciDriver, ahciDriver
 	};
 	unsigned int i;
 	Task *t;

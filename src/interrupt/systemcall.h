@@ -8,7 +8,7 @@ enum SystemCall{
 	SYSCALL_TASK_DEFINED = 1,
 	SYSCALL_ACQUIRE_SEMAPHORE = 2,
 	SYSCALL_RELEASE_SEMAPHORE = 3,
-	SYSCALL_REGISTER_SERVICE = 4,
+	//SYSCALL_REGISTER_SERVICE = 4,
 	SYSCALL_QUERY_SERVICE = 5,
 	SYSCALL_ALLOCATE_HEAP = 6,
 	SYSCALL_RELEASE_HEAP = 7,
@@ -26,9 +26,13 @@ uint32_t systemCall0(/*enum SystemCall*/int systemCallNumber);
 uint32_t systemCall1(int systemCallNumber, uintptr_t arg0);
 uint32_t systemCall2(int systemCallNumber, uintptr_t arg0, uintptr_t arg1);
 uint32_t systemCall3(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2);
+uint32_t systemCall4(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
+uint32_t systemCall5(int systemCallNumber, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4);
 #define SYSTEM_CALL_ARGUMENT_0(P) ((P)->regs.edx)
 #define SYSTEM_CALL_ARGUMENT_1(P) ((P)->regs.ecx)
 #define SYSTEM_CALL_ARGUMENT_2(P) ((P)->regs.ebx)
+#define SYSTEM_CALL_ARGUMENT_3(P) ((P)->regs.esi)
+#define SYSTEM_CALL_ARGUMENT_4(P) ((P)->regs.edi)
 
 #define SYSTEM_CALL_RETURN_VALUE_0(P) ((P)->regs.eax)
 
@@ -49,16 +53,13 @@ enum ServiceNameError{
 };
 #define MAX_NAME_LENGTH (16)
 // return system call number
-int registerSystemService(
+int registerService(
 	SystemCallTable *systemCallTable,
 	const char *name,
 	SystemCallFunction func,
 	uintptr_t arg
 );
-int querySystemService(
-	SystemCallTable *systemCallTable,
-	const char *name
-);
+int systemCall_queryService(const char *name);
 
 typedef struct InterruptTable InterruptTable;
 SystemCallTable *initSystemCall(InterruptTable *t);
@@ -67,5 +68,6 @@ SystemCallTable *initSystemCall(InterruptTable *t);
 #define MOUSE_SERVICE_NAME ("mouse")
 #define VIDEO_SERVICE_NAME ("video")
 #define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
+#define PCI_SERVICE_NAME ("enumeratepci")
 
 #endif
