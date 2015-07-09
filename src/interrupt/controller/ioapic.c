@@ -4,7 +4,9 @@
 #include"common.h"
 #include"memory/memory.h"
 
-typedef struct{
+#pragma pack(1)
+
+typedef struct __attribute__((__packed__)){
 	int8_t signature[4];
 	uint32_t length;
 	uint8_t revision;
@@ -16,13 +18,13 @@ typedef struct{
 	uint32_t creatorRevision;
 }SDTHeader;
 
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	SDTHeader header;
 	/*SDTHeader **/uint32_t entry[0];
 }RSDT;
 
 // from ACPI spec
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	// ACPI 1.0 (revision = 0)
 	int8_t signature[8];
 	uint8_t checksum;
@@ -38,7 +40,7 @@ typedef struct{
 }RSDP;
 #define RSDP_REVISION_0_SIZE (20)
 
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	enum __attribute__((__packed__)) APICStructureType{
 		LOCAL_APIC = 0,
 		IO_APIC = 1,
@@ -80,7 +82,7 @@ typedef struct __attribute__((__packed__)){
 	uint16_t flags; // bit 2~0: polarity bit 4~2: trigger mode
 }SourceOverrideStruct;
 
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	ICSHeader header;
 	uint16_t flags;
 	uint32_t globalSystemInterrupt;
@@ -94,23 +96,21 @@ typedef struct __attribute__((__packed__)){
 	uint8_t localAPICLINT;
 }LocalNonMaskableStruct;
 
-typedef struct{
+typedef struct __attribute__((__packed__)){
 	SDTHeader header;
 	uint32_t localControllerAddress;
 	uint32_t flags; // = 1 if the PC supports 8259 mode
 	ICSHeader ics[0]; // interrupt controller structure
 }MADT;
 
+#pragma pack()
+
 static_assert(sizeof(ICSHeader) == 2);
 static_assert(sizeof(LocalAPICStruct) == 8);
 static_assert(sizeof(IOAPICStruct) == 12);
-// gcc always pads to the last element
 static_assert(sizeof(SourceOverrideStruct) == 10);
-static_assert((size_t)(&((SourceOverrideStruct*)0)->flags) == 8);
 static_assert(sizeof(NonMaskableStruct) == 8);
 static_assert(sizeof(LocalNonMaskableStruct) == 6);
-static_assert((size_t)(&((LocalNonMaskableStruct*)0)->localAPICLINT) == 5);
-
 static_assert(sizeof(enum APICStructureType) == 1);
 
 struct IOAPIC{

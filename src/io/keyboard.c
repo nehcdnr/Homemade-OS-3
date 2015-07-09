@@ -148,7 +148,7 @@ static void ps2Handler(InterruptParam *p){
 	sti();
 }
 
-static void syscall_keyboard(InterruptParam *p){
+static void readKeyboardHandler(InterruptParam *p){
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
@@ -158,7 +158,7 @@ static void syscall_keyboard(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = key;
 }
 
-static void syscall_mouse(InterruptParam *p){
+static void readMouseHandler(InterruptParam *p){
 	printk("%d\n",p->regs.eax);
 }
 
@@ -201,6 +201,19 @@ static void initKeyboard(void){
 	}
 }
 
+uintptr_t systemCall_readKeyboard(void){
+	static int kbService = -1;
+	while(kbService < 0){
+		kbService = systemCall_queryService(KEYBOARD_SERVICE_NAME);
+		if(kbService >= 0){
+			break;
+		}
+		printk("warning: keyboard service has not initalized...\n");
+		sleep(20);
+	}
+	return systemCall0(kbService);
+}
+
 static PS2Data ps2 = {NULL, NULL};
 
 typedef struct InterruptController PIC;
@@ -221,8 +234,8 @@ static void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 	// system call
-	registerService(syscallTable, KEYBOARD_SERVICE_NAME, syscall_keyboard, (uintptr_t)&ps2);
-	registerService(syscallTable, MOUSE_SERVICE_NAME, syscall_mouse, (uintptr_t)&ps2);
+	registerService(syscallTable, KEYBOARD_SERVICE_NAME, readKeyboardHandler, (uintptr_t)&ps2);
+	registerService(syscallTable, MOUSE_SERVICE_NAME, readMouseHandler, (uintptr_t)&ps2);
 }
 
 void ps2Driver(void){

@@ -31,8 +31,9 @@ typedef struct Task{
 	SystemCallFunction taskDefinedSystemCall;
 	uintptr_t taskDefinedArgument;
 
-	Semaphore *ioSemaphore;
-	// ioRequest *pendingIOList;
+	Spinlock ioListLock;
+	Semaphore *ioSemaphore; // length of finishedIOLIst
+	IORequest *pendingIOList, *finishedIOList;
 
 	struct Task *next, *prev;
 }Task;
@@ -138,8 +139,7 @@ static void taskSwitch(void (*func)(Task *t, uintptr_t), uintptr_t arg){
 		tm->oldTask->state = SUSPENDED;
 	}
 	tm->current = popPriorityQueue(globalQueue);
-	// FIXME: if releaseLock() before contextSwitch(), the stack sometimes becomes corrupted
-	// this happens in QEMU only
+	// if releaseLock() before contextSwitch(), the stack sometimes becomes corrupted
 	//releaseLock(&readyQueue->lock);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(tm->current != tm->oldTask){// otherwise, esp0 will be wrong value
@@ -239,8 +239,12 @@ static Task *createTask(
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
 	t->espInterrupt = espInterrupt;
+
 	t->ioSemaphore = createSemaphore();
 	EXPECT(t->ioSemaphore != NULL);
+	t->ioListLock = initialSpinlock;
+	t->pendingIOList = NULL;
+	t->finishedIOList = NULL;
 	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageTable, userStackTop, userHeapBottom);
 	EXPECT(initTaskMemoryOK != 0);
 	t->state = SUSPENDED;
@@ -324,7 +328,7 @@ Task *currentTask(TaskManager *tm){
 	return tm->current;
 }
 
-static void syscallTaskDefined(InterruptParam *p){
+static void taskDefinedHandler(InterruptParam *p){
 	uintptr_t oldArgument = p->argument;
 	Task *t = processorLocalTask();
 	p->argument = t->taskDefinedArgument;
@@ -354,7 +358,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	return tm;
 }
 
-static void syscallAllocateHeap(InterruptParam *p){
+static void allocateHeapHandler(InterruptParam *p){
 	size_t size = SYSTEM_CALL_ARGUMENT_0(p);
 	PageAttribute attribute = SYSTEM_CALL_ARGUMENT_1(p);
 	Task *t = processorLocalTask();
@@ -362,35 +366,55 @@ static void syscallAllocateHeap(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = result;
 }
 
-static void syscallReleaseHeap(InterruptParam *p){
+static void releaseHeapHandler(InterruptParam *p){
 	size_t size = SYSTEM_CALL_ARGUMENT_0(p);
 	Task *t = processorLocalTask();
 	int result = shrinkHeap(&(t->taskMemory), size);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = result;
 }
 
-
 // system call
-static void wakeupTask(uintptr_t arg){
-	Task *t = (Task*)arg;
-	releaseSemaphore(t->ioSemaphore);
+
+void putPendingIO(Task *t, IORequest *ior){
+	acquireLock(&t->ioListLock);
+#ifndef NDEBUG
+	if(t->finishedIOList != NULL){
+		printk("warning: task %x has finished IORequest but not released yet.\n", t);
+	}
+#endif
+	ADD_TO_DQUEUE(ior, &t->pendingIOList);
+	releaseLock(&t->ioListLock);
 }
 
-int sleep(uint64_t millisecond){// TODO:system call
-	if(millisecond > 1000000000 * (uint64_t)1000){
-		return 0;
-	}
-	Task *t = processorLocalTask();
-	IORequest *te = addTimerEvent(
-		processorLocalTimer(), (millisecond * TIMER_FREQUENCY) / 1000,
-		wakeupTask, (uintptr_t)t
-	);
-	if(te == NULL){ // TODO: insufficient memory
-		return 0;
-	}
+IORequest *waitIO(Task *t){
+	IORequest *ior;
 	acquireSemaphore(t->ioSemaphore);
-	te->destroy(te);
-	return 1;
+	acquireLock(&t->ioListLock);
+	ior = t->finishedIOList;
+	REMOVE_FROM_DQUEUE(ior);
+	releaseLock(&t->ioListLock);
+	assert(ior != NULL);
+	return ior;
+}
+
+static void waitIOHandler(__attribute__((__unused__)) InterruptParam *p){
+	sti();
+	IORequest *ior = waitIO(processorLocalTask());
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
+	ior->destroy(ior);
+}
+
+uintptr_t systemCall_waitIO(void){
+	return systemCall0(SYSCALL_WAIT_IO);
+}
+
+void resumeTaskByIO(IORequest *ior){
+	Task *t = (Task*)ior->arg;
+	acquireLock(&t->ioListLock);
+	REMOVE_FROM_DQUEUE(ior);
+	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
+	releaseLock(&t->ioListLock);
+	releaseSemaphore(t->ioSemaphore);
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){
@@ -404,9 +428,9 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 		globalQueue->taskQueue[p] = initialTaskQueue;
 	}
 
-	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, syscallTaskDefined, 0);
-	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, syscallAllocateHeap, 0);
-	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, syscallReleaseHeap, 0);
-
+	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
 	//initSemaphore(systemCallTable);
 }

@@ -8,16 +8,21 @@ LIBGCC=$(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
 BFI=./tool/bfi10/bfi.exe
 
 # optional
+# virtual machine
 QEMU=./tool/qemu/
-#QEMU_IMG=$(QEMU)/qemu-img.exe
+QEMU_IMG=$(QEMU)/qemu-img.exe
 QEMU_I386=$(QEMU)/qemu-system-i386w.exe -L $(QEMU)/Bios -cpu pentium
 BOCHS=./tool/bochs-p4-smp-2.6.7-win32
 BOCHS_SMP=$(BOCHS)/bochsdbg-p4-smp.exe
 VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 
+# disk image
+MKDOSFS=./tool/mkdosfs/mkdosfs.exe
+
 # source
 ASM_SRC=src\interrupt\interruptentry.asm src\assembly\assembly.asm src\main\entry.asm src\task\taskswitch.asm src\io\virtual8086.asm
 C_SRC=$(shell dir /A-D /B /S src\*.c)
+C_HEADER=$(shell dir /A-D /B /S src\*.h)
 C_OBJ=$(C_SRC:.c=.o)
 ASM_OBJ=$(ASM_SRC:.asm=.o)
 OBJ=$(C_OBJ) $(ASM_OBJ)
@@ -50,10 +55,14 @@ run: runqemu
 runbochs: os3.img
 	$(BOCHS_SMP) -q -f $(BOCHS)/bochsrc.bxrc
 
-QEMU_TEST_SATA=-drive file=empty.raw,if=none,id=testdisk -device ich9-ahci,id=ahci -device ide-drive,drive=testdisk,bus=ahci.0
-QEMU_TEST_SATA2=-drive file=empty2.raw,if=none,id=testdisk2 -device ide-drive,drive=testdisk2,bus=ahci.1
+QEMU_TEST_SATA=-drive file=freedos.qcow,if=none,id=testdisk -device ich9-ahci,id=ahci -device ide-drive,drive=testdisk,bus=ahci.0
+QEMU_TEST_SATA2=-drive file=empty.raw,if=none,id=testdisk2 -device ide-drive,drive=testdisk2,bus=ahci.1
 runqemu: os3.img
-	$(QEMU_I386) -smp cpus=3,cores=1,threads=1 -m 128 $(QEMU_TEST_SATA) $(QEMU_TEST_SATA2) -fda os3.img
+	$(QEMU_I386) -smp cpus=3,cores=1,threads=1 -m 128 $(QEMU_TEST_SATA) $(QEMU_TEST_SATA2) -fda os3.img -boot order=a
 
 runvbox: os3.img
 	$(VIRTUALBOX) startvm HomemadeOS3 --type gui
+
+disk:
+	$(QEMU_IMG) create -f raw empty.raw 40M
+	$(MKDOSFS) -v -F 32 empty.raw

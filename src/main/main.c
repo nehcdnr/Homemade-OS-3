@@ -9,6 +9,7 @@
 #include"task/task.h"
 #include"assembly/assembly.h"
 #include"io/io.h"
+#include"file/file.h"
 
 void bspEntry(void);
 void apEntry(void);
@@ -17,7 +18,7 @@ SystemGlobal global;
 
 static void initService(void){
 	void (*services[])(void) = {
-		ps2Driver,/* vbeDriver, */kernelConsoleService, pciDriver, ahciDriver
+		ps2Driver,/* vbeDriver, */kernelConsoleService, pciDriver, ahciDriver//, fatDriver
 	};
 	unsigned int i;
 	Task *t;
@@ -62,6 +63,10 @@ void apEntry(void){
 	// 8. processorLocal
 	TimerEventList *timer = createTimer();
 	setProcessorLocal(pic, gdt, taskManager, timer);
+	// 9. file
+	if(isBSP){
+		initFileSystemManager();
+	}
 	// 10. driver
 	initLocalTimer(pic, global.idt, timer);
 

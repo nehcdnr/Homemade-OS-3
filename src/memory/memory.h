@@ -72,7 +72,7 @@ void *_mapKernelPagesFromExisting(
 #define mapKernelPagesFromExisting(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
 _mapKernelPagesFromExisting(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
 PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
-#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
+//#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
 void _unmapKernelPage(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPage(ADDRESS) _unmapKernelPage(kernelLinear, ADDRESS)
 

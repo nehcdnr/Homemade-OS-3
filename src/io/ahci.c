@@ -1,3 +1,4 @@
+#include <file/file.h>
 #include"common.h"
 #include"io.h"
 #include"memory/memory.h"
@@ -5,6 +6,7 @@
 #include"interrupt/handler.h"
 #include"interrupt/controller/pic.h"
 #include"task/task.h"
+#include"multiprocessor/spinlock.h"
 
 typedef struct{
 	uint32_t commandBaseLow/*1KB aligned*/, commandBaseHigh, fisBaseLow/*256 byte aligned*/, fisBaseHigh;
@@ -21,6 +23,8 @@ typedef struct{
 
 static_assert(sizeof(HBAPortRegister) == 0x80);
 
+#define HBA_MAX_PORT_COUNT (32)
+
 typedef struct{
 	// generic host control
 	uint32_t capabilities, globalHostControl, interruptStatus, portsImplemented;
@@ -32,7 +36,7 @@ typedef struct{
 	uint8_t nvmhci[0xa0 - 0x60];
 	// rev 1.3 registers end
 	uint8_t vendorSpecific[0x100 - 0xa0];
-	HBAPortRegister port[32];
+	HBAPortRegister port[HBA_MAX_PORT_COUNT];
 }HBARegisters;
 
 static_assert(sizeof(HBARegisters) == 0x1100);
@@ -90,7 +94,7 @@ typedef struct{
 			uint32_t reserved1;
 			uint32_t byteCount: 22;
 			uint32_t reserved2: 9;
-			uint32_t completeInterrupt: 1;
+			uint32_t completeInterrupt: 1; // HBAPortRegister.interruptStatus & (1 << 5)
 		}physicalRegion[8]; // length = 0 ~ 65535; size = 0 ~ 0x3fffc
 		// size of PhysicalRegion is at least 128
 	}commandTable[6];
@@ -108,7 +112,7 @@ static_assert(sizeof(struct PhysicalRegion) == 16);
 static_assert(sizeof(struct CommandTable) == 256);
 static_assert(sizeof(HBAPortMemory) % PAGE_SIZE == 0);
 
-#define SECTOR_SIZE (512)
+#define DEFAULT_SECTOR_SIZE (512)
 
 #define POLL_UNTIL(CONDITION, MAX_TRY, SUCCESS) do{\
 	int _tryCount;\
@@ -124,6 +128,8 @@ static_assert(sizeof(HBAPortMemory) % PAGE_SIZE == 0);
 		pause();\
 	}\
 }while(0)
+
+#define HR_CAPABILITIES_CLO (1 << 24)
 
 #define PR_COMMANDSTATUS_CR (1 << 15)
 #define PR_COMMANDSTATUS_FR (1 << 14)
@@ -142,7 +148,7 @@ static int stopPort(volatile HBAPortRegister *pr){
 	if(cmd & PR_COMMANDSTATUS_FRE){
 		pr->commandStatus = (cmd ^ PR_COMMANDSTATUS_FRE);
 	}
-	sleep(500);
+	sleep(200);
 	POLL_UNTIL((pr->commandStatus & (PR_COMMANDSTATUS_CR | PR_COMMANDSTATUS_FR)) == 0, maxTry, ok);
 	if(!ok){
 		return 0;
@@ -150,7 +156,7 @@ static int stopPort(volatile HBAPortRegister *pr){
 	return 1;
 }
 
-static int startPort(volatile HBAPortRegister *pr){
+static int startPort(volatile HBAPortRegister *pr, const volatile HBARegisters *hr){
 	const int maxTry = 10000;
 	int ok;
 	// command list not running
@@ -166,10 +172,12 @@ static int startPort(volatile HBAPortRegister *pr){
 	if(!ok)
 		return 0;
 	// QEMU does not clear CLO bit
-	pr->commandStatus |= PR_COMMANDSTATUS_CLO;
-	POLL_UNTIL((pr->commandStatus & PR_COMMANDSTATUS_CLO) == 0, maxTry, ok);
-	if(!ok){
-		printk("warning: start AHCI port without clearing command list override bit\n");
+	if(hr->capabilities & HR_CAPABILITIES_CLO){
+		pr->commandStatus |= PR_COMMANDSTATUS_CLO;
+		POLL_UNTIL((pr->commandStatus & PR_COMMANDSTATUS_CLO) == 0, maxTry, ok);
+		if(!ok){
+			printk("warning: start AHCI port without clearing command list override bit\n");
+		}
 	}
 
 	pr->commandStatus |= PR_COMMANDSTATUS_FRE;// enable receiving DeviceToHostFIS
@@ -184,7 +192,7 @@ enum ATACommand{
 	IDENTIFY_DEVICE = 0xec
 };
 
-static void identifyAHCI(volatile HBAPortRegister *pr, HBAPortMemory *pm){
+static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm, PhysicalAddress buffer){
 	{
 		uint32_t ctbl = pm->commandHeader[0].commandTableBaseLow;
 		uint32_t ctbh = pm->commandHeader[0].commandTableBaseHigh;
@@ -192,10 +200,18 @@ static void identifyAHCI(volatile HBAPortRegister *pr, HBAPortMemory *pm){
 		MEMSET0(pm_ch);
 		pm_ch->fisSize = sizeof(HostToDeviceFIS) / 4; // in double words
 		pm_ch->write = 0;
-		pm_ch->clearBusyOnReceive = 0; // TODO: when is busy bit cleared?
-		pm_ch->physicalRegionLength = 0;
+		pm_ch->clearBusyOnReceive = 0;
+		pm_ch->physicalRegionLength = 1;
 		pm_ch->commandTableBaseLow = ctbl;
 		pm_ch->commandTableBaseHigh = ctbh;
+	}
+	{
+		struct PhysicalRegion *pm_ct_pr = &pm->commandTable[0].physicalRegion[0];
+		MEMSET0(pm_ct_pr);
+		pm_ct_pr->dataBaseLow = buffer.value;
+		pm_ct_pr->dataBaseHigh = 0;
+		pm_ct_pr->byteCount = DEFAULT_SECTOR_SIZE - 1;
+		pm_ct_pr->completeInterrupt = 0;
 	}
 	{
 		HostToDeviceFIS *fis = &pm->commandTable[0].hostToDeviceFIS;
@@ -209,27 +225,22 @@ static void identifyAHCI(volatile HBAPortRegister *pr, HBAPortMemory *pm){
 	pr->commandStatus, pr->SATAStatus, pr->commandIssue, pr->interruptStatus, pr->SATAActive);
 	pr->commandIssue |= (1 << 0);
 	int ok;
-	POLL_UNTIL((pr->taskFileData & 0x80)==0, 100000, ok);
-	assert(ok);
-	printk("IDENTIFY command issued\n");
-	/*
-	while(1){
-		printk("tfd %x, cmd %x, sts %x ci %x is %x sact %x\n",pr->taskFileData,
-		pr->commandStatus, pr->SATAStatus, pr->commandIssue, pr->interruptStatus, pr->SATAActive);
-		for(rec=0x40;rec<0x54;rec++)printk("%d",pm->receivedFIS[0].fis[rec]);
-		printk("\n");
-		int aa;
-		hlt();
-		for(aa=0;aa<100;aa++)hlt();
+	// POLL_UNTIL((pr->taskFileData & 0x80)==0, 100000, ok);
+	POLL_UNTIL((pr->commandIssue & (1 << 0))==0, 100000, ok);
+	if(!ok){
+		printk("failed issuing IDENTIFY command\n");
+		return 0;
 	}
-	*/
+	return 1;
 }
 
-static void rwAHCI(
-	volatile HBAPortRegister *pr, HBAPortMemory *pm,
-	PhysicalAddress buffer, uint64_t lba, size_t size, int write
+static int issueDMACommand(
+	volatile HBAPortRegister *pr, HBAPortMemory *pm, uint32_t sectorSize,
+	PhysicalAddress buffer, uint64_t lba, unsigned int sectorCount, int write
 ){
-	assert(size < (1 << 22));
+	assert(sectorCount != 0);
+	assert(sectorCount <= 65536);
+	assert(sectorSize * sectorCount < (1 << 22));
 	// HBAPortMemory *pm
 	{
 		uint32_t ctbl = pm->commandHeader[0].commandTableBaseLow;
@@ -242,7 +253,7 @@ static void rwAHCI(
 		//pm_ch->prefetch = 0;
 		//pm_ch->reset = 0;
 		//pm_ch->bist = 0;
-		pm_ch->clearBusyOnReceive = 1; // TODO: when is busy bit cleared?
+		pm_ch->clearBusyOnReceive = 1;
 		//pm->ch->reserved = 0;
 		//pm->ch->portMultiplitierPort = 0;
 		pm_ch->physicalRegionLength = 1;
@@ -255,11 +266,11 @@ static void rwAHCI(
 	}
 	{
 		struct PhysicalRegion *pm_ct_pr = &pm->commandTable[0].physicalRegion[0];
+		MEMSET0(pm_ct_pr);
 		pm_ct_pr->dataBaseLow = buffer.value;
 		pm_ct_pr->dataBaseHigh = 0;
-		assert(size != 0);
-		pm_ct_pr->byteCount = size - 1;
-		pm_ct_pr->completeInterrupt = 1;
+		pm_ct_pr->byteCount = sectorCount * sectorSize - 1;
+		pm_ct_pr->completeInterrupt = 0;
 	}
 	{
 		HostToDeviceFIS *fis = &pm->commandTable[0].hostToDeviceFIS;
@@ -278,32 +289,33 @@ static void rwAHCI(
 		fis->lba32_40 = ((lba >> 32) & 0xff);
 		fis->lba40_48  = ((lba >> 40) & 0xff);
 		// fis->feature8_16 = 0;
-		size_t sectorCount = DIV_CEIL(size, SECTOR_SIZE);
-		assert(sectorCount <= 65536);
-		if(sectorCount == 65536) // see ATA spec
-			sectorCount = 0;
-		fis->sectorCount0_8 = (sectorCount & 0xff);
-		fis->sectorCount8_16 = ((sectorCount >> 8) & 0xff);
+		if(sectorCount == 65536){ // see ATA spec
+			fis->sectorCount0_8 = 0;
+			fis->sectorCount8_16 = 0;
+		}
+		else{
+			fis->sectorCount0_8 = (sectorCount & 0xff);
+			fis->sectorCount8_16 = ((sectorCount >> 8) & 0xff);
+		}
 		// fis->icc = 0;
 		// fis->control = 0;
 	}
 	//HBAPortRegister *pr
-
 	{
 		// issueCommand
+		int ok;
 		pr->commandIssue |= (1 << 0);
-		printk("DMA command issued\n");
-		/*
-		while(1){
-			printk("%d %d %x %x %x %x\n", pm->commandHeader[0].transferByteCount,
-					pr->SATAStatus, pr->commandIssue, pr->interruptStatus, pr->interruptEnable);
-			int aa;
-			for(aa=0;aa<100;aa++)hlt();
-		}*/
+		// when the HBA receives FIS clearing BSY, DRQ, and ERR bit, it clears CI
+		POLL_UNTIL((pr->commandIssue & (1 << 0)) == 0, 100000, ok);
+		if(!ok){
+			printk("failed issuing DMA command\n");
+			return 0;
+		}
+		return 1;
 	}
 }
 
-static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr){
+static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile HBARegisters *hr){
 	int ok;
 	EXPECT((pr->SATAStatus & 0xf0f) == 0x103 /*active and present*/);
 	// stop the host controller by clearing ST bit
@@ -312,7 +324,8 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr){
 	// reset pointer to command list and received fis
 	HBAPortMemory *pm = allocateKernelPages(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
 	EXPECT(pm != NULL);
-	PhysicalAddress pm_physical = translateKernelPage(pm);
+	PhysicalAddress pm_physical = translateExistingPage(kernelPageManager,
+			/*TODO: getPageManager(processorLocalTask()), */pm);
 	MEMSET0(pm);
 	pr->commandBaseHigh = 0;
 	pr->commandBaseLow = pm_physical.value + MEMBER_OFFSET(HBAPortMemory, commandHeader[0]);
@@ -323,7 +336,7 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr){
 	pm->commandHeader[0].commandTableBaseHigh = 0;
 	pm->commandHeader[0].commandTableBaseLow = pm_physical.value + MEMBER_OFFSET(HBAPortMemory, commandTable[0]);
 
-	ok = startPort(pr);
+	ok = startPort(pr, hr);
 	EXPECT(ok);
 
 	return pm;
@@ -338,36 +351,31 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr){
 	return NULL;
 }
 
-typedef struct{
+
+typedef struct AHCIInterruptArgument{
 	volatile HBARegisters *hbaRegisters;
-	HBAPortMemory *hbaPortMemory[32];
+
+	struct DiskDescription{
+		uint32_t sectorSize;
+		uint64_t sectorCount;
+	}id;
+
+	Spinlock lock;
+	struct AHCIPortQueue{
+		HBAPortMemory *hbaPortMemory;
+		struct DiskRequest *pendingRequest;
+		struct DiskRequest *servingRequest;
+	}port[HBA_MAX_PORT_COUNT];
+
+	struct AHCIInterruptArgument *next;
 }AHCIInterruptArgument;
 
-volatile int debug_int;
+typedef struct AHCIPortQueue AHCIPortQueue;
 
-static void AHCIHandler(InterruptParam *param){
-	AHCIInterruptArgument *arg = (AHCIInterruptArgument*)param->argument;
-	uint32_t hostStatus = arg->hbaRegisters->interruptStatus;
-	int p;
-	for(p = 0; p < 32; p++){
-		if((hostStatus & (1 << p)) == 0)
-			continue;
-		uint32_t portStatus = arg->hbaRegisters->port[p].interruptStatus;
-		int i;
-		for(i = 0; i < 32; i++){
-			if((portStatus & (1 << i)) == 0)
-				continue;
-			printk("port %d, intStatus %d handled\n", p, i);
-			debug_int=1;
-			arg->hbaRegisters->port[p].interruptStatus |= (1 << i);
-		}
-		//arg->hbaRegisters->port[p].interruptStatus = 0xffffffff;
-	}
-	arg->hbaRegisters->interruptStatus = 0xffffffff;
-	processorLocalPIC()->endOfInterrupt(param);
-	sti();
-	printk("end of AHCI interrupt\n");
+static int hasPort(const AHCIInterruptArgument *arg, int p){
+	return arg->port[p].hbaPortMemory != NULL;
 }
+
 /*
 static void resetAHCI(volatile HBARegisters *hba){
 	hba->globalHostControl |= (1 << 31);
@@ -379,21 +387,18 @@ static void resetAHCI(volatile HBARegisters *hba){
 	}while(hba->globalHostControl & (1 << 0));
 }
 */
-static void initAHCIRegisters(uint32_t bar, uint32_t intInfo){
+static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 	// enable interrupt
 	AHCIInterruptArgument *NEW(arg);
 	EXPECT(arg != NULL);
-	PIC *pic = processorLocalPIC();
-	InterruptVector *v = pic->irqToVector(pic, (intInfo & 0xff));
-	setHandler(v, AHCIHandler, (uintptr_t)arg);
-	pic->setPICMask(pic, (intInfo & 0xff), 0);
-
 	// baseAddress is aligned to 4K
 	PhysicalAddress baseAddress = {bar & 0xfffff000};
 	volatile HBARegisters *hba = mapKernelPage(baseAddress, CEIL(sizeof(HBARegisters), PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
 	EXPECT(hba != NULL);
 	EXPECT(hba->ahciVersion >= 0x10000);
 	arg->hbaRegisters = hba;
+	arg->lock = initialSpinlock;
+	arg->id.sectorSize = DEFAULT_SECTOR_SIZE;
 	//resetAHCI(hba);
 	hba->globalHostControl |= ((1<<31)/*AHCI mode*/ | (1 << 1) /*enable interrupt*/);
 	//printk("bar5: %x %x\n",bar, hba);
@@ -402,37 +407,23 @@ static void initAHCIRegisters(uint32_t bar, uint32_t intInfo){
 	//printk("support AHCI only: %d\n", (hba->globalHostControl >> 8) & 1);
 	int p;
 	uint32_t portImpl = hba->portsImplemented;
-	for(p = 0; p < 32; p++){
-		arg->hbaPortMemory[p] = NULL;
+	for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
+		arg->port[p].hbaPortMemory = NULL;
+		arg->port[p].pendingRequest = NULL;
+		arg->port[p].servingRequest = NULL;
 		if(((portImpl >> p) & 1) == 0){
 			continue;
 		}
-		HBAPortMemory *pm = initAHCIPort(hba->port + p);
+		HBAPortMemory *pm = initAHCIPort(hba->port + p, hba);
 		if(pm == NULL){
-			printk("AHCI port %d is unavailable.\n", p);
+			// printk("AHCI port %d is unavailable.\n", p);
 			continue;
 		}
-		arg->hbaPortMemory[p] = pm;
-		// testing
-#ifndef NDEBUG
-		void* buffer = allocateKernelPages(PAGE_SIZE, KERNEL_NON_CACHED_PAGE);
-		assert(buffer != NULL);
-		PhysicalAddress physicalBuffer = translateExistingPage(
-			kernelPageManager/*TODO: getPageManager(processorLocalTask())*/, buffer);
-		debug_int = 0;
-		identifyAHCI(hba->port + p, pm);
-		while(debug_int == 0)hlt();
-		debug_int = 0;
-		rwAHCI(hba->port + p, pm, physicalBuffer, 0, PAGE_SIZE, 0);
-		while(debug_int == 0)hlt();
-		//debug_int = 0;
-		//rwAHCI(hba->port + p, pm, physicalBuffer, 0, PAGE_SIZE, 0);
-		//while(debug_int == 0)hlt();
-		printk("AHCI port %d ok\n", p);
-		releaseKernelPages(buffer);
-#endif
+		arg->port[p].hbaPortMemory = pm;
 	}
-	return;
+	arg->next = *argList;
+	*argList = arg;
+	return 1;
 
 	ON_ERROR;
 	printk("unsupported AHCI version: %x\n", hba->ahciVersion);
@@ -442,28 +433,458 @@ static void initAHCIRegisters(uint32_t bar, uint32_t intInfo){
 	DELETE(arg);
 	ON_ERROR;
 	printk("cannot allocate linear memory for HBA interrupt handler\n");
+	return 0;
 }
 
 
+// system call
+typedef struct DiskRequest DiskRequest;
+struct DiskRequest{
+	IORequest this;
+	Spinlock *lock;
+	enum ATACommand command;
+	PhysicalAddress buffer;
+	uint64_t lba;
+	uint32_t sectorCount;
+	AHCIInterruptArgument *ahci;
+	int portIndex;
+	char isWrite;
+	char cancellable;
+	struct DiskRequest **prev, *next;
+};
 
-void ahciDriver(void){
-	int index = 0;
-	int foundCount = 0;
+static int sendDiskRequest(DiskRequest *dr){
+	AHCIInterruptArgument *a = dr->ahci;
+	switch(dr->command){
+	case DMA_READ_EXT:
+	case DMA_WRITE_EXT:
+		return issueDMACommand(
+			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory, a->id.sectorSize,
+			dr->buffer, dr->lba, dr->sectorCount, dr->isWrite
+		);
+	case IDENTIFY_DEVICE:
+		return issueIdentifyCommand(
+			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory,
+			dr->buffer
+		);
+	default:
+		assert(0); // unknown command;
+		return 0;
+	}
+}
+
+static void destroyDiskRequest(IORequest *ior){
+	DELETE(ior->diskRequest);
+}
+
+static int cancelDiskRequest(IORequest *ior){
+	DiskRequest *dr = ior->diskRequest;
+	int cancellable;
+	acquireLock(dr->lock);
+	cancellable = dr->cancellable;
+	if(cancellable){
+		REMOVE_FROM_DQUEUE(dr);
+	}
+	releaseLock(dr->lock);
+	return cancellable;
+}
+
+static DiskRequest *createDiskRequest(
+	IORequestHandler callback, uintptr_t arg,
+	enum ATACommand cmd,
+	PhysicalAddress buffer, uint64_t lba, uint32_t sectorCount,
+	AHCIInterruptArgument *a, int portIndex, char isWrite
+){
+	DiskRequest *NEW(dr);
+	EXPECT(dr != NULL);
+	initIORequest(&dr->this, dr, callback, arg, cancelDiskRequest, destroyDiskRequest);
+	dr->lock = &a->lock;
+	dr->command = cmd;
+	dr->buffer = buffer;
+	dr->lba = lba;
+	dr->sectorCount = sectorCount;
+	dr->ahci = a;
+	dr->portIndex = portIndex;
+	dr->isWrite = isWrite;
+	dr->cancellable = 1;
+	dr->prev = NULL;
+	dr->next = NULL;
+	return dr;
+	ON_ERROR;
+	return NULL;
+}
+
+// disk request queue
+static AHCIInterruptArgument **ahciArray = NULL;
+static int ahciCount = 0;
+
+// return 0 if failed issuing command
+// return 1 if command was issued or no request
+static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
+	int ok = 1;
+	DiskRequest *dr;
+	acquireLock(&a->lock);
+	assert(a->port[portIndex].servingRequest == NULL);
+	dr = a->port[portIndex].pendingRequest;
+	if(dr != NULL){
+		REMOVE_FROM_DQUEUE(dr);
+		dr->cancellable = 0;
+		ADD_TO_DQUEUE(dr, &a->port[portIndex].servingRequest);
+		ok = sendDiskRequest(dr);
+	}
+	releaseLock(&a->lock);
+	return ok;
+}
+
+static void addToPortQueue(DiskRequest *dr, int portIndex){
+	AHCIInterruptArgument *a = dr->ahci;
+	struct AHCIPortQueue *p = a->port + portIndex;
+	acquireLock(&a->lock);
+	ADD_TO_DQUEUE(dr, &p->pendingRequest);
+	releaseLock(&a->lock);
+}
+
+static DiskRequest *removeFromPortQueue(AHCIInterruptArgument *a, int portIndex){
+	AHCIPortQueue *p = &a->port[portIndex];
+	DiskRequest *dr;
+	acquireLock(&a->lock);
+	dr = p->servingRequest;
+	if(dr != NULL){
+		REMOVE_FROM_DQUEUE(dr);
+	}
+	releaseLock(&a->lock);
+	return dr;
+}
+
+// interrupt & system call
+
+static void AHCIHandler(InterruptParam *param){
+	AHCIInterruptArgument *arg = (AHCIInterruptArgument*)param->argument;
+	uint32_t hostStatus = arg->hbaRegisters->interruptStatus;
+	// software writes 1 to indicate the interrupt has been handled
+	arg->hbaRegisters->interruptStatus = hostStatus;
+	int p;
+	for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
+		if((hostStatus & (1 << p)) == 0)
+			continue;
+		uint32_t portStatus = arg->hbaRegisters->port[p].interruptStatus;
+		arg->hbaRegisters->port[p].interruptStatus = portStatus;
+		int i;
+		for(i = 0; i < 32; i++){
+			if((portStatus & (1 << i)) == 0)
+				continue;
+		}
+		if(portStatus == 0)
+			continue;
+
+		DiskRequest *dr = removeFromPortQueue(arg, p);
+		if(dr == NULL)
+			printk("warning: AHCI driver received unexpected interrupt\n");
+		else
+			dr->this.handle(&dr->this);
+
+		if(servePortQueue(arg, p) == 0){
+			assert(0); // TODO:
+			// this.handle(&this); // dr->this.fail()
+		}
+	}
+	processorLocalPIC()->endOfInterrupt(param);
+	sti();
+	// printk("end of AHCI interrupt\n");
+}
+
+// buffer address
+static_assert(sizeof(uint32_t) == sizeof(uintptr_t));
+
+#pragma pack(1)
+
+union HBAPortIndex{
+	struct{
+		uint16_t hbaIndex;
+		uint8_t portIndex;
+		uint8_t invalid: 1;
+		uint8_t identifyCommand: 1;
+		uint8_t unused: 6;
+	};
+	uint32_t value;
+}__attribute__((__packed__));
+
+typedef union HBAPortIndex HBAPortIndex;
+
+#pragma pack()
+
+static_assert(sizeof(HBAPortIndex) == sizeof(uint32_t));
+
+static_assert(HBA_MAX_PORT_COUNT < 0x1000);
+
+static int isValidHBAPortIndex(HBAPortIndex index){
+	if(/*index.portIndex < 0 || */index.portIndex >= HBA_MAX_PORT_COUNT)
+		return 0;
+	if(/*index.hbaIndex < 0 || */index.hbaIndex >= ahciCount)
+		return 0;
+	AHCIInterruptArgument *a = ahciArray[index.hbaIndex];
+	if(hasPort(a, index.portIndex) == 0)
+		return 0;
+	return 1;
+}
+
+static HBAPortIndex encodeIndex(int a, int p){
+	HBAPortIndex i = {value: 0};
+	i.hbaIndex = a;
+	i.portIndex = p;
+	return i;
+}
+
+static void AHCIServiceHandler(InterruptParam *p){
+	sti();
+	assert(ahciArray == (AHCIInterruptArgument**)p->argument);
+	Task *t = processorLocalTask();
+	uintptr_t linearBuffer = SYSTEM_CALL_ARGUMENT_0(p);
+	PhysicalAddress physicalBuffer = translateExistingPage(
+		kernelPageManager/*TODO: getPageManager(t)*/, (void*)linearBuffer
+	);
+	uint32_t lbaLow = SYSTEM_CALL_ARGUMENT_1(p);
+	uint32_t lbaHigh = SYSTEM_CALL_ARGUMENT_2(p);
+	uint32_t sectorCount = (SYSTEM_CALL_ARGUMENT_3(p) & 0x7fffffff);
+
+	int isWrite = ((SYSTEM_CALL_ARGUMENT_3(p) >> 31) & 1);
+	HBAPortIndex index = {value: SYSTEM_CALL_ARGUMENT_4(p)};
+	int ok = isValidHBAPortIndex(index);
+	EXPECT(ok);
+	DiskRequest *dr = createDiskRequest(resumeTaskByIO, (uintptr_t)t,
+		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
+		physicalBuffer, (((uint64_t)lbaHigh) << 32) + lbaLow, sectorCount,
+		ahciArray[index.hbaIndex], index.portIndex, isWrite
+	);
+	// improve: multiple physical regions
+assert(sectorCount * ahciArray[index.hbaIndex]->id.sectorSize <= PAGE_SIZE);
+	EXPECT(dr != NULL);
+	putPendingIO(t, &dr->this);
+	addToPortQueue(dr, index.portIndex);
+	if(servePortQueue(ahciArray[index.hbaIndex], index.portIndex) == 0){
+		assert(0);
+		// TODO: dr->this.handle(&dr->this); // dr->this.fail()
+	}
+
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (uint32_t)dr;
+	return;
+	// destroy(dr);
+	ON_ERROR;
+	ON_ERROR;
+	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
+}
+
+static uintptr_t _systemCall_rwAHCI(
+	int syscallNumber,
+	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
+	uint32_t index, int isWrite
+){
+	return systemCall5(syscallNumber,
+		buffer, lba & 0xffffffff, (lba >> 32) & 0xffffffff,
+		sectorCount | (isWrite? 0x80000000: 0), index
+	);
+}
+
+uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite){
+	static int ahciService = -1;
+	while(ahciService < 0){
+		ahciService = systemCall_queryService(AHCI_SERVICE_NAME);
+		if(ahciService >= 0)
+			break;
+		printk("warning: AHCI service is not initialized\n");
+		sleep(20);
+	}
+	return systemCall5(ahciService,
+		buffer, lba & 0xffffffff, (lba >> 32) & 0xffffffff,
+		sectorCount | (isWrite? 0x80000000: 0), index
+	);
+}
+
+
+static uintptr_t systemCall_rwAHCISync(
+	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
+	HBAPortIndex index, int isWrite
+){
+	uintptr_t ior1 = _systemCall_rwAHCI(SYSCALL_TASK_DEFINED, buffer, lba, sectorCount, index.value, isWrite);
+	if(ior1 == IO_REQUEST_FAILURE)
+		return ior1;
+	uintptr_t ior2 = systemCall_waitIO();
+	assert(ior1 == ior2);
+	return ior1;
+}
+
+static void readPartitions(int hbaIndex, int portIndex, uint64_t lba, uint64_t sectorCount){
+	struct MBR *buffer = allocateKernelPages(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
+	EXPECT(buffer != NULL);
+	uintptr_t ior1 = systemCall_rwAHCISync((uintptr_t)buffer, lba, 1, encodeIndex(hbaIndex, portIndex), 0);
+	EXPECT(ior1 != IO_REQUEST_FAILURE);
+
+	if(buffer->signature != MBR_SIGNATRUE){
+		printk(" disk %u port %u LBA %u is not a bootable partition\n", hbaIndex, portIndex, lba);
+	}
+
+	int i;
+	for(i = 0; i < 4; i++){
+		struct PartitionEntry *pe = buffer->partition + i;
+		pe->startLBA += lba;
+		printk("hba %d, port %d, type %x, ", hbaIndex, portIndex, pe->systemID);
+		printk("lba %u, sector count %u ", pe->startLBA, pe->sectorCount);
+		if(pe->systemID == MBR_EMPTY){
+			printk("(empty partition)\n");
+			continue;
+		}
+		if(pe->startLBA == 0 || pe->startLBA <= lba || pe->startLBA - lba > sectorCount){
+			printk("(invalid startLBA)\n");
+			continue;
+		}
+		if(pe->sectorCount == 0 || pe->sectorCount > sectorCount - (pe->startLBA - lba)){
+			printk("(invalid sectorCount)\n");
+			continue;
+		}
+		printk("\n");
+		if(buffer->partition[i].systemID == MBR_EXTENDED){
+			readPartitions(hbaIndex, portIndex,
+					pe->startLBA, pe->sectorCount);
+		}
+		//TODO: registerPartition
+	}
+
+	releaseKernelPages(buffer);
+	return;
+	ON_ERROR;
+	releaseKernelPages(buffer);
+	ON_ERROR;
+	printk("cannot read partitions");
+}
+
+static int identifyDisk(int a, int p, struct DiskDescription *d){
+	uint16_t *buffer = allocateKernelPages(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
+	EXPECT(buffer!= NULL);
+	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
+	HBAPortIndex i = encodeIndex(a, p);
+	i.identifyCommand = 1;
+	uintptr_t ior = systemCall_rwAHCISync((uintptr_t)buffer, 0, 0, i, 0);
+	EXPECT(ior != IO_REQUEST_FAILURE);
+	// the driver requires 48-bit address
+	const uint32_t buffer83 = buffer[83];
+	EXPECT(buffer83 & (1 << 10));
+	// find sector size
+	const uint16_t buffer106 = buffer[106];
+	if((buffer106 & ((1 << 14) | (1 << 15))) != (1 << 14)){
+		d->sectorSize = DEFAULT_SECTOR_SIZE;
+		printk("disk does not report sector size\n");
+	}
+	else if((buffer106 & (1 << 12)) == 0){
+		d->sectorSize = DEFAULT_SECTOR_SIZE;
+		printk("disk sector size = %u (default)\n", d->sectorSize);
+	}
+	else{
+		d->sectorSize = buffer[117] + (((uint32_t)buffer[118]) << 16);
+		printk("disk sector size = %u\n", d->sectorSize);
+	}
+	// find number of sectors
+#define TO64(W, X, Y, Z) \
+(((uint64_t)(W)) << 0) + (((uint64_t)(X)) << 16) + \
+(((uint64_t)(Y)) << 32) + (((uint64_t)(Z)) << 48)
+	if(buffer[69] & (1<<3)){ // buffer[230] is valid
+		d->sectorCount = TO64(buffer[230], buffer[231], buffer[232], buffer[233]);
+	}
+	else{
+		// buffer[60] is always valid
+		// if the disk supports 48-bit address, buffer[100] is valid
+		const uint32_t buffer60 = buffer[60] + (((uint32_t)buffer[61]) << 16);
+		const uint64_t buffer100 = TO64(buffer[100], buffer[101], buffer[102], buffer[103]);
+		d->sectorCount = (buffer100 >= buffer60? buffer100: buffer60);
+	}
+#undef TO64
+	printk("disk sector count = %u\n",(uint32_t)d->sectorCount);
+	releaseKernelPages(buffer);
+	return 1;
+	ON_ERROR;
+	ON_ERROR;
+	releaseKernelPages(buffer);
+	ON_ERROR;
+	return 0;
+}
+
+static int enumerateAndInitAHCI(AHCIInterruptArgument **ahciList){
+	PIC *pic = processorLocalPIC();
+	int pciIndex = 0;
+	int enumCount = 0;
 	while(1){
 		uint8_t bus, dev, func;
 		// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
-		index = systemCall_enumeratePCI(&bus, &dev, &func, index, 0x01060100, 0xffffff00);
-		if(index == 0xffff){
+		pciIndex = systemCall_enumeratePCI(&bus, &dev, &func, pciIndex, 0x01060100, 0xffffff00);
+		if(pciIndex == 0xffff){
 			break;
 		}
-		index++;
+		pciIndex++;
 		uint32_t bar5 = readPCIConfig(bus, dev, func, BASE_ADDRESS_5);
 		uint32_t intInfo  = readPCIConfig(bus, dev, func, INTERRUPT_INFORMATION);
-		initAHCIRegisters(bar5, intInfo);
-		foundCount++;
+		int ok = initAHCIRegisters(bar5, ahciList);
+
+		if(ok == 0){
+			continue;
+		}
+		enumCount++;
+		const AHCIInterruptArgument *arg = *ahciList;
+		InterruptVector *v = pic->irqToVector(pic, (intInfo & 0xff));
+		setHandler(v, AHCIHandler, (uintptr_t)arg);
+		pic->setPICMask(pic, (intInfo & 0xff), 0);
 	}
-	printk("found %d AHCI devices\n", foundCount);
+	return enumCount;
+}
+
+void ahciDriver(void){
+	if(ahciArray != NULL || ahciCount != 0){
+		panic("cannot initialize AHCI driver");
+	}
+
+	ahciCount = 0;
+	AHCIInterruptArgument *ahciList = NULL;
+	ahciCount = enumerateAndInitAHCI(&ahciList);
+
+	NEW_ARRAY(ahciArray, ahciCount);
+	EXPECT(ahciArray != NULL);
+	{
+		if(ahciArray == NULL){
+			panic("cannot initialize AHCI driver");
+		}
+		int a;
+		AHCIInterruptArgument *arg = ahciList;
+		for(a = 0; a < ahciCount; a++){
+			ahciArray[a] = arg;
+			arg = arg->next;
+		}
+		assert(arg == NULL);
+	}
+
+	// port initialization has not finished yet. use task-defined system call for local call
+	setTaskSystemCall(processorLocalTask(), AHCIServiceHandler, (uintptr_t)ahciArray);
+	int a, p;
+	for(a = 0; a < ahciCount; a++){
+		for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
+			if(hasPort(ahciArray[a], p) == 0){
+				continue;
+			}
+			if(identifyDisk(a, p, &ahciArray[a]->id) == 0){
+				printk("identify hba %d port %d failed\n", a, p);
+				continue;
+			}
+			readPartitions(a, p, 0, ahciArray[a]->id.sectorCount);
+		}
+	}
+
+	int ahciService = registerService(global.syscallTable, AHCI_SERVICE_NAME, AHCIServiceHandler, (uintptr_t)ahciArray);
+	EXPECT(ahciService >= 0);
+	printk("found %d AHCI devices\n", ahciCount);
 	while(1){
 		hlt(); // TODO: create FIFO and wait for interrupt
+	}
+	ON_ERROR;
+	ON_ERROR;
+	printk("cannot initialize AHCI driver\n");
+	while(1){
+		hlt();
 	}
 }

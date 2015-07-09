@@ -93,7 +93,10 @@ typedef struct PCIConfigSpaceList{
 	struct PCIConfigRegisters{
 		uint16_t vendorID, deviceID;
 		uint16_t command, status;
-		uint8_t revision, programInterface, subclassCode, classCode;
+		union{
+			struct{uint8_t revision, programInterface, subclassCode, classCode;};
+			uint32_t classCodes;
+		};
 		uint8_t cacheLineSize, latencyTimer, headerType, bist;
 	}regs;
 
@@ -190,7 +193,7 @@ static int enumeratePCIBridge(uint32_t bus, const PCIConfigSpaceList **csListHea
 }
 
 static int enumerateHostBridge(const PCIConfigSpaceList **csListHead){
-	// TODO: lock csListHead if we want to modify or reload driver
+	// TODO: lock csListHead if we want to reload driver
 	if(*csListHead != NULL){
 		printk("reload PCI configuration space");
 		deleteConfigSpaceList(csListHead);
@@ -222,7 +225,7 @@ static void enumeratePCIHandler(InterruptParam *p){
 	uint32_t queryClassCode = SYSTEM_CALL_ARGUMENT_1(p);
 	uint32_t classMask = SYSTEM_CALL_ARGUMENT_2(p);
 	while(index < csArrayLength){
-		uint32_t csClassCode = *(uint32_t*)&(csArray[index]->regs.revision);
+		uint32_t csClassCode = csArray[index]->regs.classCodes;
 		if((csClassCode & classMask) == (queryClassCode & classMask)){
 			break;
 		}
@@ -248,7 +251,7 @@ int systemCall_enumeratePCI(
 			break;
 		}
 		printk("warning: PCI service has not initalized...\n");
-		sleep(100);
+		sleep(20);
 	}
 	uint32_t r = systemCall3(pciService, (index & 0xffff), classCode ,classMask);
 	union PCIConfigSpaceLocation location = {value: r >> 16};

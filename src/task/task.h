@@ -15,7 +15,7 @@ void schedule(void);
 // put Task t into queue if it is suspended (by systemCall(SYSCALL_SUSPEND))
 Task *currentTask(TaskManager *tm);
 void resume(/*TaskManager *tm, */Task *t);
-int sleep(uint64_t millisecond);
+
 
 TaskManager *createTaskManager(SegmentTable *gdt);
 void initTaskManagement(SystemCallTable *systemCallTable);

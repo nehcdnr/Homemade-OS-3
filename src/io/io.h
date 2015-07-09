@@ -1,28 +1,40 @@
 #include"interrupt/handler.h"
 
 typedef struct IORequest IORequest;
+typedef void (*IORequestHandler)(IORequest*);
+
 struct IORequest{
 	union{
 		void *ioRequest;
 		struct TimerEvent *timerEvent;
+		struct DiskRequest *diskRequest;
 	};
 	// for Task.pendingIOList; see taskmanager.c
 	IORequest **prev,*next;
 
-	void (*handle)(uintptr_t arg);
+	IORequestHandler handle;
 	uintptr_t arg;
-	void (*cancel)(IORequest*);
+	// return 1 if the request is cancelled
+	// return 0 if the request is being processing and not cancelled. the task must wait until it finish.
+	int (*cancel)(IORequest*);
 	void (*destroy)(IORequest*);
 };
+typedef struct Task Task;
+void putPendingIO(Task *t, IORequest *ior);
+IORequest *waitIO(Task *t);
+void resumeTaskByIO(IORequest *ior); // IORequestHandler
+uintptr_t systemCall_waitIO(void);
 
 void initIORequest(
 	IORequest *this,
 	void *instance,
-	void (*h)(uintptr_t),
+	IORequestHandler h,
 	uintptr_t a,
-	void (*c)(struct IORequest*),
+	int (*c)(struct IORequest*),
 	void (*d)(struct IORequest*)
 );
+
+#define IO_REQUEST_FAILURE ((uintptr_t)0)
 
 // timer8254.c
 void setTimer8254Frequency(unsigned frequency);
@@ -34,11 +46,8 @@ typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
 TimerEventList *createTimer(void);
 
-typedef struct TimerEvent TimerEvent;
-IORequest *addTimerEvent(
-	TimerEventList* tel, uint64_t waitTicks,
-	void (*callback)(uintptr_t), uintptr_t arg
-);
+int sleep(uint64_t millisecond);
+
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);
 void initTimer(void);
 
@@ -51,6 +60,7 @@ void vbeDriver(void);
 
 // keyboard.c
 void ps2Driver(void);
+uintptr_t systemCall_readKeyboard(void);
 
 // pci.c
 void pciDriver(void);
@@ -106,3 +116,7 @@ uint32_t readPCIConfig(uint8_t bus, uint8_t dev, uint8_t func, enum PCIConfigReg
 
 // ahci.c
 void ahciDriver(void);
+
+// return 0 if fail
+// return 1 if the io request is issued
+uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite);

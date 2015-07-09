@@ -197,11 +197,11 @@ static int printHandler(char *cmdLine, int index, int key){
 	return index;
 }
 
-static void kernelConsoleLoop(int kbService){
+static void kernelConsoleLoop(void){
 	char cmdLine[MAX_COMMAND_LINE_LENGTH];
 	int index = 0;
 	while(1){
-		uintptr_t key = systemCall0(kbService);
+		uintptr_t key = systemCall_readKeyboard();
 		// command line
 		switch(key){
 		case BACKSPACE:
@@ -219,23 +219,11 @@ static void kernelConsoleLoop(int kbService){
 
 void kernelConsoleService(void){
 	int result;
-	int kbService;
-	while(1){
-		kbService = result = systemCall_queryService(KEYBOARD_SERVICE_NAME);
-		if(kbService >= 0){
-			break;
-		}
-		printk("warning: keyboard service has not initalized...\n");
-		sleep(100);
-		//TOOD: sleep & retry
-	}
-	EXPECT(result >= 0);
 	result = //systemCall3(SYSCALL_REGISTER_SERVICE,
 	registerService(global.syscallTable,
 	KERNEL_CONSOLE_SERVICE_NAME, syscall_printConsole, (uintptr_t)&kernelConsole);
 	EXPECT(result >= 0);
-	kernelConsoleLoop(kbService);
-	ON_ERROR;
+	kernelConsoleLoop();
 	ON_ERROR;
 	panic("cannot create kernelConsoleService");
 }
