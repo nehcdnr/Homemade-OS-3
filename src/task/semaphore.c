@@ -61,14 +61,14 @@ void releaseSemaphore(Semaphore *s){
 		resume(t);
 	}
 }
-
+/*
 void syscall_acquireSemaphore(Semaphore *s){
 	systemCall1(SYSCALL_ACQUIRE_SEMAPHORE, (uintptr_t)s);
 }
 void syscall_releaseSemaphore(Semaphore *s){
 	systemCall1(SYSCALL_RELEASE_SEMAPHORE, (uintptr_t)s);
 }
-
+*/
 Semaphore *createSemaphore(){
 	Semaphore *NEW(s);
 	if(s == NULL)

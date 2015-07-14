@@ -97,6 +97,7 @@ static int findSlab(size_t size){
 	for(i = 0; 1; i++){
 		if((unsigned)i >= NUMBER_OF_SLAB_UNIT){
 			panic("error allocating memory");
+			return i;
 		}
 		if(SlabUnit[i] >= size){
 			return i;

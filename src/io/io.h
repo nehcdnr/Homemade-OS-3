@@ -1,8 +1,9 @@
 #include"interrupt/handler.h"
 
 typedef struct IORequest IORequest;
-typedef void (*IORequestHandler)(IORequest*);
-
+typedef void (*HandleIORequest)(IORequest*);
+typedef int (*FinishIORequest)(IORequest*, uintptr_t*);
+typedef struct Task Task;
 struct IORequest{
 	union{
 		void *ioRequest;
@@ -11,27 +12,28 @@ struct IORequest{
 	};
 	// for Task.pendingIOList; see taskmanager.c
 	IORequest **prev,*next;
-
-	IORequestHandler handle;
-	uintptr_t arg;
+	//TODO: handle = resumeTaskByIO
+	HandleIORequest handle;
+	Task *task;
+	//uintptr_t arg;
 	// return 1 if the request is cancelled
-	// return 0 if the request is being processing and not cancelled. the task must wait until it finish.
+	// return 0 if the request is being processing and not cancelled. the task must wait until it finishes.
 	int (*cancel)(IORequest*);
-	void (*destroy)(IORequest*);
+	// return number of elements in returnValues
+	FinishIORequest finish;
 };
-typedef struct Task Task;
-void putPendingIO(Task *t, IORequest *ior);
+void putPendingIO(IORequest *ior);
 IORequest *waitIO(Task *t);
 void resumeTaskByIO(IORequest *ior); // IORequestHandler
 uintptr_t systemCall_waitIO(void);
-
+uintptr_t systemCall_waitIOReturn(int returnCount, ...);
 void initIORequest(
 	IORequest *this,
 	void *instance,
-	IORequestHandler h,
-	uintptr_t a,
+	HandleIORequest h,
+	Task* t,
 	int (*c)(struct IORequest*),
-	void (*d)(struct IORequest*)
+	FinishIORequest f
 );
 
 #define IO_REQUEST_FAILURE ((uintptr_t)0)
@@ -46,6 +48,7 @@ typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
 TimerEventList *createTimer(void);
 
+uintptr_t setAlarm(uint64_t millisecond, uint64_t isPeriodic);
 int sleep(uint64_t millisecond);
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);

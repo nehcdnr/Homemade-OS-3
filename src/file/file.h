@@ -1,25 +1,20 @@
 #include<std.h>
 
-#pragma pack(1)
-struct MBR{
-	uint8_t bootCode[446];
-	struct PartitionEntry{
-		uint8_t active; // 0x80 = active
-		uint8_t startHead;
-		uint16_t startSector: 6;
-		uint16_t startCydlinder: 10;
-		uint8_t systemID;
-		uint8_t endHead;
-		uint16_t endSector: 6;
-		uint16_t endCylinder: 10;
-		uint32_t startLBA;
-		uint32_t sectorCount;
-	}partition[4];
-	uint16_t signature;
-}__attribute__((__packed__));
-#pragma pack()
+// disk driver interface
+uintptr_t systemCall_rwDisk(int driver,
+	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
+	uint32_t diskCode, int isWrite
+);
+uintptr_t systemCall_rwDiskSync(int driver,
+	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
+	uint32_t diskCode, int isWrite
+);
 
-#define MBR_SIGNATRUE (0xaa55)
+struct InterruptParam;
+void rwDiskArgument(struct InterruptParam *p,
+	uintptr_t *buffer, uint64_t *lba, uint32_t *sectorCount,
+	uint32_t *diskCode, int *isWrite
+);
 
 enum MBR_SystemID{
 	MBR_EMPTY = 0x00,
@@ -34,15 +29,22 @@ enum MBR_SystemID{
 	MBR_FAT16_LBA = 0x0e,
 	MBR_EXTENDED_LBA = 0x0f
 };
-
+#define MAX_FILE_SYSTEM_TYPE (0x10)
+typedef enum MBR_SystemID FileSystemType;
 
 int addDiskPartition(
-	enum MBR_SystemID systemID, int diskDriver,
-	uint64_t startLBA, uint64_t sectorCount,
-	uint32_t partitionIndex
+	FileSystemType systemID, const char *driverName, int diskDriver,
+	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
+	uint32_t diskCode
 );
-void removeDiskPartition(int diskDriver, uint32_t partitionIndex);
-void initFileSystemManager(void);
+int removeDiskPartition(int diskDriver, uint32_t diskCode);
+typedef struct SystemCallTable SystemCallTable;
+void initFileSystemManager(SystemCallTable *sc);
+
+void readPartitions(const char *driverName, int diskDriver, uint32_t diskCode,
+	uint64_t lba, uint64_t sectorCount, uint32_t sectorSize);
+
+uintptr_t systemCall_discoverDisk(FileSystemType diskType);
 
 // FAT32
 void fatDriver(void);

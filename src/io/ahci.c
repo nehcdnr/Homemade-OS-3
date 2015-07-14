@@ -221,14 +221,14 @@ static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm,
 		fis->updateCommand = 1;
 		fis->device = 0;
 	}
-	printk("tfd %x, cmd %x, sts %x ci %x is %x sact %x\n",pr->taskFileData,
-	pr->commandStatus, pr->SATAStatus, pr->commandIssue, pr->interruptStatus, pr->SATAActive);
+	//printk("tfd %x, cmd %x, sts %x ci %x is %x sact %x\n",pr->taskFileData,
+	//pr->commandStatus, pr->SATAStatus, pr->commandIssue, pr->interruptStatus, pr->SATAActive);
 	pr->commandIssue |= (1 << 0);
 	int ok;
 	// POLL_UNTIL((pr->taskFileData & 0x80)==0, 100000, ok);
 	POLL_UNTIL((pr->commandIssue & (1 << 0))==0, 100000, ok);
 	if(!ok){
-		printk("failed issuing IDENTIFY command\n");
+		printk("failed to issue IDENTIFY command\n");
 		return 0;
 	}
 	return 1;
@@ -308,7 +308,7 @@ static int issueDMACommand(
 		// when the HBA receives FIS clearing BSY, DRQ, and ERR bit, it clears CI
 		POLL_UNTIL((pr->commandIssue & (1 << 0)) == 0, 100000, ok);
 		if(!ok){
-			printk("failed issuing DMA command\n");
+			printk("failed to issue DMA command\n");
 			return 0;
 		}
 		return 1;
@@ -358,7 +358,7 @@ typedef struct AHCIInterruptArgument{
 	struct DiskDescription{
 		uint32_t sectorSize;
 		uint64_t sectorCount;
-	}id;
+	}desc;
 
 	Spinlock lock;
 	struct AHCIPortQueue{
@@ -398,7 +398,7 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 	EXPECT(hba->ahciVersion >= 0x10000);
 	arg->hbaRegisters = hba;
 	arg->lock = initialSpinlock;
-	arg->id.sectorSize = DEFAULT_SECTOR_SIZE;
+	arg->desc.sectorSize = DEFAULT_SECTOR_SIZE;
 	//resetAHCI(hba);
 	hba->globalHostControl |= ((1<<31)/*AHCI mode*/ | (1 << 1) /*enable interrupt*/);
 	//printk("bar5: %x %x\n",bar, hba);
@@ -459,7 +459,7 @@ static int sendDiskRequest(DiskRequest *dr){
 	case DMA_READ_EXT:
 	case DMA_WRITE_EXT:
 		return issueDMACommand(
-			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory, a->id.sectorSize,
+			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory, a->desc.sectorSize,
 			dr->buffer, dr->lba, dr->sectorCount, dr->isWrite
 		);
 	case IDENTIFY_DEVICE:
@@ -473,8 +473,9 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static void destroyDiskRequest(IORequest *ior){
+static int destroyDiskRequest(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
 	DELETE(ior->diskRequest);
+	return 0;
 }
 
 static int cancelDiskRequest(IORequest *ior){
@@ -490,14 +491,14 @@ static int cancelDiskRequest(IORequest *ior){
 }
 
 static DiskRequest *createDiskRequest(
-	IORequestHandler callback, uintptr_t arg,
+	HandleIORequest callback, Task *task,
 	enum ATACommand cmd,
 	PhysicalAddress buffer, uint64_t lba, uint32_t sectorCount,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	initIORequest(&dr->this, dr, callback, arg, cancelDiskRequest, destroyDiskRequest);
+	initIORequest(&dr->this, dr, callback, task, cancelDiskRequest, destroyDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->buffer = buffer;
@@ -518,7 +519,7 @@ static DiskRequest *createDiskRequest(
 static AHCIInterruptArgument **ahciArray = NULL;
 static int ahciCount = 0;
 
-// return 0 if failed issuing command
+// return 0 if failed to issue command
 // return 1 if command was issued or no request
 static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
 	int ok = 1;
@@ -628,7 +629,7 @@ static int isValidHBAPortIndex(HBAPortIndex index){
 	return 1;
 }
 
-static HBAPortIndex encodeIndex(int a, int p){
+static HBAPortIndex toDiskCode(int a, int p){
 	HBAPortIndex i = {value: 0};
 	i.hbaIndex = a;
 	i.portIndex = p;
@@ -638,28 +639,26 @@ static HBAPortIndex encodeIndex(int a, int p){
 static void AHCIServiceHandler(InterruptParam *p){
 	sti();
 	assert(ahciArray == (AHCIInterruptArgument**)p->argument);
-	Task *t = processorLocalTask();
-	uintptr_t linearBuffer = SYSTEM_CALL_ARGUMENT_0(p);
+	uintptr_t linearBuffer;
+	uint64_t lba;
+	uint32_t sectorCount;
+	HBAPortIndex index;
+	int isWrite;
+	rwDiskArgument(p, &linearBuffer, &lba, &sectorCount, &index.value, &isWrite);
 	PhysicalAddress physicalBuffer = translateExistingPage(
 		kernelPageManager/*TODO: getPageManager(t)*/, (void*)linearBuffer
 	);
-	uint32_t lbaLow = SYSTEM_CALL_ARGUMENT_1(p);
-	uint32_t lbaHigh = SYSTEM_CALL_ARGUMENT_2(p);
-	uint32_t sectorCount = (SYSTEM_CALL_ARGUMENT_3(p) & 0x7fffffff);
-
-	int isWrite = ((SYSTEM_CALL_ARGUMENT_3(p) >> 31) & 1);
-	HBAPortIndex index = {value: SYSTEM_CALL_ARGUMENT_4(p)};
 	int ok = isValidHBAPortIndex(index);
 	EXPECT(ok);
-	DiskRequest *dr = createDiskRequest(resumeTaskByIO, (uintptr_t)t,
+	DiskRequest *dr = createDiskRequest(resumeTaskByIO, processorLocalTask(),
 		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
-		physicalBuffer, (((uint64_t)lbaHigh) << 32) + lbaLow, sectorCount,
+		physicalBuffer, lba, sectorCount,
 		ahciArray[index.hbaIndex], index.portIndex, isWrite
 	);
 	// improve: multiple physical regions
-assert(sectorCount * ahciArray[index.hbaIndex]->id.sectorSize <= PAGE_SIZE);
+assert(sectorCount * ahciArray[index.hbaIndex]->desc.sectorSize <= PAGE_SIZE);
 	EXPECT(dr != NULL);
-	putPendingIO(t, &dr->this);
+	putPendingIO(&dr->this);
 	addToPortQueue(dr, index.portIndex);
 	if(servePortQueue(ahciArray[index.hbaIndex], index.portIndex) == 0){
 		assert(0);
@@ -674,17 +673,6 @@ assert(sectorCount * ahciArray[index.hbaIndex]->id.sectorSize <= PAGE_SIZE);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
 }
 
-static uintptr_t _systemCall_rwAHCI(
-	int syscallNumber,
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	uint32_t index, int isWrite
-){
-	return systemCall5(syscallNumber,
-		buffer, lba & 0xffffffff, (lba >> 32) & 0xffffffff,
-		sectorCount | (isWrite? 0x80000000: 0), index
-	);
-}
-
 uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite){
 	static int ahciService = -1;
 	while(ahciService < 0){
@@ -694,76 +682,18 @@ uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount
 		printk("warning: AHCI service is not initialized\n");
 		sleep(20);
 	}
-	return systemCall5(ahciService,
-		buffer, lba & 0xffffffff, (lba >> 32) & 0xffffffff,
-		sectorCount | (isWrite? 0x80000000: 0), index
+	return systemCall_rwDisk(ahciService,
+		buffer, lba, sectorCount,
+		index, isWrite
 	);
 }
 
-
-static uintptr_t systemCall_rwAHCISync(
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	HBAPortIndex index, int isWrite
-){
-	uintptr_t ior1 = _systemCall_rwAHCI(SYSCALL_TASK_DEFINED, buffer, lba, sectorCount, index.value, isWrite);
-	if(ior1 == IO_REQUEST_FAILURE)
-		return ior1;
-	uintptr_t ior2 = systemCall_waitIO();
-	assert(ior1 == ior2);
-	return ior1;
-}
-
-static void readPartitions(int hbaIndex, int portIndex, uint64_t lba, uint64_t sectorCount){
-	struct MBR *buffer = allocateKernelPages(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
-	EXPECT(buffer != NULL);
-	uintptr_t ior1 = systemCall_rwAHCISync((uintptr_t)buffer, lba, 1, encodeIndex(hbaIndex, portIndex), 0);
-	EXPECT(ior1 != IO_REQUEST_FAILURE);
-
-	if(buffer->signature != MBR_SIGNATRUE){
-		printk(" disk %u port %u LBA %u is not a bootable partition\n", hbaIndex, portIndex, lba);
-	}
-
-	int i;
-	for(i = 0; i < 4; i++){
-		struct PartitionEntry *pe = buffer->partition + i;
-		pe->startLBA += lba;
-		printk("hba %d, port %d, type %x, ", hbaIndex, portIndex, pe->systemID);
-		printk("lba %u, sector count %u ", pe->startLBA, pe->sectorCount);
-		if(pe->systemID == MBR_EMPTY){
-			printk("(empty partition)\n");
-			continue;
-		}
-		if(pe->startLBA == 0 || pe->startLBA <= lba || pe->startLBA - lba > sectorCount){
-			printk("(invalid startLBA)\n");
-			continue;
-		}
-		if(pe->sectorCount == 0 || pe->sectorCount > sectorCount - (pe->startLBA - lba)){
-			printk("(invalid sectorCount)\n");
-			continue;
-		}
-		printk("\n");
-		if(buffer->partition[i].systemID == MBR_EXTENDED){
-			readPartitions(hbaIndex, portIndex,
-					pe->startLBA, pe->sectorCount);
-		}
-		//TODO: registerPartition
-	}
-
-	releaseKernelPages(buffer);
-	return;
-	ON_ERROR;
-	releaseKernelPages(buffer);
-	ON_ERROR;
-	printk("cannot read partitions");
-}
-
-static int identifyDisk(int a, int p, struct DiskDescription *d){
+static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *d){
 	uint16_t *buffer = allocateKernelPages(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer!= NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
-	HBAPortIndex i = encodeIndex(a, p);
 	i.identifyCommand = 1;
-	uintptr_t ior = systemCall_rwAHCISync((uintptr_t)buffer, 0, 0, i, 0);
+	uintptr_t ior = systemCall_rwDiskSync(ahciDriver, (uintptr_t)buffer, 0, 0, i.value, 0);
 	EXPECT(ior != IO_REQUEST_FAILURE);
 	// the driver requires 48-bit address
 	const uint32_t buffer83 = buffer[83];
@@ -772,15 +702,15 @@ static int identifyDisk(int a, int p, struct DiskDescription *d){
 	const uint16_t buffer106 = buffer[106];
 	if((buffer106 & ((1 << 14) | (1 << 15))) != (1 << 14)){
 		d->sectorSize = DEFAULT_SECTOR_SIZE;
-		printk("disk does not report sector size\n");
+		//printk("disk does not report sector size\n");
 	}
 	else if((buffer106 & (1 << 12)) == 0){
 		d->sectorSize = DEFAULT_SECTOR_SIZE;
-		printk("disk sector size = %u (default)\n", d->sectorSize);
+		//printk("disk sector size = %u (default)\n", d->sectorSize);
 	}
 	else{
 		d->sectorSize = buffer[117] + (((uint32_t)buffer[118]) << 16);
-		printk("disk sector size = %u\n", d->sectorSize);
+		//printk("disk sector size = %u\n", d->sectorSize);
 	}
 	// find number of sectors
 #define TO64(W, X, Y, Z) \
@@ -797,7 +727,7 @@ static int identifyDisk(int a, int p, struct DiskDescription *d){
 		d->sectorCount = (buffer100 >= buffer60? buffer100: buffer60);
 	}
 #undef TO64
-	printk("disk sector count = %u\n",(uint32_t)d->sectorCount);
+	//printk("disk sector count = %u\n",(uint32_t)d->sectorCount);
 	releaseKernelPages(buffer);
 	return 1;
 	ON_ERROR;
@@ -858,25 +788,23 @@ void ahciDriver(void){
 		}
 		assert(arg == NULL);
 	}
+	int ahciDriver = registerService(global.syscallTable, AHCI_SERVICE_NAME, AHCIServiceHandler, (uintptr_t)ahciArray);
+	EXPECT(ahciDriver >= 0);
 
-	// port initialization has not finished yet. use task-defined system call for local call
-	setTaskSystemCall(processorLocalTask(), AHCIServiceHandler, (uintptr_t)ahciArray);
 	int a, p;
 	for(a = 0; a < ahciCount; a++){
 		for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
 			if(hasPort(ahciArray[a], p) == 0){
 				continue;
 			}
-			if(identifyDisk(a, p, &ahciArray[a]->id) == 0){
+			if(identifyDisk(ahciDriver, toDiskCode(a, p), &ahciArray[a]->desc) == 0){
 				printk("identify hba %d port %d failed\n", a, p);
 				continue;
 			}
-			readPartitions(a, p, 0, ahciArray[a]->id.sectorCount);
+			readPartitions(AHCI_SERVICE_NAME, ahciDriver, toDiskCode(a, p).value, 0,
+				ahciArray[a]->desc.sectorCount, ahciArray[a]->desc.sectorSize);
 		}
 	}
-
-	int ahciService = registerService(global.syscallTable, AHCI_SERVICE_NAME, AHCIServiceHandler, (uintptr_t)ahciArray);
-	EXPECT(ahciService >= 0);
 	printk("found %d AHCI devices\n", ahciCount);
 	while(1){
 		hlt(); // TODO: create FIFO and wait for interrupt

@@ -3,7 +3,6 @@
 #include"interrupt/systemcall.h"
 #include"io/io.h"
 
-// for MINGW
 #pragma pack(1)
 
 typedef struct __attribute__((__packed__)){
@@ -57,12 +56,20 @@ typedef struct __attribute__((__packed__)){
 		FAT32BootRecord ebr32;
 	};
 	uint16_t bootSignature; // 0xaa55
-}FATBootRecord; // for GCC
+}FATBootRecord;
 
 #pragma pack()
 
 static_assert(sizeof(FATBootRecord) == 512);
 
 void fatDriver(void){
-	assert(0);
+	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
+	assert(discoverFAT != IO_REQUEST_FAILURE);
+	int diskDriver;
+	uintptr_t diskCode;
+	while(1){
+		uintptr_t discoverFAT2 = systemCall_waitIOReturn(2, (uintptr_t)&diskDriver, &diskCode);
+		assert(discoverFAT == discoverFAT2);
+		printk("fat received %u %u\n",diskDriver, diskCode);
+	}
 }

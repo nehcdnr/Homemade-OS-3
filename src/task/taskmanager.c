@@ -375,7 +375,8 @@ static void releaseHeapHandler(InterruptParam *p){
 
 // system call
 
-void putPendingIO(Task *t, IORequest *ior){
+void putPendingIO(IORequest *ior){
+	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
 #ifndef NDEBUG
 	if(t->finishedIOList != NULL){
@@ -387,34 +388,92 @@ void putPendingIO(Task *t, IORequest *ior){
 }
 
 IORequest *waitIO(Task *t){
-	IORequest *ior;
 	acquireSemaphore(t->ioSemaphore);
 	acquireLock(&t->ioListLock);
-	ior = t->finishedIOList;
+	IORequest *ior = t->finishedIOList;
 	REMOVE_FROM_DQUEUE(ior);
 	releaseLock(&t->ioListLock);
 	assert(ior != NULL);
 	return ior;
 }
 
-static void waitIOHandler(__attribute__((__unused__)) InterruptParam *p){
+static void waitIOHandler(InterruptParam *p){
 	sti();
 	IORequest *ior = waitIO(processorLocalTask());
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
-	ior->destroy(ior);
+	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
+	int returnCount = ior->finish(ior, rv);
+	switch(returnCount){
+	//case 5:
+	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[4];
+	//case 4:
+	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[3];
+	//case 3:
+	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[2];
+	case 2:
+		SYSTEM_CALL_RETURN_VALUE_2(p) = rv[1];
+	case 1:
+		SYSTEM_CALL_RETURN_VALUE_1(p) = rv[0];
+	case 0:
+		break;
+	default:
+		assert(0);
+	}
 }
 
 uintptr_t systemCall_waitIO(void){
-	return systemCall0(SYSCALL_WAIT_IO);
+	return systemCall1(SYSCALL_WAIT_IO);
+}
+
+uintptr_t systemCall_waitIOReturn(int returnCount, ...){
+	assert(returnCount >= 0 && returnCount < SYSTEM_CALL_MAX_RETURN_COUNT - 1);
+	va_list va;
+	va_start(va, returnCount);
+	uintptr_t ignoredReturnValue = 0;
+	uintptr_t *returnValues[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
+	int i;
+	for(i = 0; i < returnCount; i++){
+		returnValues[i] = va_arg(va, uintptr_t*);
+	}
+	for(i = returnCount; i < (int)LENGTH_OF(returnValues); i++){
+		returnValues[i] = &ignoredReturnValue;
+	}
+	uintptr_t rv0 = systemCall6(
+		SYSCALL_WAIT_IO,
+		returnValues[0],
+		returnValues[1],
+		returnValues[2],
+		returnValues[3],
+		returnValues[4]
+	);
+	va_end(va);
+	return rv0;
 }
 
 void resumeTaskByIO(IORequest *ior){
-	Task *t = (Task*)ior->arg;
+	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
 	REMOVE_FROM_DQUEUE(ior);
 	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
 	releaseLock(&t->ioListLock);
 	releaseSemaphore(t->ioSemaphore);
+}
+
+void initIORequest(
+	IORequest *this,
+	void *instance,
+	HandleIORequest h,
+	Task *t,
+	int (*c)(IORequest*),
+	FinishIORequest f
+){
+	this->ioRequest = instance;
+	this->prev = NULL;
+	this->next = NULL;
+	this->handle = h;
+	this->task = t;
+	this->cancel = c;
+	this->finish = f;
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){

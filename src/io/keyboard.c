@@ -211,7 +211,7 @@ uintptr_t systemCall_readKeyboard(void){
 		printk("warning: keyboard service has not initalized...\n");
 		sleep(20);
 	}
-	return systemCall0(kbService);
+	return systemCall1(kbService);
 }
 
 static PS2Data ps2 = {NULL, NULL};

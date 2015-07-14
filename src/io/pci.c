@@ -253,7 +253,8 @@ int systemCall_enumeratePCI(
 		printk("warning: PCI service has not initalized...\n");
 		sleep(20);
 	}
-	uint32_t r = systemCall3(pciService, (index & 0xffff), classCode ,classMask);
+	uint32_t indexLow = (index & 0xffff);
+	uint32_t r = systemCall4(pciService, &indexLow, &classCode ,&classMask);
 	union PCIConfigSpaceLocation location = {value: r >> 16};
 	*bus = location.bus;
 	*dev = location.device;

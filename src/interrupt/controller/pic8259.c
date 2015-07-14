@@ -40,7 +40,7 @@ typedef struct PIC8259{
 static void pic8259_setPICMask(PIC *pic, enum IRQ irq, int setMask){
 	PIC8259 *pic8259 = pic->pic8259;
 	int i = (irq < 8? irq: irq - 8);
-	uint8_t *mask = (irq < 8? &pic8259->masterMask: &pic8259->slaveMask);
+	uint8_t *mask = ((irq < 8)? &pic8259->masterMask: &pic8259->slaveMask);
 	if(setMask)
 		(*mask) |= (1 << i);
 	else

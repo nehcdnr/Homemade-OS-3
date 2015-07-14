@@ -125,51 +125,6 @@ InterruptVector *getVector(InterruptVector *base, int irq){
 	return base + irq;
 }
 
-#define SYSCALL0_ASM "int $"SYSTEM_CALL_VECTOR_STRING:"=a"(r):"a"(systemCallNumber)
-#define SYSCALL1_ASM SYSCALL0_ASM, "d"(arg0)
-#define SYSCALL2_ASM SYSCALL1_ASM, "c"(arg1)
-#define SYSCALL3_ASM SYSCALL2_ASM, "b"(arg2)
-#define SYSCALL4_ASM SYSCALL3_ASM, "S"(arg3)
-#define SYSCALL5_ASM SYSCALL4_ASM, "D"(arg4)
-
-static_assert(sizeof(uint32_t) == sizeof(uintptr_t));
-
-uintptr_t systemCall0(int systemCallNumber){
-	uintptr_t r;
-	__asm__(SYSCALL0_ASM);
-	return r;
-}
-
-uintptr_t systemCall1(int systemCallNumber, uint32_t arg0){
-	uintptr_t r;
-	__asm__(SYSCALL1_ASM);
-	return r;
-}
-
-uintptr_t systemCall2(int systemCallNumber, uint32_t arg0, uint32_t arg1){
-	uintptr_t r;
-	__asm__(SYSCALL2_ASM);
-	return r;
-}
-
-uintptr_t systemCall3(int systemCallNumber, uint32_t arg0, uint32_t arg1, uint32_t arg2){
-	uintptr_t r;
-	__asm__(SYSCALL3_ASM);
-	return r;
-}
-
-uintptr_t systemCall4(int systemCallNumber, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3){
-	uintptr_t r;
-	__asm__(SYSCALL4_ASM);
-	return r;
-}
-
-uintptr_t systemCall5(int systemCallNumber, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4){
-	uintptr_t r;
-	__asm__(SYSCALL5_ASM);
-	return r;
-}
-
 uint8_t toChar(InterruptVector *v){
 	return v->charValue;
 }

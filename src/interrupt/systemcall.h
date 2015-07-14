@@ -11,8 +11,9 @@ enum SystemCall{
 	//SYSCALL_REGISTER_SERVICE = 4,
 	SYSCALL_QUERY_SERVICE = 5,
 	SYSCALL_WAIT_IO = 6,
-	SYSCALL_ALLOCATE_HEAP = 7,
-	SYSCALL_RELEASE_HEAP = 8,
+	SYSCALL_DISCOVER_DISK = 7,
+	SYSCALL_ALLOCATE_HEAP = 8,
+	SYSCALL_RELEASE_HEAP = 9,
 	// runtime registration
 	NUMBER_OF_RESERVED_SYSTEM_CALLS = 16,
 	NUMBER_OF_SYSTEM_CALLS = 32
@@ -23,20 +24,24 @@ enum SystemCall{
 typedef InterruptHandler SystemCallFunction;
 
 // see interruptdescriptor.c
-uintptr_t systemCall0(/*enum SystemCall*/int systemCallNumber);
-uintptr_t systemCall1(int systemCallNumber, uintptr_t arg0);
-uintptr_t systemCall2(int systemCallNumber, uintptr_t arg0, uintptr_t arg1);
-uintptr_t systemCall3(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2);
-uintptr_t systemCall4(int systemCallNumber, uintptr_t arg0, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
-uintptr_t systemCall5(int systemCallNumber, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4);
+uintptr_t systemCall1(/*enum SystemCall*/int systemCallNumber);
+uintptr_t systemCall2(int systemCallNumber, uintptr_t *arg1);
+uintptr_t systemCall3(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2);
+uintptr_t systemCall4(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3);
+uintptr_t systemCall5(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4);
+uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4, uintptr_t *arg5);
+
 #define SYSTEM_CALL_ARGUMENT_0(P) ((P)->regs.edx)
 #define SYSTEM_CALL_ARGUMENT_1(P) ((P)->regs.ecx)
 #define SYSTEM_CALL_ARGUMENT_2(P) ((P)->regs.ebx)
 #define SYSTEM_CALL_ARGUMENT_3(P) ((P)->regs.esi)
 #define SYSTEM_CALL_ARGUMENT_4(P) ((P)->regs.edi)
 
-// assume sizeof(eax) == sizeof(uintptr_t)
 #define SYSTEM_CALL_RETURN_VALUE_0(P) ((P)->regs.eax)
+#define SYSTEM_CALL_RETURN_VALUE_1(P) ((P)->regs.edx)
+#define SYSTEM_CALL_RETURN_VALUE_2(P) ((P)->regs.ecx)
+
+#define SYSTEM_CALL_MAX_RETURN_COUNT (6)
 
 typedef struct SystemCallTable SystemCallTable;
 // reserved system call
@@ -53,7 +58,10 @@ enum ServiceNameError{
 	SERVICE_NOT_EXISTING,
 	TOO_MANY_SERVICES,
 };
+
 #define MAX_NAME_LENGTH (16)
+typedef char ServiceName[MAX_NAME_LENGTH];
+
 // return system call number
 int registerService(
 	SystemCallTable *systemCallTable,

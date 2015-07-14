@@ -12,6 +12,9 @@
 typedef struct TimerEvent{
 	IORequest this;
 	uint64_t countDownTicks;
+	// period = 0 for one-shot timer
+	uint64_t tickPeriod;
+	volatile int isSentToTask;
 	Spinlock *lock;
 	struct TimerEvent **prev, *next;
 }TimerEvent;
@@ -21,23 +24,6 @@ struct TimerEventList{
 	TimerEvent *head;
 };
 
-void initIORequest(
-	IORequest *this,
-	void *instance,
-	IORequestHandler h,
-	uintptr_t a,
-	int (*c)(struct IORequest*),
-	void (*d)(struct IORequest*)
-){
-	this->ioRequest = instance;
-	this->prev = NULL;
-	this->next = NULL;
-	this->handle = h;
-	this->arg = a;
-	this->cancel = c;
-	this->destroy = d;
-}
-
 static int cancelTimerEvent(IORequest *ior){
 	TimerEvent *te = ior->timerEvent;
 	acquireLock(te->lock);
@@ -45,21 +31,34 @@ static int cancelTimerEvent(IORequest *ior){
 		REMOVE_FROM_DQUEUE(te);
 	}
 	releaseLock(te->lock);
+	// TODO: DELETE?
 	return 1;
 }
 
-static void deleteTimerEvent(IORequest *ior){
-	DELETE(ior->timerEvent);
+static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
+	if(ior->timerEvent->tickPeriod == 0){ // not periodic
+		DELETE(ior->timerEvent);
+	}
+	else{
+		acquireLock(ior->timerEvent->lock);
+		putPendingIO(ior);
+		ior->timerEvent->isSentToTask = 0;
+		releaseLock(ior->timerEvent->lock);
+	}
+	return 0;
 }
 
 static TimerEvent *createTimerEvent(
-	IORequestHandler callback, uintptr_t arg
+	HandleIORequest callback, Task *t, uint64_t periodTicks
 ){
 	TimerEvent *NEW(te);
 	if(te == NULL){
 		return NULL;
 	}
-	initIORequest(&te->this, te, callback, arg, cancelTimerEvent, deleteTimerEvent);
+	initIORequest(&te->this, te, callback, t, cancelTimerEvent, finishTimerEvent);
+	te->countDownTicks = 0;
+	te->tickPeriod = periodTicks;
+	te->isSentToTask = 0;
 	te->prev = NULL;
 	te->next = NULL;
 	return te;
@@ -67,6 +66,7 @@ static TimerEvent *createTimerEvent(
 
 static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *te){
 	te->countDownTicks = waitTicks;
+	te->isSentToTask = 0;
 	te->lock = &(tel->lock);
 	acquireLock(&tel->lock);
 	ADD_TO_DQUEUE(te, &(tel->head));
@@ -74,25 +74,37 @@ static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *t
 }
 
 // TODO:systemCall_sleep(uint64_t millisecond);
-int sleep(uint64_t millisecond){
+uintptr_t setAlarm(uint64_t millisecond, uint64_t isPeriodic){
 	if(millisecond > 1000000000 * (uint64_t)1000){
-		return 0;
+		return IO_REQUEST_FAILURE;
 	}
+	const uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
 	Task *t = processorLocalTask();
-	TimerEvent *te = createTimerEvent(resumeTaskByIO, (uintptr_t)t);
-	if(te == NULL){ // TODO: insufficient memory
-		return 0;
+	TimerEvent *te = createTimerEvent(resumeTaskByIO, t, (isPeriodic? tick: 0));
+	if(te == NULL){
+		return IO_REQUEST_FAILURE;
 	}
 	IORequest *ior = &te->this;
-	putPendingIO(t, ior);
-	addTimerEvent(processorLocalTimer(), (millisecond * TIMER_FREQUENCY) / 1000, te);
-	IORequest *te2 = waitIO(t); // TODO: if there are other pending requests?
-	assert(te2 == ior);
-	ior->destroy(ior);
+	putPendingIO(ior);
+	addTimerEvent(processorLocalTimer(), tick, te);
+	return (uintptr_t)ior;
+}
+
+int sleep(uint64_t millisecond){
+	uintptr_t te = setAlarm(millisecond, 0);
+	if(te == IO_REQUEST_FAILURE){
+		return 0;
+	}
+	IORequest *te2 = waitIO(processorLocalTask()); // TODO: if there are other pending requests?
+	assert(((uintptr_t)te2) == te);
+	uint32_t rv[1];
+	int rvCount = te2->finish(te2, rv);
+	assert(rvCount == 0);
 	return 1;
 }
 
 static void handleTimerEvents(TimerEventList *tel){
+	TimerEvent *periodList = NULL;
 	acquireLock(&tel->lock);
 	TimerEvent **prev = &(tel->head);
 	while(*prev != NULL){
@@ -100,14 +112,25 @@ static void handleTimerEvents(TimerEventList *tel){
 		if(curr->countDownTicks > 0){
 			curr->countDownTicks--;
 			prev = &((*prev)->next);
+			continue;
 		}
-		else{
-			REMOVE_FROM_DQUEUE(curr);
-			//releaseLock(&tel->lock);
+		REMOVE_FROM_DQUEUE(curr);
+		if(curr->isSentToTask == 0){
+			curr->isSentToTask = 1;
+			curr->countDownTicks = curr->tickPeriod;
 			curr->this.handle(&curr->this);
-			//acquireLock(&tel->lock);
+		}
+#ifndef NDEBUG
+		else{
+			assert(curr->tickPeriod > 0);
+			printk("warning: skip periodic timer event\n");
+		}
+#endif
+		if(curr->tickPeriod > 0){
+			ADD_TO_DQUEUE(curr, &periodList);
 		}
 	}
+	APPEND_TO_DQUEUE(&periodList, prev);
 	releaseLock(&tel->lock);
 }
 

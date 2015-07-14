@@ -67,3 +67,20 @@ int printk(const char *format, ...);
 	}\
 	*((E)->prev) = (E);\
 }while(0)
+
+#define FIND_DQUEUE_TAIL(P) do{\
+	while((*(P)) != NULL){\
+		(P) = &((*(P))->next);\
+	}\
+}while(0)
+
+// append P1 to P2
+#define APPEND_TO_DQUEUE(P1, P2) do{\
+	assert((*(P2)) == NULL);\
+	(*(P2)) = (*(P1));\
+	if((*(P1)) != NULL){\
+		assert((*(P1))->prev == (P1));\
+		(*(P1))->prev = (P2);\
+		(*(P1)) = NULL;\
+	}\
+}while(0)

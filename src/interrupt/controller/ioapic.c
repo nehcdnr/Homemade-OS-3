@@ -91,7 +91,7 @@ typedef struct __attribute__((__packed__)){
 typedef struct __attribute__((__packed__)){
 	ICSHeader header;
 	uint8_t processorID;
-	uint8_t flags0_8; // uint16_t flags attribute((__packed__)) fails
+	uint8_t flags0_8;
 	uint8_t flags8_16;
 	uint8_t localAPICLINT;
 }LocalNonMaskableStruct;
@@ -340,7 +340,7 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 
 	void *rsdtMappedBegin = mapKernelPage(rsdtPageBegin, PAGE_SIZE * 2, KERNEL_PAGE);
 	if(rsdtMappedBegin == NULL){
-		panic("fail allocating memory");
+		panic("fail to allocate memory");
 	}
 	rsdt = (RSDT*)(((uintptr_t)rsdtMappedBegin) + rsdtPhysical % PAGE_SIZE);
 	size_t rsdtMappedSize= CEIL(rsdtPhysical % PAGE_SIZE + rsdt->header.length, PAGE_SIZE);
@@ -348,7 +348,7 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 
 	rsdtMappedBegin = mapKernelPage(rsdtPageBegin, rsdtMappedSize, KERNEL_PAGE);
 	if(rsdtMappedBegin == NULL){
-		panic("fail allocating memory");
+		panic("fail to allocate memory");
 	}
 	rsdt = (RSDT*)(((uintptr_t)rsdtMappedBegin) + rsdtPhysical % PAGE_SIZE);
 	return rsdt;
@@ -357,6 +357,9 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 IOAPIC *initAPIC(InterruptTable *t){
 	uintptr_t rsdtPhysical = findRSDT();
 	const RSDT *rsdt = mapRSDT(rsdtPhysical);
+	if(rsdt == NULL){
+		panic("mapRSDT failed");
+	}
 	if(strncmp(rsdt->header.signature, "RSDT", 4) != 0){
 		printk("warning: bad RSDT signature\n");
 	}
@@ -364,7 +367,7 @@ IOAPIC *initAPIC(InterruptTable *t){
 		panic("bad RSDT checksum");
 	}
 
-	assert(rsdt != NULL);
+
 	int rsdtEntryCount = (rsdt->header.length - sizeof(*rsdt)) / sizeof(rsdt->entry[0]);
 	IOAPIC *apic = NULL;
 	int i;

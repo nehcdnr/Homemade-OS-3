@@ -65,7 +65,7 @@ void apEntry(void){
 	setProcessorLocal(pic, gdt, taskManager, timer);
 	// 9. file
 	if(isBSP){
-		initFileSystemManager();
+		initFileSystemManager(global.syscallTable);
 	}
 	// 10. driver
 	initLocalTimer(pic, global.idt, timer);
