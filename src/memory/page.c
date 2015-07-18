@@ -623,11 +623,10 @@ const size_t sizeOfPageTableSet = sizeof(PageTableSet);
 // create an page table in kernel linear memory
 // with targetBase ~ targetBegin + sizeOfPageTableSet (linear address) mapped to physical address
 // the other entries are not accessible in kernel
-PageManager *createAndMapUserPageTable(uintptr_t targetBegin){
-	assert(targetBegin % PAGE_SIZE == 0);
-	const uintptr_t targetEnd = targetBegin + sizeOfPageTableSet;
-	uintptr_t evalSize = evaluateSizeOfPageTableSet(targetBegin, targetEnd);
-	assert(targetBegin % PAGE_SIZE == 0 && targetBegin % PAGE_SIZE == 0);
+PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reservedEnd, uintptr_t tablesLoadAddress){
+	assert(reservedBase % PAGE_SIZE == 0 && reservedEnd % PAGE_SIZE == 0);
+	uintptr_t evalSize = evaluateSizeOfPageTableSet(reservedBase, reservedEnd);
+	assert(tablesLoadAddress >= reservedBase && tablesLoadAddress + sizeOfPageTableSet <= reservedEnd);
 	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE);
 
 	PageManager *NEW(p);
@@ -635,12 +634,12 @@ PageManager *createAndMapUserPageTable(uintptr_t targetBegin){
 	PageTableSet *pts = allocateKernelPages(evalSize, KERNEL_PAGE);
 	EXPECT(pts != NULL);
 	initPageManager(
-		p, (PageTableSet*)targetBegin, pts,
-		targetBegin, targetEnd, MAP_TO_KERNEL_ALLOCATED
+		p, (PageTableSet*)tablesLoadAddress, pts,
+		reservedBase, reservedEnd, MAP_TO_KERNEL_ALLOCATED
 	);
 	copyPageManagerPD(p, kernelPageManager, kLinearBegin, kLinearEnd);
-	initPageManagerPD(p, targetBegin, targetBegin + evalSize, MAP_TO_KERNEL_ALLOCATED);
-	initPageManagerPT(p, targetBegin, targetBegin + evalSize, (uintptr_t)pts, MAP_TO_KERNEL_ALLOCATED);
+	initPageManagerPD(p, tablesLoadAddress, tablesLoadAddress + evalSize, MAP_TO_KERNEL_ALLOCATED);
+	initPageManagerPT(p, tablesLoadAddress, tablesLoadAddress + evalSize, (uintptr_t)pts, MAP_TO_KERNEL_ALLOCATED);
 	return p;
 	// releaseKernelPages(pts);
 	ON_ERROR;

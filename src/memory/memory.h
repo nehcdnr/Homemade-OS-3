@@ -27,7 +27,7 @@ typedef struct PageManager PageManager;
 extern PageManager *kernelPageManager;
 
 extern const size_t sizeOfPageTableSet;
-PageManager *createAndMapUserPageTable(uintptr_t targetBegin);
+PageManager *createAndMapUserPageTable(uintptr_t reserveBase, uintptr_t reserveEnd, uintptr_t tablesLoadAddress);
 void unmapUserPageTableSet(PageManager *p);
 void deleteUserPageTable(PageManager *p);
 

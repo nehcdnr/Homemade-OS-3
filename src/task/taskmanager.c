@@ -154,15 +154,6 @@ void startTask(void);
 void startTask(void){
 	callAfterTaskSwitchFunc();
 	sti();
-	// see createUserTask() task linear memory
-
-	Task *t = processorLocalTask();
-	int ok;
-	ok = initTaskMemoryBlock(&t->taskMemory, maxBlockManagerSize);
-	EXPECT(ok);
-	return;
-	ON_ERROR;
-	panic("error"); // TODO: teminate task
 }
 
 void suspendCurrent(void (*afterTaskSwitchFunc)(Task*, uintptr_t), uintptr_t arg){
@@ -284,15 +275,25 @@ static Task *createUserTask(
 	const uintptr_t targetStackBottom = targetESP0 - KERNEL_STACK_SIZE;
 
 	assert(minBlockManagerSize <= PAGE_SIZE);
-	// 1. task page table
-	PageManager *pageManager = createAndMapUserPageTable(targetPageTable);
+	// 1. task PageManager
+	PageManager *pageManager = createAndMapUserPageTable(
+		targetStackBottom, targetBlockManager + PAGE_SIZE, targetPageTable);
 	EXPECT(pageManager != NULL);
-	// 2. task kernel stack
-	int ok = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
+	// 2. task MemoryBlock
+	int ok = mapPage_L(pageManager, (void*)targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
+	EXPECT(ok);
+	MemoryBlockManager *mappedBlockManager =
+		mapExistingPagesToKernel(pageManager, targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
+	EXPECT(mappedBlockManager != NULL);
+	MemoryBlockManager *_mappedBlockManager = createMemoryBlockManager((uintptr_t)mappedBlockManager,
+		maxBlockManagerSize, 0, 0, targetStackBottom);
+	EXPECT(_mappedBlockManager == (void*)mappedBlockManager);
+	// 3. task kernel stack
+	ok = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(ok);
 	void *mappedStackBottom = mapExistingPagesToKernel(pageManager, targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(mappedStackBottom != NULL);
-	// 3. create task
+	// 4. create task
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
 	uintptr_t initialESP0 = targetESP0 -
@@ -305,6 +306,7 @@ static Task *createUserTask(
 	);
 	EXPECT(t != NULL);
 	unmapKernelPages(mappedStackBottom);
+	unmapKernelPages(mappedBlockManager);
 	unmapUserPageTableSet(pageManager);
 	// 5. see startTask
 	return t;
@@ -313,6 +315,11 @@ static Task *createUserTask(
 	unmapKernelPages(mappedStackBottom);
 	ON_ERROR;
 	unmapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE);
+	ON_ERROR;
+	ON_ERROR;
+	unmapKernelPages(mappedBlockManager);
+	ON_ERROR;
+	unmapPage_L(pageManager, (void*)targetBlockManager, PAGE_SIZE);
 	ON_ERROR;
 	deleteUserPageTable(pageManager);
 	ON_ERROR;
