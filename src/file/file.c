@@ -181,13 +181,14 @@ static int finishNewDiskEvent(IORequest *ior, uintptr_t *returnValues){
 	FileSystem *fs = nde->servingFS;
 	returnValues[0] = fs->driver;
 	returnValues[1] = fs->diskCode;
+	returnValues[2] = fs->sectorSize;
 	assert(fs != NULL);
 	REMOVE_FROM_DQUEUE(fs);
 	ADD_TO_DQUEUE(fs, &nde->managedFSList);
 	putPendingIO(&nde->this);
 	serveNewFS(nde);
 	releaseLock(nde->lock);
-	return 2;
+	return 3;
 }
 
 static NewDiskEvent *createNewDiskEvent(Spinlock *lock){

@@ -11,13 +11,14 @@ typedef struct{
 typedef struct MemoryBlockManager MemoryBlockManager;
 extern MemoryBlockManager *globalPhysical;
 
+// if failure, return NULL, which is not a usable physical address
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
 #define allocatePhysicalPages(SIZE) _allocatePhysicalPages(globalPhysical, (SIZE))
 void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
 #define releasePhysicalPages(ADDRESS) _releasePhysicalPages(globalPhysical, (ADDRESS))
 
 // return free size
-size_t physicalMemoryUsage(size_t *totalSize);
+//size_t physicalMemoryUsage(size_t *totalSize);
 //size_t getKernelMemoryUsage(size_t *totalSize);
 
 // page
@@ -26,7 +27,7 @@ typedef struct PageManager PageManager;
 extern PageManager *kernelPageManager;
 
 extern const size_t sizeOfPageTableSet;
-PageManager *createAndMapUserPageTable(uintptr_t targetAddress);
+PageManager *createAndMapUserPageTable(uintptr_t targetBegin);
 void unmapUserPageTableSet(PageManager *p);
 void deleteUserPageTable(PageManager *p);
 
@@ -60,26 +61,29 @@ void initKernelMemory(void);
 typedef struct LinearMemoryManager LinearMemoryManager;
 extern LinearMemoryManager *kernelLinear;
 
+// kernel slab
+// if failure, return NULL
 void *allocateKernelMemory(size_t size);
 void releaseKernelMemory(void *address);
 
-void *_mapKernelPage(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
-#define mapKernelPage(ADDRESS, SIZE, ATTRIBUTE) _mapKernelPage(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
-void *_mapKernelPagesFromExisting(
+// kernel page
+void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
+#define mapKernelPages(ADDRESS, SIZE, ATTRIBUTE) mapPages(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
+void *mapExistingPages(
 	LinearMemoryManager *dst, PageManager *src,
 	uintptr_t srcLinear, size_t size, PageAttribute Attribute
 );
-#define mapKernelPagesFromExisting(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
-_mapKernelPagesFromExisting(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
+#define mapExistingPagesToKernel(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
+	mapExistingPages(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
 PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 //#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
-void _unmapKernelPage(LinearMemoryManager *m, void *linearAddress);
-#define unmapKernelPage(ADDRESS) _unmapKernelPage(kernelLinear, ADDRESS)
+void unmapPages(LinearMemoryManager *m, void *linearAddress);
+#define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 
-void *_allocateKernelPages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
-#define allocateKernelPages(SIZE, ATTRIBUTE) _allocateKernelPages(kernelLinear, SIZE, ATTRIBUTE)
-void _releaseKernelPages(LinearMemoryManager *m, void *linearAddress);
-#define releaseKernelPages(ADDRESS) _releaseKernelPages(kernelLinear, ADDRESS)
+void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
+#define allocateKernelPages(SIZE, ATTRIBUTE) allocatePages(kernelLinear, SIZE, ATTRIBUTE)
+void releasePages(LinearMemoryManager *m, void *linearAddress);
+#define releaseKernelPages(ADDRESS) releasePages(kernelLinear, ADDRESS)
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)

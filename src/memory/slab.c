@@ -30,7 +30,7 @@ static int isTotallyUsed(Slab *p){
 }
 
 static Slab *createSlab(LinearMemoryManager *m, size_t unit){
-	Slab *slab = (Slab*)_allocateKernelPages(m, SLAB_SIZE, KERNEL_PAGE);
+	Slab *slab = (Slab*)allocatePages(m, SLAB_SIZE, KERNEL_PAGE);
 	if(slab == NULL){
 		return NULL;
 	}
@@ -107,7 +107,7 @@ static int findSlab(size_t size){
 
 void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
-		return _allocateKernelPages(m->memory, size, KERNEL_PAGE);
+		return allocatePages(m->memory, size, KERNEL_PAGE);
 	}
 	int i = findSlab(size);
 	void *r = NULL;
@@ -136,7 +136,7 @@ void *allocateSlab(SlabManager *m, size_t size){
 void releaseSlab(SlabManager *m, void *address){
 	uintptr_t a = (uintptr_t)address;
 	if(a % MIN_BLOCK_SIZE == 0){
-		_releaseKernelPages(m->memory, address);
+		releasePages(m->memory, address);
 		return;
 	}
 	acquireLock(&m->lock);
@@ -144,7 +144,7 @@ void releaseSlab(SlabManager *m, void *address){
 	if(isTotallyFree(p)){
 		REMOVE_FROM_DQUEUE(p);
 		releaseLock(&m->lock);
-		_releaseKernelPages(m->memory, p);
+		releasePages(m->memory, p);
 	}
 	else{
 		releaseLock(&m->lock);

@@ -261,7 +261,7 @@ LAPIC *initLocalAPIC(InterruptTable *t){
 	lapic->isBSP = ((eax >> 8) & 1);
 	if(lapic->isBSP){
 		PhysicalAddress apicPhysicalBase = {LAPIC_PHYSICAL_BASE};
-		apicLinearBase = (uintptr_t)mapKernelPage(apicPhysicalBase, LAPIC_MAPPING_SIZE, KERNEL_NON_CACHED_PAGE);
+		apicLinearBase = (uintptr_t)mapKernelPages(apicPhysicalBase, LAPIC_MAPPING_SIZE, KERNEL_NON_CACHED_PAGE);
 	}
 	lapic->linearBase = apicLinearBase;
 	lapic->lapicID = getMemoryMappedLAPICID();

@@ -40,6 +40,7 @@ uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, ui
 #define SYSTEM_CALL_RETURN_VALUE_0(P) ((P)->regs.eax)
 #define SYSTEM_CALL_RETURN_VALUE_1(P) ((P)->regs.edx)
 #define SYSTEM_CALL_RETURN_VALUE_2(P) ((P)->regs.ecx)
+#define SYSTEM_CALL_RETURN_VALUE_3(P) ((P)->regs.ebx)
 
 #define SYSTEM_CALL_MAX_RETURN_COUNT (6)
 

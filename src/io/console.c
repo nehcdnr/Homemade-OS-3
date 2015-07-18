@@ -147,7 +147,7 @@ void initKernelConsole(void){
 	cd->cursor = 0;
 	cd->maxColumn = 80;
 	cd->screenArea = cd->maxColumn * 25;
-	cd->video = mapKernelPage(
+	cd->video = mapKernelPages(
 		defaultTextVideoAddress,
 		DEFAULT_VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS,
 		KERNEL_NON_CACHED_PAGE

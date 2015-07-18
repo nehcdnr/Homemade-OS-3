@@ -393,7 +393,7 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 	EXPECT(arg != NULL);
 	// baseAddress is aligned to 4K
 	PhysicalAddress baseAddress = {bar & 0xfffff000};
-	volatile HBARegisters *hba = mapKernelPage(baseAddress, CEIL(sizeof(HBARegisters), PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
+	volatile HBARegisters *hba = mapKernelPages(baseAddress, CEIL(sizeof(HBARegisters), PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
 	EXPECT(hba != NULL);
 	EXPECT(hba->ahciVersion >= 0x10000);
 	arg->hbaRegisters = hba;
@@ -427,7 +427,7 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 
 	ON_ERROR;
 	printk("unsupported AHCI version: %x\n", hba->ahciVersion);
-	unmapKernelPage((void*)hba);
+	unmapKernelPages((void*)hba);
 	ON_ERROR;
 	printk("cannot allocate linear memory for HBA registers\n");
 	DELETE(arg);

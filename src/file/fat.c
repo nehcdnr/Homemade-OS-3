@@ -1,4 +1,5 @@
 #include"common.h"
+#include"memory/memory.h"
 #include"file.h"
 #include"interrupt/systemcall.h"
 #include"io/io.h"
@@ -62,14 +63,25 @@ typedef struct __attribute__((__packed__)){
 
 static_assert(sizeof(FATBootRecord) == 512);
 
+static void readFAT(int diskDriver, uintptr_t diskCode, uintptr_t sectorSize){
+	const size_t readSize = CEIL(sizeof(FATBootRecord), sectorSize);
+	FATBootRecord *br = allocateKernelMemory(readSize);
+	EXPECT(br != NULL);
+	systemCall_rwDisk(diskDriver, (uintptr_t)br, 0, readSize / sectorSize, diskCode, 0);
+	DELETE(br);
+	ON_ERROR;
+}
+
 void fatDriver(void){
 	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
 	assert(discoverFAT != IO_REQUEST_FAILURE);
 	int diskDriver;
 	uintptr_t diskCode;
+	uintptr_t sectorSize;
 	while(1){
-		uintptr_t discoverFAT2 = systemCall_waitIOReturn(2, (uintptr_t)&diskDriver, &diskCode);
+		uintptr_t discoverFAT2 = systemCall_waitIOReturn(3, (uintptr_t)&diskDriver, &diskCode, &sectorSize);
 		assert(discoverFAT == discoverFAT2);
-		printk("fat received %u %u\n",diskDriver, diskCode);
+		printk("fat received %u %u %u\n",diskDriver, diskCode, sectorSize);
 	}
+	readFAT(diskDriver, diskCode, sectorSize);
 }

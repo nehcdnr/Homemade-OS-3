@@ -11,14 +11,15 @@ typedef struct MemoryBlock{
 }MemoryBlock;
 
 struct MemoryBlockManager{
-	size_t sizeOfThis;
 	uintptr_t beginAddress;
-	int blockCount;
+	int blockCount, maxBlockCount;
 	size_t freeSize;
 	Spinlock lock;
 	MemoryBlock *freeBlock[MAX_BLOCK_ORDER - MIN_BLOCK_ORDER + 1];
-	MemoryBlock *block;
+	MemoryBlock block[0];
 };
+
+static_assert(sizeof(*((MemoryBlockManager*)NULL)->block) == sizeof(MemoryBlock));
 
 static void initMemoryBlock(MemoryBlock *mb){
 	mb->sizeOrder = MIN_BLOCK_ORDER;
@@ -38,11 +39,20 @@ static MemoryBlock *getBlock(MemoryBlockManager *m, uintptr_t address){
 	return &m->block[i];
 }
 
+uintptr_t getBlockAddress(MemoryBlockManager *m, uintptr_t address){
+	assert(address % MIN_BLOCK_SIZE == 0);
+	assert(address >= m->beginAddress);
+	int i = (address - m->beginAddress) / MIN_BLOCK_SIZE;
+	// maxBlockCount is acceptable
+	assert(i >= 0 && i <= m->maxBlockCount);
+	return (uintptr_t)(m->block + i);
+}
+
 static int isInFreeList(MemoryBlock *mb){
 	return mb->prev != NULL;
 }
 
-uintptr_t getFirstBlockAddress(MemoryBlockManager *m){
+uintptr_t getBeginAddress(MemoryBlockManager *m){
 	return m->beginAddress;
 }
 
@@ -56,7 +66,7 @@ static MemoryBlock *getBuddy(MemoryBlockManager *m, MemoryBlock *b){
 }
 
 uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size){
-	uintptr_t r = UINTPTR_NULL;
+	uintptr_t r = INVALID_BLOCK_ADDRESS;
 	acquireLock(&m->lock);
 	if(*size > MAX_BLOCK_SIZE){
 		goto allocateBlock_return;
@@ -94,6 +104,27 @@ size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address){
 	return (1 << b->sizeOrder);
 }
 
+int isReleasableBlock(MemoryBlockManager *m, uintptr_t address){
+	if(address % MIN_BLOCK_SIZE != 0)
+		return 0;
+	if(address < m->beginAddress)
+		return 0;
+	if((address - m->beginAddress) / MIN_BLOCK_SIZE >= (unsigned)m->blockCount)
+		return 0;
+	MemoryBlock *b1 = getBlock(m, address);
+	if(isInFreeList(b1))
+		return 0;
+	MemoryBlock *b2 = getBuddy(m, b1);
+	if(b2 == NULL)
+		return 1;
+	// b2 < b1 and range of b2 includes b1
+	if(b2->sizeOrder > b1->sizeOrder){
+		assert((uintptr_t)b2 < (uintptr_t)b1);
+		return 0;
+	}
+	return 1;
+}
+
 void releaseBlock(MemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->lock);
 	MemoryBlock *b = getBlock(m, address);
@@ -112,7 +143,7 @@ void releaseBlock(MemoryBlockManager *m, uintptr_t address){
 		#ifndef NDEBUG
 		{
 			uintptr_t a1 = (uintptr_t)getAddress(m,buddy), a2=(uintptr_t)getAddress(m,b);
-			assert((a1>a2? a1-a2: a2-a1) == ((uintptr_t)1 << b->sizeOrder));
+			assert((a1 > a2? a1-a2: a2-a1) == ((uintptr_t)1 << b->sizeOrder));
 		}
 		#endif
 		b = (getAddress(m, b) < getAddress(m, buddy)? b: buddy);
@@ -122,12 +153,35 @@ void releaseBlock(MemoryBlockManager *m, uintptr_t address){
 	releaseLock(&m->lock);
 }
 
-size_t getBlockManagerMetaSize(MemoryBlockManager *m){
-	return m->sizeOfThis;
+const size_t minBlockManagerSize = sizeof(MemoryBlockManager);
+const size_t maxBlockManagerSize = sizeof(MemoryBlockManager) +
+	((0xffffffff / MIN_BLOCK_SIZE) + 1) * sizeof(MemoryBlock);
+
+size_t getBlockManagerSize(MemoryBlockManager *m){
+	return sizeof(*m) + m->maxBlockCount * sizeof(*m->block);
 }
 
 int getBlockCount(MemoryBlockManager *m){
 	return m->blockCount;
+}
+
+int getMaxBlockCount(MemoryBlockManager *m){
+	return m->maxBlockCount;
+}
+
+int extendBlockCount(MemoryBlockManager *m, int addBlockCount){
+	acquireLock(&m->lock);
+	if(addBlockCount < 0 || addBlockCount > m->maxBlockCount - m->blockCount){
+		releaseLock(&m->lock);
+		return 0;
+	}
+	int i;
+	for(i = m->blockCount; i < m->blockCount + addBlockCount; i++){
+		initMemoryBlock(&m->block[i]);
+	}
+	m->blockCount += addBlockCount;
+	releaseLock(&m->lock);
+	return 1;
 }
 
 int getFreeBlockSize(MemoryBlockManager *m){
@@ -138,31 +192,28 @@ MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,
 	uintptr_t beginAddr,
-	uintptr_t endAddr
+	uintptr_t endAddr,
+	uintptr_t maxEndAddr
 ){
-	uintptr_t m = manageBase;
-	assert(m % sizeof(uintptr_t) == 0);
-	MemoryBlockManager *bm = (MemoryBlockManager*)m;
-	m += sizeof(MemoryBlockManager);
+	assert(manageBase % sizeof(uintptr_t) == 0);
+	MemoryBlockManager *bm = (MemoryBlockManager*)manageBase;
+	bm->lock = initialSpinlock;
 	bm->freeSize = 0;
 	assert(beginAddr % MIN_BLOCK_SIZE == 0);
+	assert(INVALID_BLOCK_ADDRESS < beginAddr || INVALID_BLOCK_ADDRESS >= maxEndAddr);
 	bm->beginAddress = beginAddr;
 
-	bm->blockCount = (endAddr - bm->beginAddress) / MIN_BLOCK_SIZE;
-	bm->lock = initialSpinlock;
-	bm->block = (MemoryBlock*)m;
-	m += sizeof(MemoryBlock) * bm->blockCount;
-	bm->sizeOfThis = m - manageBase;
-	if(bm->sizeOfThis > manageSize){
+	bm->maxBlockCount = (maxEndAddr - bm->beginAddress) / MIN_BLOCK_SIZE;
+	bm->blockCount = 0;
+	if(getBlockManagerSize(bm) > manageSize){
 		panic("buddy memory manager initialization error");
+		return bm == NULL? ((void*)0xffffffff): NULL;
 	}
-	int b;
-	for(b = 0; b < bm->blockCount; b++){
-		 // all blocks are using and in MIN_BLOCK_ORDER in the beginning
-		initMemoryBlock(&bm->block[b]);
+	extendBlockCount(bm, (endAddr - bm->beginAddress) / MIN_BLOCK_SIZE);
+	int i;
+	for(i = 0; i <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; i++){
+		bm->freeBlock[i] = NULL;
 	}
-	for(b = 0; b <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; b++){
-		bm->freeBlock[b] = NULL;
-	}
+
 	return bm;
 }

@@ -4,6 +4,7 @@
 #include"segment/segment.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
+#include"memory/memory_private.h"
 #include"interrupt/handler.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
@@ -153,7 +154,15 @@ void startTask(void);
 void startTask(void){
 	callAfterTaskSwitchFunc();
 	sti();
-	// return to eip assigned in initTaskStack
+	// see createUserTask() task linear memory
+
+	Task *t = processorLocalTask();
+	int ok;
+	ok = initTaskMemoryBlock(&t->taskMemory, maxBlockManagerSize);
+	EXPECT(ok);
+	return;
+	ON_ERROR;
+	panic("error"); // TODO: teminate task
 }
 
 void suspendCurrent(void (*afterTaskSwitchFunc)(Task*, uintptr_t), uintptr_t arg){
@@ -232,8 +241,8 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
 static Task *createTask(
-	uint32_t esp0, uint32_t espInterrupt, uintptr_t userStackTop, uintptr_t userHeapBottom,
-	PageManager *pageTable, int priority
+	uint32_t esp0, uint32_t espInterrupt, uintptr_t heapBegin, uintptr_t heapEnd,
+	PageManager *pageManager, MemoryBlockManager *linearMemory, int priority
 ){
 	Task *NEW(t);
 	EXPECT(t != NULL);
@@ -245,7 +254,7 @@ static Task *createTask(
 	t->ioListLock = initialSpinlock;
 	t->pendingIOList = NULL;
 	t->finishedIOList = NULL;
-	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageTable, userStackTop, userHeapBottom);
+	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageManager, linearMemory, heapBegin, heapEnd);
 	EXPECT(initTaskMemoryOK != 0);
 	t->state = SUSPENDED;
 	t->priority = priority;
@@ -265,40 +274,44 @@ static Task *createTask(
 }
 
 #define KERNEL_STACK_SIZE ((size_t)8192)
+static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 static Task *createUserTask(
-	void (*eip0)(void),
-	uintptr_t userHeapBottom,
-	int priority
+	void (*eip0)(void),	int priority
 ){
-	const uintptr_t targetESP0 = USER_LINEAR_END - sizeOfPageTableSet;
+	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxBlockManagerSize, PAGE_SIZE);
+	const uintptr_t targetPageTable = targetBlockManager - sizeOfPageTableSet;
+	const uintptr_t targetESP0 = targetPageTable;
 	const uintptr_t targetStackBottom = targetESP0 - KERNEL_STACK_SIZE;
-	// 1. task page table
-	PageManager *pageManager = createAndMapUserPageTable(targetESP0);
-	EXPECT(pageManager != NULL);
 
-	// 2. kernel stack for task
-	// TODO: use current page table, not kernel
-	int allocateStackOK = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
-	EXPECT(allocateStackOK != 0);
-	void *mappedStackBottom = mapKernelPagesFromExisting(pageManager, targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
+	assert(minBlockManagerSize <= PAGE_SIZE);
+	// 1. task page table
+	PageManager *pageManager = createAndMapUserPageTable(targetPageTable);
+	EXPECT(pageManager != NULL);
+	// 2. task kernel stack
+	int ok = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
+	EXPECT(ok);
+	void *mappedStackBottom = mapExistingPagesToKernel(pageManager, targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(mappedStackBottom != NULL);
 	// 3. create task
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
 	uintptr_t initialESP0 = targetESP0 -
 	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBottom) + (targetESP0 - targetStackBottom));
-	Task *t = createTask(initialESP0, targetESP0 - 4,
-	(uintptr_t)targetStackBottom, userHeapBottom,
-	pageManager, priority);
+	Task *t = createTask(
+		initialESP0, targetESP0 - 4,
+		0, targetStackBottom,
+		pageManager, (MemoryBlockManager*)targetBlockManager,
+		priority
+	);
 	EXPECT(t != NULL);
-	unmapKernelPage((void*)mappedStackBottom);
+	unmapKernelPages(mappedStackBottom);
 	unmapUserPageTableSet(pageManager);
+	// 5. see startTask
 	return t;
 	//DELETE(t);
 	ON_ERROR;
-	unmapKernelPage((void*)mappedStackBottom);
+	unmapKernelPages(mappedStackBottom);
 	ON_ERROR;
-	// TODO: use current page table, not kernel
 	unmapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE);
 	ON_ERROR;
 	deleteUserPageTable(pageManager);
@@ -307,7 +320,7 @@ static Task *createUserTask(
 }
 
 Task *createKernelTask(void (*eip0)(void), int priority){
-	Task *t = createUserTask(eip0, (2 << 20), priority);
+	Task *t = createUserTask(eip0, priority);
 	return t;
 }
 
@@ -345,7 +358,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	if(tm == NULL){
 		panic("cannot initialize bootstrap task");
 	}
-	tm->current = createTask(0, 0, 0, 0, kernelPageManager, NUMBER_OF_PRIORITIES - 1);
+	tm->current = createTask(0, 0, 0, 0, kernelPageManager, NULL, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
@@ -356,21 +369,6 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	tm->afterTaskSwitchFunc = NULL;
 	tm->afterTaskSwitchArg = 0;
 	return tm;
-}
-
-static void allocateHeapHandler(InterruptParam *p){
-	size_t size = SYSTEM_CALL_ARGUMENT_0(p);
-	PageAttribute attribute = SYSTEM_CALL_ARGUMENT_1(p);
-	Task *t = processorLocalTask();
-	int result = extendHeap(&(t->taskMemory), size, attribute);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = result;
-}
-
-static void releaseHeapHandler(InterruptParam *p){
-	size_t size = SYSTEM_CALL_ARGUMENT_0(p);
-	Task *t = processorLocalTask();
-	int result = shrinkHeap(&(t->taskMemory), size);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = result;
 }
 
 // system call
@@ -405,11 +403,11 @@ static void waitIOHandler(InterruptParam *p){
 	int returnCount = ior->finish(ior, rv);
 	switch(returnCount){
 	//case 5:
-	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[4];
+		//SYSTEM_CALL_RETURN_VALUE_5(p) = rv[4];
 	//case 4:
-	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[3];
-	//case 3:
-	//	SYSTEM_CALL_RETURN_VALUE_2(p) = rv[2];
+		//SYSTEM_CALL_RETURN_VALUE_4(p) = rv[3];
+	case 3:
+		SYSTEM_CALL_RETURN_VALUE_3(p) = rv[2];
 	case 2:
 		SYSTEM_CALL_RETURN_VALUE_2(p) = rv[1];
 	case 1:
@@ -488,8 +486,8 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	}
 
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
-	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
-	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
+	//registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
+	//registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
 	//initSemaphore(systemCallTable);
 }
