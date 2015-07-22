@@ -19,7 +19,7 @@ typedef struct Task{
 	uint32_t esp0;
 	uint32_t espInterrupt;
 	// SegmentTable *ldt;
-	TaskMemoryManager taskMemory;
+	TaskMemoryManager *taskMemory;
 	// queue data
 	enum TaskState{
 		// RUNNING,
@@ -38,10 +38,6 @@ typedef struct Task{
 
 	struct Task *next, *prev;
 }Task;
-
-PageManager *getPageManager(Task *t){
-	return t->taskMemory.pageManager;
-}
 
 #define NUMBER_OF_PRIORITIES (4)
 
@@ -144,7 +140,7 @@ static void taskSwitch(void (*func)(Task *t, uintptr_t), uintptr_t arg){
 	//releaseLock(&readyQueue->lock);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(tm->current != tm->oldTask){// otherwise, esp0 will be wrong value
-		contextSwitch(&tm->oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current)));
+		contextSwitch(&tm->oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current->taskMemory)));
 		// may go to startTask or return here
 	}
 	callAfterTaskSwitchFunc();
@@ -165,8 +161,7 @@ void schedule(){
 }
 
 static int initV8086Memory(void){
-	PageManager *p;
-	p = processorLocalTask()->taskMemory.pageManager;
+	PageManager *p = getPageManager(processorLocalTask()->taskMemory);
 	PhysicalAddress biosLow = {0x0}, // ~ 0x500: BIOS reserved
 	v8086Stack = {V8086_STACK_BOTTOM}, // ~ 0x7c00: free
 	v8086Text = {V8086_STACK_TOP}, // ~ 0x80000: free (OS)
@@ -245,8 +240,8 @@ static Task *createTask(
 	t->ioListLock = initialSpinlock;
 	t->pendingIOList = NULL;
 	t->finishedIOList = NULL;
-	int initTaskMemoryOK = initTaskMemory(&(t->taskMemory), pageManager, linearMemory, heapBegin, heapEnd);
-	EXPECT(initTaskMemoryOK != 0);
+	t->taskMemory = createTaskMemory(pageManager, linearMemory, heapBegin, heapEnd);
+	EXPECT(t->taskMemory != NULL);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
@@ -286,7 +281,7 @@ static Task *createUserTask(
 		mapExistingPagesToKernel(pageManager, targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(mappedBlockManager != NULL);
 	MemoryBlockManager *_mappedBlockManager = createMemoryBlockManager((uintptr_t)mappedBlockManager,
-		maxBlockManagerSize, 0, 0, targetStackBottom);
+		maxBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, targetStackBottom);
 	EXPECT(_mappedBlockManager == (void*)mappedBlockManager);
 	// 3. task kernel stack
 	ok = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
@@ -346,6 +341,10 @@ void resume(/*TaskManager *tm, */Task *t){
 
 Task *currentTask(TaskManager *tm){
 	return tm->current;
+}
+
+PageManager *getTaskPageManager(Task *t){
+	return getPageManager(t->taskMemory);
 }
 
 static void taskDefinedHandler(InterruptParam *p){
@@ -481,6 +480,34 @@ void initIORequest(
 	this->finish = f;
 }
 
+static void allocateHeapHandler(InterruptParam *p){
+	sti();
+	uintptr_t size = SYSTEM_CALL_ARGUMENT_0(p);
+	PageAttribute attribute  =SYSTEM_CALL_ARGUMENT_1(p);
+	void *ret = allocatePages(getLinearMemoryManager(processorLocalTask()->taskMemory), size, attribute);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ret;
+}
+
+void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribute){
+	uintptr_t address = systemCall3(SYSCALL_ALLOCATE_HEAP, &size, &attribute);
+//assert(address != UINTPTR_NULL);
+	return (void*)address;
+}
+
+static void releaseHeapHandler(InterruptParam *p){
+	sti();
+	uintptr_t address = SYSTEM_CALL_ARGUMENT_0(p);
+	int ret = checkAndReleasePages(getLinearMemoryManager(processorLocalTask()->taskMemory), (void*)address);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = ret;
+}
+
+int systemCall_releaseHeap(void *address){
+	uintptr_t address2 = (uintptr_t)address;
+	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, &address2);
+	assert(ok); // TODO: remove this when we start making user space tasks
+	return (int)ok;
+}
+
 void initTaskManagement(SystemCallTable *systemCallTable){
 	NEW(globalQueue);
 	if(globalQueue == NULL){
@@ -493,8 +520,8 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	}
 
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
-	//registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
-	//registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	//initSemaphore(systemCallTable);
 }

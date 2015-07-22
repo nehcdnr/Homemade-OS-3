@@ -22,15 +22,14 @@ typedef struct SystemCallTable SystemCallTable;
 void initSemaphore(SystemCallTable *systemCallTable);
 
 // taskmemory.c
-typedef struct{
-	//LinearMemoryManager linear;
-	uintptr_t heapBegin;
-	uintptr_t heapEnd;
-	struct PageManager *pageManager;
-	struct MemoryBlockManager *blockManager;
-}TaskMemoryManager;
+typedef struct TaskMemoryManager TaskMemoryManager;
+typedef struct PageManager PageManager;
+PageManager *getPageManager(TaskMemoryManager *m);
+LinearMemoryManager *getLinearMemoryManager(TaskMemoryManager *m);
 
-int initTaskMemory(TaskMemoryManager *m, struct PageManager *p, struct MemoryBlockManager *b,
+TaskMemoryManager *createTaskMemory(PageManager *p, struct MemoryBlockManager *b,
 	uintptr_t heapBegin, uintptr_t heapEnd);
 
-int initTaskMemoryBlock(TaskMemoryManager *m, size_t blockManagerSize);
+void initTaskMemory(SystemCallTable *systemCallTable);
+
+void initTaskMemeory(SystemCallTable *systemCallTable);

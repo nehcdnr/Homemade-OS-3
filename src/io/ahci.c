@@ -646,7 +646,7 @@ static void AHCIServiceHandler(InterruptParam *p){
 	int isWrite;
 	rwDiskArgument(p, &linearBuffer, &lba, &sectorCount, &index.value, &isWrite);
 	PhysicalAddress physicalBuffer = translateExistingPage(
-		kernelPageManager/*TODO: getPageManager(t)*/, (void*)linearBuffer
+		getTaskPageManager(processorLocalTask()), (void*)linearBuffer
 	);
 	int ok = isValidHBAPortIndex(index);
 	EXPECT(ok);
@@ -689,8 +689,8 @@ uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount
 }
 
 static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *d){
-	uint16_t *buffer = allocateKernelPages(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
-	EXPECT(buffer!= NULL);
+	uint16_t *buffer = systemCall_allocateHeap(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
+	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
 	i.identifyCommand = 1;
 	uintptr_t ior = systemCall_rwDiskSync(ahciDriver, (uintptr_t)buffer, 0, 0, i.value, 0);
@@ -728,11 +728,11 @@ static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *
 	}
 #undef TO64
 	//printk("disk sector count = %u\n",(uint32_t)d->sectorCount);
-	releaseKernelPages(buffer);
+	systemCall_releaseHeap(buffer);
 	return 1;
 	ON_ERROR;
 	ON_ERROR;
-	releaseKernelPages(buffer);
+	systemCall_releaseHeap(buffer);
 	ON_ERROR;
 	return 0;
 }

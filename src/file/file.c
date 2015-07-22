@@ -94,7 +94,7 @@ void readPartitions(
 	const char *driverName, int diskDriver, uint32_t diskCode, uint64_t relativeLBA,
 	uint64_t sectorCount, uint32_t sectorSize
 ){
-	struct MBR *buffer = allocateKernelPages(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
+	struct MBR *buffer = systemCall_allocateHeap(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
 	uintptr_t ior1 = systemCall_rwDiskSync(diskDriver, (uintptr_t)buffer, relativeLBA, 1, diskCode, 0);
 	EXPECT(ior1 != IO_REQUEST_FAILURE);
@@ -130,10 +130,10 @@ void readPartitions(
 		}
 	}
 
-	releaseKernelPages(buffer);
+	systemCall_releaseHeap(buffer);
 	return;
 	ON_ERROR;
-	releaseKernelPages(buffer);
+	systemCall_releaseHeap(buffer);
 	ON_ERROR;
 	printk("cannot read partitions");
 }

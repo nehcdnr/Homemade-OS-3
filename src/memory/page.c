@@ -260,8 +260,8 @@ static PageTableAttribute *linearAddressOfPageTableAttribute(PageManager *p, uin
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
 	size_t p_size = size;
 	PhysicalAddress p_address = {allocateBlock(physical, &p_size)};
-	assert(p_address.value != UINTPTR_NULL);
-	if(p_address.value == INVALID_BLOCK_ADDRESS){
+	//assert(p_address.value != UINTPTR_NULL);
+	if(p_address.value == UINTPTR_NULL){
 		p_address.value = UINTPTR_NULL;
 	}
 	return p_address;
@@ -598,7 +598,7 @@ void initMultiprocessorPaging(InterruptTable *t){
 	sendINVLPG = sendINVLPG_enabled;
 }
 
-static void _unmapPage_(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
+void _unmapPage(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
 	size_t s = size;
 	while(s != 0){
 		s -= PAGE_SIZE;
@@ -685,10 +685,6 @@ int _mapPage_LP(
 	return 0;
 }
 
-void _unmapPage_LP(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
-	_unmapPage_(p, physical, linearAddress, size, 0);
-}
-
 int _mapPage_L(
 	PageManager *p, MemoryBlockManager *physical,
 	void *linearAddress, size_t size,
@@ -737,8 +733,4 @@ int _mapExistingPages_L(
 	ON_ERROR;
 	_unmapPage_LP(dst, physical, dstLinear, s);
 	return 0;
-}
-
-void _unmapPage_L(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size){
-	_unmapPage_(p, physical, linearAddress, size, 1);
 }

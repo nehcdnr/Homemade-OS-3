@@ -66,7 +66,7 @@ extern LinearMemoryManager *kernelLinear;
 void *allocateKernelMemory(size_t size);
 void releaseKernelMemory(void *address);
 
-// kernel page
+// kernel/user page
 void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
 #define mapKernelPages(ADDRESS, SIZE, ATTRIBUTE) mapPages(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
 void *mapExistingPages(
@@ -79,11 +79,13 @@ PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 //#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
+int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
 
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
 #define allocateKernelPages(SIZE, ATTRIBUTE) allocatePages(kernelLinear, SIZE, ATTRIBUTE)
 void releasePages(LinearMemoryManager *m, void *linearAddress);
 #define releaseKernelPages(ADDRESS) releasePages(kernelLinear, ADDRESS)
+int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)
@@ -97,5 +99,8 @@ extern char KERNEL_LINEAR_END_SYMBOL;
 
 #define USER_LINEAR_BEGIN ((uintptr_t)0)
 #define USER_LINEAR_END KERNEL_LINEAR_BEGIN
+
+void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
+int systemCall_releaseHeap(void *address);
 
 #endif

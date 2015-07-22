@@ -64,13 +64,15 @@ void releaseKernelMemory(void *linearAddress){
 	releaseSlab(kernelSlab, linearAddress);
 }
 
+// LinearMemoryManager
+
 void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute){
 	assert(size % PAGE_SIZE == 0);
 	assert(m->page != NULL && m->linear != NULL);
 	// linear
 	size_t l_size = size;
-	uintptr_t linearAddress = allocateBlock(m->linear, &l_size);
-	EXPECT(linearAddress != INVALID_BLOCK_ADDRESS);
+	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size);
+	EXPECT(linearAddress != UINTPTR_NULL);
 	assert(linearAddress % PAGE_SIZE == 0);
 	// assume linear memory manager and page table are consistent
 	// linearAddess[0 ~ l_size] are guaranteed to be available
@@ -91,8 +93,8 @@ void *mapExistingPages(
 	uintptr_t srcLinear, size_t size, PageAttribute attribute
 ){
 	size_t l_size = size;
-	uintptr_t dstLinear = allocateBlock(dst->linear, &l_size);
-	EXPECT(dstLinear != INVALID_BLOCK_ADDRESS);
+	uintptr_t dstLinear = allocateOrExtendLinearBlock(dst, &l_size);
+	EXPECT(dstLinear != UINTPTR_NULL);
 	int ok = _mapExistingPages_L(dst->physical, dst->page, src, (void*)dstLinear, srcLinear, l_size, attribute);
 	EXPECT(ok);
 
@@ -105,17 +107,21 @@ void *mapExistingPages(
 }
 
 void unmapPages(LinearMemoryManager *m, void *linearAddress){
-	assert(m->page != NULL && m->linear != NULL);
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)linearAddress);
 	_unmapPage_LP(m->page, m->physical, linearAddress, s);
 	releaseBlock(m->linear, (uintptr_t)linearAddress);
 }
 
+int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress){
+	assert(m->page != NULL && m->linear != NULL);
+	return checkAndUnmapLinearBlock(m, (uintptr_t)linearAddress);
+}
+
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
 	// linear
 	size_t l_size = size;
-	uintptr_t linearAddress = allocateBlock(m->linear, &l_size);
-	EXPECT(linearAddress != INVALID_BLOCK_ADDRESS);
+	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size);
+	EXPECT(linearAddress != UINTPTR_NULL);
 	// physical
 	int ok = _mapPage_L(m->page, m->physical, (void*)linearAddress, l_size, attribute);
 	EXPECT(ok);
@@ -133,6 +139,11 @@ void releasePages(LinearMemoryManager *m, void *linearAddress){
 	_unmapPage_L(m->page, m->physical, linearAddress, s);
 	releaseBlock(m->linear, (uintptr_t)linearAddress);
 }
+
+int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress){
+	return checkAndReleaseLinearBlock(m, (uintptr_t)linearAddress);
+}
+
 /*
 size_t physicalMemoryUsage(size_t *totalSize){
 	size_t freeSize = getFreeBlockSize(kernelLinear->physical);
@@ -166,30 +177,30 @@ static void initUsableBlocks(MemoryBlockManager *m,
 	const AddressRange *arArray2, int arLength2
 ){
 	int b;
-	const int bCount = getBlockCount(m);
-	const uintptr_t firstBlockAddress = getBeginAddress(m);
+	const int bCount = getMaxBlockCount(m);
+	const uintptr_t firstAddress = getBeginAddress(m);
 	for(b = 0; b < bCount; b++){
-		uintptr_t blockAddress = firstBlockAddress + b * MIN_BLOCK_SIZE;
-		assert(blockAddress + MIN_BLOCK_SIZE > blockAddress);
+		uintptr_t address = firstAddress + b * MIN_BLOCK_SIZE;
+		assert(address + MIN_BLOCK_SIZE > address);
 		int isInUnusable = 0, isInUsable = 0;
 		int i;
 		for(i = 0; isInUnusable == 0 && i < arLength1 + arLength2; i++){
 			const AddressRange *ar = (i < arLength1? arArray1 + i: arArray2 + (i - arLength1));
 			if( // completely covered by usable range
 				ar->type == USABLE &&
-				(ar->base <= blockAddress && ar->base + ar->size >= blockAddress + MIN_BLOCK_SIZE)
+				(ar->base <= address && ar->base + ar->size >= address + MIN_BLOCK_SIZE)
 			){
 				isInUsable = 1;
 			}
 			if( // partially covered by unusable range
 				ar->type != USABLE &&
-				!(ar->base >= blockAddress + MIN_BLOCK_SIZE || ar->base + ar->size <= blockAddress)
+				!(ar->base >= address + MIN_BLOCK_SIZE || ar->base + ar->size <= address)
 			){
 				isInUnusable = 1;
 			}
 		}
 		if(isInUnusable == 0 && isInUsable == 1){
-			releaseBlock(m, blockAddress);
+			releaseBlock(m, address);
 		}
 	}
 }
@@ -281,15 +292,17 @@ void testMemoryManager2(void){
 	unsigned int r=38;
 	for(a=0;a<TEST_N;a++){
 		size_t s=r*MIN_BLOCK_SIZE;
-		p[a]=allocateBlock(kernelLinear->physical, &s);
 		r=(r*31+5)%197;
-		if(p[a]==INVALID_BLOCK_ADDRESS)continue;
+		p[a]=allocateBlock(kernelLinear->physical, &s);
+		if(p[a]==UINTPTR_NULL)continue;
 		for(b=0;b<s;b+=MIN_BLOCK_SIZE){
-			assert(isReleasableBlock(kernelLinear->physical, p[a]+b)==(b==0));
+			if((isReleasableBlock(kernelLinear->physical, p[a]+b)!=(b==0)))
+				while(1)__asm__("hlt\n");
+			//assert(isReleasableBlock(kernelLinear->physical, p[a]+b)==(b==0));
 		}
 	}
 	for(a=0;a<TEST_N;a++){
-		if(p[a]==INVALID_BLOCK_ADDRESS)continue;
+		if(p[a]==UINTPTR_NULL)continue;
 		releaseBlock(kernelLinear->physical, p[a]);
 	}
 }
@@ -312,13 +325,13 @@ void initKernelMemory(void){
 		reservedBase, reservedBegin, reservedDirectMapEnd,
 		0, findMaxAddress()
 	);
-	reservedBegin = ((uintptr_t)kernelLinear->physical) + getBlockManagerSize(kernelLinear->physical);
+	reservedBegin = ((uintptr_t)kernelLinear->physical) + getMaxBlockManagerSize(kernelLinear->physical);
 
 	kernelLinear->linear = initKernelLinearBlock(
 		reservedBase, reservedBegin, reservedEnd,
 		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
 	);
-	reservedBegin = ((uintptr_t)kernelLinear->linear) + getBlockManagerSize(kernelLinear->linear);
+	reservedBegin = ((uintptr_t)kernelLinear->linear) + getMaxBlockManagerSize(kernelLinear->linear);
 	kernelLinear->page = initKernelPageTable(
 		reservedBase, reservedBegin, reservedEnd,
 		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
@@ -326,6 +339,6 @@ void initKernelMemory(void){
 
 	kernelSlab = createSlabManager(kernelLinear);
 
-	//testMemoryManager();
+	testMemoryManager();
 	//testMemoryManager2();
 }
