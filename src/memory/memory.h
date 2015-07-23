@@ -75,7 +75,7 @@ void *mapExistingPages(
 );
 #define mapExistingPagesToKernel(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
 	mapExistingPages(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
-PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
+//PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 //#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
@@ -86,10 +86,17 @@ void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute)
 void releasePages(LinearMemoryManager *m, void *linearAddress);
 #define releaseKernelPages(ADDRESS) releasePages(kernelLinear, ADDRESS)
 int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress);
+PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)
 #define DELETE(V) releaseKernelMemory(V)
+
+#ifndef NDEBUG
+void testMemoryManager(void);
+void testMemoryManager2(void);
+void testMemoryManager3(void);
+#endif
 
 //see kernel.ld
 extern char KERNEL_LINEAR_BEGIN_SYMBOL;
@@ -102,5 +109,6 @@ extern char KERNEL_LINEAR_END_SYMBOL;
 
 void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
 int systemCall_releaseHeap(void *address);
+PhysicalAddress systemCall_translatePage(void *address);
 
 #endif

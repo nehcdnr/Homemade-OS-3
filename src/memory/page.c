@@ -271,7 +271,7 @@ void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address
 	releaseBlock(physical, address.value);
 }
 
-
+// assume the arguments are valid
 static PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress, int isPresent){
 	int i2 = PT_INDEX(linearAddress);
 #ifndef NDEBUG
@@ -359,14 +359,17 @@ static void invalidatePage(
 	PageManager *p,
 	uintptr_t linear
 ){
-	int i2 = PT_INDEX(linear);
-	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
-	assert(isPTEPresent(pt_linear->entry + i2));
+	// Spinlock *lock = pdLockByLinearAddress(p, linear);
+	// acquireLock(lock);
 #ifndef NDEBUG
 	int i1 = PD_INDEX(linear);
 	assert(isPDEPresent(p->page->pd.entry + i1));
 #endif
+	int i2 = PT_INDEX(linear);
+	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
+	assert(isPTEPresent(pt_linear->entry + i2));
 	invalidatePTE(pt_linear->entry + i2);
+	// releaseLock(lock);
 }
 
 static void releaseInvalidatedPage(
@@ -375,19 +378,21 @@ static void releaseInvalidatedPage(
 	uintptr_t linear,
 	int releasePhysical
 ){
+	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
+	Spinlock *pdLock = pdLockByLinearAddress(p, linear);
+	//PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p ,linear);
+#ifndef NDEBUG
 	int i1 = PD_INDEX(linear);
 	int i2 = PT_INDEX(linear);
-
-	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
-	//PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p ,linear);
 	assert(isPDEPresent(p->page->pd.entry + i1));
 	assert(isPTEPresent(pt_linear->entry + i2) == 0);
-
+#endif
 	if(releasePhysical){
 		PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
 		_releasePhysicalPages(physical, page_physical);
 	}
-/* TODO: lock
+	acquireLock(pdLock);
+	/* release PageTable and set PD
 	if(pt_attribute->external == 0){
 		pt_attribute->presentCount--;
 		if(pt_attribute->presentCount == 0 && pt_attribute->deleteWhenEmpty != 0){
@@ -396,6 +401,7 @@ static void releaseInvalidatedPage(
 			_releasePhysicalPages(physical , pt_physical);
 		}
 	}*/
+	releaseLock(pdLock);
 }
 
 static size_t evaluateSizeOfPageTableSet(uintptr_t reservedBase, uintptr_t reservedEnd){
@@ -480,6 +486,7 @@ static void copyPageManagerPD(
 	uintptr_t linearBegin, uintptr_t linearEnd
 ){
 	uintptr_t a, b = PD_INDEX(linearBegin), e = PD_INDEX(linearEnd - 1);
+	// lock src PD if we want to release PageTable
 	for(a = b; a <= e; a++){
 		assert(isPDEPresent(dst->page->pd.entry + a) == 0);
 		assert(isPDEPresent(src->page->pd.entry + a) != 0);
@@ -598,6 +605,7 @@ void initMultiprocessorPaging(InterruptTable *t){
 	sendINVLPG = sendINVLPG_enabled;
 }
 
+// assume the linear memory manager has checked the arguments
 void _unmapPage(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
 	size_t s = size;
 	while(s != 0){

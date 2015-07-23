@@ -322,10 +322,9 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	ok = stopPort(pr);
 	EXPECT(ok);
 	// reset pointer to command list and received fis
-	HBAPortMemory *pm = allocateKernelPages(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
+	HBAPortMemory *pm = systemCall_allocateHeap(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
 	EXPECT(pm != NULL);
-	PhysicalAddress pm_physical = translateExistingPage(kernelPageManager,
-			/*TODO: getPageManager(processorLocalTask()), */pm);
+	PhysicalAddress pm_physical = systemCall_translatePage(pm);
 	MEMSET0(pm);
 	pr->commandBaseHigh = 0;
 	pr->commandBaseLow = pm_physical.value + MEMBER_OFFSET(HBAPortMemory, commandHeader[0]);
@@ -342,7 +341,7 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	return pm;
 	ON_ERROR;
 	printk("cannot start AHCI port\n");
-	releaseKernelPages(pm);
+	systemCall_releaseHeap(pm);
 	ON_ERROR;
 	printk("cannot allocate kernel memory for AHCI port");
 	ON_ERROR;
@@ -645,9 +644,10 @@ static void AHCIServiceHandler(InterruptParam *p){
 	HBAPortIndex index;
 	int isWrite;
 	rwDiskArgument(p, &linearBuffer, &lba, &sectorCount, &index.value, &isWrite);
-	PhysicalAddress physicalBuffer = translateExistingPage(
-		getTaskPageManager(processorLocalTask()), (void*)linearBuffer
+	PhysicalAddress physicalBuffer = checkAndTranslatePage(
+		getTaskLinearMemory(processorLocalTask()), (void*)linearBuffer
 	);
+	EXPECT(physicalBuffer.value != UINTPTR_NULL);
 	int ok = isValidHBAPortIndex(index);
 	EXPECT(ok);
 	DiskRequest *dr = createDiskRequest(resumeTaskByIO, processorLocalTask(),
@@ -668,6 +668,7 @@ assert(sectorCount * ahciArray[index.hbaIndex]->desc.sectorSize <= PAGE_SIZE);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uint32_t)dr;
 	return;
 	// destroy(dr);
+	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
 	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;

@@ -8,14 +8,16 @@ enum MemoryBlockStatus{
 	MEMORY_FREE_OR_COVERED = 1, // may be free
 	MEMORY_USING = 2, // must be using
 	MEMORY_RELEASING = 3 // must be releasing
-};
+}__attribute__((__packed__));
 // BlockManager functions
+
+typedef uint16_t sizeorder_t;
+
 typedef struct MemoryBlock{
-	unsigned sizeOrder: MAX_BLOCK_ORDER - MIN_BLOCK_ORDER;
-	enum MemoryBlockStatus status: 2;
+	sizeorder_t sizeOrder;
+	enum MemoryBlockStatus status;
 	struct MemoryBlock**prev, *next;
 }MemoryBlock;
-
 
 static_assert(sizeof(MemoryBlock) == 12);
 
@@ -41,11 +43,19 @@ static uintptr_t getAddress(MemoryBlockManager *m, MemoryBlock *mb){
 	return (((uintptr_t)(mb - (m->block))) << MIN_BLOCK_ORDER) + m->beginAddress;
 }
 
+static int isInRange(MemoryBlockManager *m, uintptr_t address){
+	if(address % MIN_BLOCK_SIZE != 0)
+		return 0;
+	if(address < m->beginAddress)
+		return 0;
+	if((address - m->beginAddress) / MIN_BLOCK_SIZE >= (unsigned)m->blockCount)
+		return 0;
+	return 1;
+}
+
 static MemoryBlock *getBlock(MemoryBlockManager *m, uintptr_t address){
-	assert(address % MIN_BLOCK_SIZE == 0);
-	assert(address >= m->beginAddress);
+	assert(isInRange(m, address));
 	int i = (address - m->beginAddress) / MIN_BLOCK_SIZE;
-	assert(i >= 0 && i < m->blockCount);
 	return &m->block[i];
 }
 
@@ -54,7 +64,7 @@ uintptr_t getBeginAddress(MemoryBlockManager *m){
 }
 
 // assume locked
-static MemoryBlock *getBuddy(MemoryBlockManager *m, MemoryBlock *b){
+static MemoryBlock *getBuddy(MemoryBlockManager *m, const MemoryBlock *b){
 	assert(isAcquirable(&m->lock) == 0);
 	int index = (b - m->block);
 	int buddy = (index ^ (1 << (b->sizeOrder - MIN_BLOCK_ORDER)));
@@ -95,7 +105,7 @@ static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 		MemoryBlock *b2 = getBuddy(m, b);
 		assert(b2 != NULL);
 		assert(IS_IN_DQUEUE(b2) == 0 && b2->sizeOrder == b->sizeOrder);
-		assert(b2->status = MEMORY_FREE_OR_COVERED);
+		assert(b2->status == MEMORY_FREE_OR_COVERED);
 		ADD_TO_DQUEUE(b2, &m->freeBlock[b2->sizeOrder - MIN_BLOCK_ORDER]);
 		i2--;
 	}
@@ -120,10 +130,9 @@ size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address){
 }
 
 static int isReleasableBlock_noLock(MemoryBlockManager *m, uintptr_t address){
-	if(address % MIN_BLOCK_SIZE != 0 || address < m->beginAddress)
+	if(isInRange(m, address) == 0){
 		return 0;
-	if((address - m->beginAddress) / MIN_BLOCK_SIZE >= (unsigned)m->blockCount)
-		return 0;
+	}
 	MemoryBlock *b1 = getBlock(m, address);
 #ifndef NDEBUG
 	MemoryBlock *b2 = getBuddy(m, b1);
@@ -171,6 +180,7 @@ static void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 	m->freeSize += (1 << b->sizeOrder);
 	assert(IS_IN_DQUEUE(b) == 0);
 	assert(b->status == MEMORY_USING || b->status == MEMORY_RELEASING);
+	b->status = MEMORY_FREE_OR_COVERED;
 	while(b->sizeOrder < MAX_BLOCK_ORDER){
 		MemoryBlock *buddy = getBuddy(m, b);
 		if(buddy == NULL)
@@ -186,14 +196,13 @@ static void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 		#ifndef NDEBUG
 		{
 			uintptr_t a1 = (uintptr_t)getAddress(m,buddy), a2=(uintptr_t)getAddress(m,b);
-			assert((a1 > a2? a1-a2: a2-a1) == ((uintptr_t)1 << b->sizeOrder));
+			assert((a1 > a2? a1-a2: a2-a1) == (size_t)(1 << b->sizeOrder));
 		}
 		#endif
 		b = (getAddress(m, b) < getAddress(m, buddy)? b: buddy);
 		b->sizeOrder++;
 	}
 	ADD_TO_DQUEUE(b, &m->freeBlock[b->sizeOrder - MIN_BLOCK_ORDER]);
-	b->status = MEMORY_FREE_OR_COVERED;
 }
 
 void releaseBlock(MemoryBlockManager *m, uintptr_t address){
@@ -201,6 +210,22 @@ void releaseBlock(MemoryBlockManager *m, uintptr_t address){
 	assert(isReleasableBlock_noLock(m, address));
 	releaseBlock_noLock(m, 	getBlock(m, address));
 	releaseLock(&m->lock);
+}
+
+// if MEMORY_RELEASING or MEMORY_FREE, return 0
+// if MEMORY_USING, return 1
+static int isUsingBlock_noLock(MemoryBlockManager *m, uintptr_t address){
+	const MemoryBlock *b1, *b2;
+	b1 = getBlock(m, address);
+	while(1){
+		b2 = getBuddy(m, b1);
+		// b1 is not covered by other blocks
+		if(b2 == NULL || b2->sizeOrder <= b1->sizeOrder){
+			return (b1->status == MEMORY_USING);
+		}
+		assert(b2 < b1);
+		b1 = b2;
+	}
 }
 
 const size_t minBlockManagerSize = sizeof(MemoryBlockManager);
@@ -353,4 +378,22 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	releaseLock(&bm->lock);
 	return r;
 
+}
+
+static PhysicalAddress checkAndTranslateBlock(LinearMemoryManager *m, uintptr_t linearAddress){
+	MemoryBlockManager *bm = m->linear;
+	PhysicalAddress p = {UINTPTR_NULL};
+	if(isInRange(bm, linearAddress) == 0)
+		return p;
+	acquireLock(&bm->lock);
+	if(isUsingBlock_noLock(bm, linearAddress)){
+		p = translateExistingPage(m->page, (void*)linearAddress);
+		assert(p.value != UINTPTR_NULL);
+	}
+	releaseLock(&bm->lock);
+	return p;
+}
+
+PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress){
+	return checkAndTranslateBlock(m, (uintptr_t)linearAddress);
 }

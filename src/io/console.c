@@ -147,11 +147,12 @@ void initKernelConsole(void){
 	cd->cursor = 0;
 	cd->maxColumn = 80;
 	cd->screenArea = cd->maxColumn * 25;
-	cd->video = mapKernelPages(
+	cd->video = (uint16_t*)(KERNEL_LINEAR_BEGIN + defaultTextVideoAddress.value);
+	/*mapKernelPages(
 		defaultTextVideoAddress,
 		DEFAULT_VIDEO_ADDRESS_END - DEFAULT_TEXT_VIDEO_ADDRESS,
 		KERNEL_NON_CACHED_PAGE
-	);
+	);*/
 	cd->lock = initialSpinlock;
 	updateVideoAddress(cd);
 	updateCursor(cd);

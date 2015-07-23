@@ -7,12 +7,13 @@ typedef struct SegmentTable SegmentTable;
 typedef struct TaskManager TaskManager;
 typedef struct Task Task;
 typedef struct PageManager PageManager;
-
+typedef struct LinearMemoryManager LinearMemoryManager;
 void schedule(void);
 
 // put Task t into queue if it is suspended (by systemCall(SYSCALL_SUSPEND))
 Task *currentTask(TaskManager *tm);
 PageManager *getTaskPageManager(Task *t);
+LinearMemoryManager *getTaskLinearMemory(Task *t);
 
 void resume(/*TaskManager *tm, */Task *t);
 

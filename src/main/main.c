@@ -11,8 +11,7 @@
 #include"io/io.h"
 #include"file/file.h"
 
-void bspEntry(void);
-void apEntry(void);
+void c_entry(void);
 
 SystemGlobal global;
 
@@ -28,19 +27,22 @@ static void initService(void){
 	}
 }
 
-void bspEntry(void){
-	// 1. memory
-	initKernelMemory();
-	// 2. printk
-	initKernelConsole();
-	//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
-	apEntry();
-}
-
-void apEntry(void){
+void c_entry(void){
 	static volatile int first = 1;
 	int isBSP = first;
 	first = 0;
+	if(isBSP){
+		// 1. memory
+		initKernelMemory();
+		// 2. printk
+		initKernelConsole();
+		//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
+#ifndef NDEBUG
+		//testMemoryManager();
+		//testMemoryManager2();
+		//testMemoryManager3();
+#endif
+	}
 	// 3. GDT
 	SegmentTable *gdt = createSegmentTable();
 	loadgdt(gdt);
@@ -71,7 +73,7 @@ void apEntry(void){
 	initLocalTimer(pic, global.idt, timer);
 
 	//printk("kernel memory usage: %u\n", getAllocatedSize());
-	printk("start accepting interrupt...\n");
+	printk("CPU #%d is ready...\n", getMemoryMappedLAPICID());
 	sti();
 
 	if(isBSP){

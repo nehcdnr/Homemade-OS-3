@@ -144,8 +144,7 @@ loadgdt2:
 	jmp DWORD 8:entry5
 
 ; --------set stack registers if this is AP--------
-extern _bspEntry ; main.c
-extern _apEntry ; main.c
+extern _c_entry ; main.c
 
 entry5:
 acquirelock:
@@ -217,7 +216,7 @@ linear_lgdtargument:
 
 initbspstack: ; esp += KERNEL_LINEAR_BEGIN
 	add esp, _KERNEL_LINEAR_BEGIN_SYMBOL
-	jmp _bspEntry
+	jmp _c_entry
 
 extern _initialESP ; pic.c
 extern _kernelCR3 ; page.c
@@ -227,7 +226,7 @@ initapstack: ; esp = initialESP[ecx]
 	mov ebx, [_initialESP]
 	mov esp, [ebx + ecx * 4]
 	mov ebp, esp
-	jmp _apEntry
+	jmp _c_entry
 
 [SECTION .bss]
 	align 4096

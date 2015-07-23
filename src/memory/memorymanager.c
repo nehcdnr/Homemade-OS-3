@@ -238,12 +238,8 @@ static MemoryBlockManager *initKernelLinearBlock(
 	return m;
 }
 
-#ifdef NDEBUG
-#define testMemoryManager() do{}while(0)
-#define testMemoryManager2() do{}while(0)
-#else
+#ifndef NDEBUG
 #define TEST_N (90)
-void testMemoryManager(void);
 void testMemoryManager(void){
 	uint8_t *p[TEST_N];
 	int si[TEST_N];
@@ -284,7 +280,7 @@ void testMemoryManager(void){
 	//printk("%x %x %x %x %x\n",a1,a2,a3, MIN_BLOCK_SIZE+(uintptr_t)a3,a4);
 }
 
-void testMemoryManager2(void);
+
 void testMemoryManager2(void){
 	uintptr_t p[TEST_N];
 	int a;
@@ -296,15 +292,28 @@ void testMemoryManager2(void){
 		p[a]=allocateBlock(kernelLinear->physical, &s);
 		if(p[a]==UINTPTR_NULL)continue;
 		for(b=0;b<s;b+=MIN_BLOCK_SIZE){
-			if((isReleasableBlock(kernelLinear->physical, p[a]+b)!=(b==0)))
-				while(1)__asm__("hlt\n");
-			//assert(isReleasableBlock(kernelLinear->physical, p[a]+b)==(b==0));
+			assert(isReleasableBlock(kernelLinear->physical, p[a]+b)==(b==0));
 		}
 	}
 	for(a=0;a<TEST_N;a++){
 		if(p[a]==UINTPTR_NULL)continue;
 		releaseBlock(kernelLinear->physical, p[a]);
 	}
+}
+
+void testMemoryManager3(void){
+	void *m1 = allocateKernelMemory(MIN_BLOCK_SIZE * 4);
+	void *m2 = allocateKernelMemory(MIN_BLOCK_SIZE * 4);
+	releaseKernelMemory(m2);
+	int a;
+	for(a=0; a<MIN_BLOCK_SIZE*4; a+=MIN_BLOCK_SIZE){
+		PhysicalAddress chk;
+		chk = checkAndTranslatePage(kernelLinear, (void*)(((uintptr_t)m1)+a));
+		assert(chk.value != UINTPTR_NULL);
+		chk = checkAndTranslatePage(kernelLinear, (void*)(((uintptr_t)m2)+a));
+		assert(chk.value == UINTPTR_NULL);
+	}
+	releaseKernelMemory(m1);
 }
 
 #undef TEST_N
@@ -339,6 +348,4 @@ void initKernelMemory(void){
 
 	kernelSlab = createSlabManager(kernelLinear);
 
-	testMemoryManager();
-	//testMemoryManager2();
 }

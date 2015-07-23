@@ -110,7 +110,7 @@ static Task *popPriorityQueue(TaskPriorityQueue *q){
 void contextSwitch(uint32_t *oldTaskESP0, uint32_t newTaskESP0, uint32_t newCR3);
 
 static void callAfterTaskSwitchFunc(void){
-	releaseLock(&globalQueue->lock); // FIXME: see taskSwitch()
+	releaseLock(&globalQueue->lock); // see taskSwitch()
 	TaskManager *tm = processorLocalTaskManager();
 
 	if(tm->afterTaskSwitchFunc != NULL){
@@ -167,7 +167,7 @@ static int initV8086Memory(void){
 	v8086Text = {V8086_STACK_TOP}, // ~ 0x80000: free (OS)
 	// biosHigh = {0x80000}, ~0x100000: reserved
 	v8086End ={0x100000 + 0x10000};
-
+//FIXME: buddy allocation
 	int ok = mapPage_LP(p, (void*)biosLow.value, biosLow, v8086Stack.value - biosLow.value, USER_WRITABLE_PAGE);
 	EXPECT(ok);
 	ok = mapPage_L(p, (void*)v8086Stack.value, v8086Text.value - v8086Stack.value, USER_WRITABLE_PAGE);
@@ -343,8 +343,8 @@ Task *currentTask(TaskManager *tm){
 	return tm->current;
 }
 
-PageManager *getTaskPageManager(Task *t){
-	return getPageManager(t->taskMemory);
+LinearMemoryManager *getTaskLinearMemory(Task *t){
+	return getLinearMemoryManager(t->taskMemory);
 }
 
 static void taskDefinedHandler(InterruptParam *p){
@@ -504,8 +504,21 @@ static void releaseHeapHandler(InterruptParam *p){
 int systemCall_releaseHeap(void *address){
 	uintptr_t address2 = (uintptr_t)address;
 	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, &address2);
-	assert(ok); // TODO: remove this when we start making user space tasks
+	assert(ok); // TODO: remove this when we start working on user space tasks
 	return (int)ok;
+}
+
+static void translatePageHandler(InterruptParam *p){
+	uintptr_t address = SYSTEM_CALL_ARGUMENT_0(p);
+	PhysicalAddress ret = checkAndTranslatePage(
+		getLinearMemoryManager(processorLocalTask()->taskMemory), (void*)address);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = ret.value;
+}
+
+PhysicalAddress systemCall_translatePage(void *address){
+	uintptr_t a = (uintptr_t)address;
+	PhysicalAddress p = {systemCall2(SYSCALL_TRANSLATE_PAGE, &a)};
+	return p;
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){
@@ -523,5 +536,6 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_TRANSLATE_PAGE, translatePageHandler, 0);
 	//initSemaphore(systemCallTable);
 }

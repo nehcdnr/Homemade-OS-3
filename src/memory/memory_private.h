@@ -71,6 +71,8 @@ int _mapExistingPages_L(
 	PageAttribute attribute
 );
 
+PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
+
 // linear + physical + page
 typedef struct LinearMemoryManager{
 	MemoryBlockManager *physical;
