@@ -82,10 +82,11 @@ void unmapPages(LinearMemoryManager *m, void *linearAddress);
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
 
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
-#define allocateKernelPages(SIZE, ATTRIBUTE) allocatePages(kernelLinear, SIZE, ATTRIBUTE)
-void releasePages(LinearMemoryManager *m, void *linearAddress);
-#define releaseKernelPages(ADDRESS) releasePages(kernelLinear, ADDRESS)
+void *allocateKernelPages(size_t size, PageAttribute attribute);
+//void releasePages(LinearMemoryManager *m, void *linearAddress);
+//void releaseKernelPages(void *linearAddress);
 int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress);
+int checkAndReleaseKernelPages(void *linearAddress);
 PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))

@@ -64,6 +64,10 @@ void releaseKernelMemory(void *linearAddress){
 	releaseSlab(kernelSlab, linearAddress);
 }
 
+int checkAndReleaseKernelPages(void *linearAddress){
+	return checkAndReleasePages(kernelLinear, linearAddress);
+}
+
 // LinearMemoryManager
 
 void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute){
@@ -134,12 +138,17 @@ void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute
 	return NULL;
 }
 
+void *allocateKernelPages(size_t size, PageAttribute attribute){
+	return allocatePages(kernelLinear, size, attribute);
+}
+
+/*
 void releasePages(LinearMemoryManager *m, void *linearAddress){
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)linearAddress);
 	_unmapPage_L(m->page, m->physical, linearAddress, s);
 	releaseBlock(m->linear, (uintptr_t)linearAddress);
 }
-
+*/
 int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress){
 	return checkAndReleaseLinearBlock(m, (uintptr_t)linearAddress);
 }
@@ -346,6 +355,6 @@ void initKernelMemory(void){
 		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
 	);
 
-	kernelSlab = createSlabManager(kernelLinear);
+	kernelSlab = createKernelSlabManager();
 
 }

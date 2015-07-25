@@ -29,11 +29,7 @@ static int isTotallyUsed(Slab *p){
 	return p->freeList == NULL;
 }
 
-static Slab *createSlab(LinearMemoryManager *m, size_t unit){
-	Slab *slab = (Slab*)allocatePages(m, SLAB_SIZE, KERNEL_PAGE);
-	if(slab == NULL){
-		return NULL;
-	}
+static void initSlab(Slab *slab, size_t unit){
 	slab->prev = NULL;
 	slab->next = NULL;
 	slab->usedCount = 0;
@@ -47,7 +43,6 @@ static Slab *createSlab(LinearMemoryManager *m, size_t unit){
 		p = p + sizeof(MemoryUnit) + unit;
 	}
 	slab->freeList = fl;
-	return slab;
 }
 
 static void *allocateUnit(Slab *p){
@@ -89,7 +84,10 @@ typedef struct SlabManager{
 	Slab *usableSlab[NUMBER_OF_SLAB_UNIT];
 	Slab *usedSlab[NUMBER_OF_SLAB_UNIT];
 
-	LinearMemoryManager *memory;
+	// allocate/release page
+	PageAttribute pageAttribute;
+	void *(*allocatePages)(size_t, PageAttribute);
+	int (*releasePages)(void*);
 }SlabManager;
 
 static int findSlab(size_t size){
@@ -107,7 +105,7 @@ static int findSlab(size_t size){
 
 void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
-		return allocatePages(m->memory, size, KERNEL_PAGE);
+		return m->allocatePages(size, m->pageAttribute);
 	}
 	int i = findSlab(size);
 	void *r = NULL;
@@ -115,10 +113,11 @@ void *allocateSlab(SlabManager *m, size_t size){
 	do{
 		Slab *p = m->usableSlab[i];
 		if(p == NULL){
-			p = createSlab(m->memory, SlabUnit[i]);
+			p = (Slab*)m->allocatePages(SLAB_SIZE, m->pageAttribute);
 			if(p == NULL){
 				break;
 			}
+			initSlab(p, SlabUnit[i]);
 			ADD_TO_DQUEUE(p, m->usableSlab + i);
 		}
 		r = allocateUnit(p);
@@ -136,7 +135,8 @@ void *allocateSlab(SlabManager *m, size_t size){
 void releaseSlab(SlabManager *m, void *address){
 	uintptr_t a = (uintptr_t)address;
 	if(a % MIN_BLOCK_SIZE == 0){
-		releasePages(m->memory, address);
+		int ok = m->releasePages(address);
+		assert(ok);
 		return;
 	}
 	acquireLock(&m->lock);
@@ -144,20 +144,27 @@ void releaseSlab(SlabManager *m, void *address){
 	if(isTotallyFree(p)){
 		REMOVE_FROM_DQUEUE(p);
 		releaseLock(&m->lock);
-		releasePages(m->memory, p);
+		int ok = m->releasePages(p);
+		assert(ok);
 	}
 	else{
 		releaseLock(&m->lock);
 	}
 }
 
-SlabManager *createSlabManager(LinearMemoryManager *lm){
+static SlabManager *createSlabManager(
+	void*(*allocatePagesFunction)(size_t, PageAttribute),
+	int (*releasePagesFunction)(void*),
+	PageAttribute pageAttribute
+){
 	size_t unit;
 	unsigned int i;
 	for(i = 0; SlabUnit[i] < sizeof(SlabManager); i++);
 	assert(i < NUMBER_OF_SLAB_UNIT);
 	unit = SlabUnit[i];
-	Slab *s = createSlab(lm, unit);
+
+	Slab *s = allocatePagesFunction(SLAB_SIZE, pageAttribute);
+	initSlab(s, unit);
 	if(s == NULL){
 		return NULL;
 	}
@@ -166,7 +173,6 @@ SlabManager *createSlabManager(LinearMemoryManager *lm){
 		return NULL;
 	}
 	m->lock = initialSpinlock;
-	m->memory = lm;
 
 	for(i = 0; i < NUMBER_OF_SLAB_UNIT; i++){
 		m->usableSlab[i] = NULL;
@@ -175,5 +181,16 @@ SlabManager *createSlabManager(LinearMemoryManager *lm){
 			ADD_TO_DQUEUE(s, m->usableSlab + i);
 		}
 	}
+	// allocate/release page
+	m->pageAttribute = pageAttribute;
+	m->allocatePages = allocatePagesFunction;
+	m->releasePages = releasePagesFunction;
 	return m;
+}
+
+SlabManager *createKernelSlabManager(void){
+	return createSlabManager(allocateKernelPages, checkAndReleaseKernelPages, KERNEL_PAGE);
+}
+SlabManager *createUserSlabManager(void){
+	return createSlabManager(systemCall_allocateHeap, systemCall_releaseHeap, USER_WRITABLE_PAGE);
 }
