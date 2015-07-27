@@ -95,7 +95,7 @@ int sleep(uint64_t millisecond){
 	if(te == IO_REQUEST_FAILURE){
 		return 0;
 	}
-	IORequest *te2 = waitIO(processorLocalTask()); // TODO: if there are other pending requests?
+	IORequest *te2 = waitIO(processorLocalTask(), (IORequest*)te);
 	assert(((uintptr_t)te2) == te);
 	uint32_t rv[1];
 	int rvCount = te2->finish(te2, rv);

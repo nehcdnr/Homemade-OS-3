@@ -92,8 +92,9 @@ static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 	for(i2 = i; 1; i2++){
 		if(m->freeBlock[i2 - MIN_BLOCK_ORDER] != NULL)
 			break;
-		if(i2 == MAX_BLOCK_ORDER)
+		if(i2 == MAX_BLOCK_ORDER){
 			return UINTPTR_NULL;
+		}
 	}
 	MemoryBlock *const b = m->freeBlock[i2 - MIN_BLOCK_ORDER];
 	REMOVE_FROM_DQUEUE(b);
@@ -298,14 +299,15 @@ static int extendBlockArray(MemoryBlockManager *m, int addBlockCount){
 	if(addBlockCount < 0 || addBlockCount > m->maxBlockCount - m->blockCount){
 		return 0;
 	}
+	m->blockCount += addBlockCount;
 	int i;
-	for(i = m->blockCount; i < m->blockCount + addBlockCount; i++){
+	for(i = m->blockCount - addBlockCount; i < m->blockCount; i++){
 		initMemoryBlock(&m->block[i]);
 	}
-	for(i = m->blockCount; i < m->blockCount + addBlockCount; i++){
+	for(i = m->blockCount - addBlockCount; i < m->blockCount; i++){
+		// updated m->blockCount is accessed here
 		releaseBlock_noLock(m, &m->block[i]);
 	}
-	m->blockCount += addBlockCount;
 	return 1;
 }
 
@@ -383,8 +385,9 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 static PhysicalAddress checkAndTranslateBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	MemoryBlockManager *bm = m->linear;
 	PhysicalAddress p = {UINTPTR_NULL};
-	if(isInRange(bm, linearAddress) == 0)
+	if(isInRange(bm, linearAddress) == 0){
 		return p;
+	}
 	acquireLock(&bm->lock);
 	if(isUsingBlock_noLock(bm, linearAddress)){
 		p = translateExistingPage(m->page, (void*)linearAddress);

@@ -322,9 +322,9 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	ok = stopPort(pr);
 	EXPECT(ok);
 	// reset pointer to command list and received fis
-	HBAPortMemory *pm = systemCall_allocateHeap(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
+	HBAPortMemory *pm = allocateKernelPages(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
 	EXPECT(pm != NULL);
-	PhysicalAddress pm_physical = systemCall_translatePage(pm);
+	PhysicalAddress pm_physical = checkAndTranslatePage(kernelLinear, pm);
 	MEMSET0(pm);
 	pr->commandBaseHigh = 0;
 	pr->commandBaseLow = pm_physical.value + MEMBER_OFFSET(HBAPortMemory, commandHeader[0]);
@@ -341,7 +341,7 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	return pm;
 	ON_ERROR;
 	printk("cannot start AHCI port\n");
-	systemCall_releaseHeap(pm);
+	checkAndReleaseKernelPages(pm);
 	ON_ERROR;
 	printk("cannot allocate kernel memory for AHCI port");
 	ON_ERROR;
@@ -522,16 +522,19 @@ static int ahciCount = 0;
 // return 1 if command was issued or no request
 static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
 	int ok = 1;
-	DiskRequest *dr;
 	acquireLock(&a->lock);
-	assert(a->port[portIndex].servingRequest == NULL);
-	dr = a->port[portIndex].pendingRequest;
+	// 2 tasks call this function simultaneously
+	if(a->port[portIndex].servingRequest != NULL){
+		goto servePortQueue_return;
+	}
+	DiskRequest *dr = a->port[portIndex].pendingRequest;
 	if(dr != NULL){
 		REMOVE_FROM_DQUEUE(dr);
 		dr->cancellable = 0;
 		ADD_TO_DQUEUE(dr, &a->port[portIndex].servingRequest);
 		ok = sendDiskRequest(dr);
 	}
+	servePortQueue_return:
 	releaseLock(&a->lock);
 	return ok;
 }
@@ -582,9 +585,8 @@ static void AHCIHandler(InterruptParam *param){
 			printk("warning: AHCI driver received unexpected interrupt\n");
 		else
 			dr->this.handle(&dr->this);
-
 		if(servePortQueue(arg, p) == 0){
-			assert(0); // TODO:
+			panic("servePortQueue == 0"); // TODO:
 			// this.handle(&this); // dr->this.fail()
 		}
 	}

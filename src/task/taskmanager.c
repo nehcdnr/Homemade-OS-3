@@ -382,36 +382,46 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 void putPendingIO(IORequest *ior){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
-#ifndef NDEBUG
-	if(t->finishedIOList != NULL){
-		printk("warning: task %x has finished IORequest but not released yet.\n", t);
-	}
-#endif
 	ADD_TO_DQUEUE(ior, &t->pendingIOList);
 	releaseLock(&t->ioListLock);
 }
 
-IORequest *waitIO(Task *t){
-	acquireSemaphore(t->ioSemaphore);
-	acquireLock(&t->ioListLock);
-	IORequest *ior = t->finishedIOList;
-	REMOVE_FROM_DQUEUE(ior);
-	releaseLock(&t->ioListLock);
-	assert(ior != NULL);
-	return ior;
+IORequest *waitIO(Task *t, IORequest *expected){
+	// assume this is the only function acquiring ioSemaphore
+	int v = getSemaphoreValue(t->ioSemaphore);
+	while(v > 0){
+		acquireSemaphore(t->ioSemaphore);
+		v--;
+	}
+	while(1){
+		IORequest *ior = NULL;
+		acquireLock(&t->ioListLock);
+		for(ior = t->finishedIOList; ior != NULL; ior = ior->next){
+			if(expected == NULL || expected == ior){
+				REMOVE_FROM_DQUEUE(ior);
+				break;
+			}
+		}
+		releaseLock(&t->ioListLock);
+		if(ior != NULL){
+			return ior;
+		}
+		acquireSemaphore(t->ioSemaphore);
+	}
 }
 
 static void waitIOHandler(InterruptParam *p){
 	sti();
-	IORequest *ior = waitIO(processorLocalTask());
+	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
+	ior = waitIO(processorLocalTask(), ior);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
 	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
 	int returnCount = ior->finish(ior, rv);
 	switch(returnCount){
-	//case 5:
-		//SYSTEM_CALL_RETURN_VALUE_5(p) = rv[4];
-	//case 4:
-		//SYSTEM_CALL_RETURN_VALUE_4(p) = rv[3];
+	case 5:
+		SYSTEM_CALL_RETURN_VALUE_5(p) = rv[4];
+	case 4:
+		SYSTEM_CALL_RETURN_VALUE_4(p) = rv[3];
 	case 3:
 		SYSTEM_CALL_RETURN_VALUE_3(p) = rv[2];
 	case 2:
@@ -425,12 +435,12 @@ static void waitIOHandler(InterruptParam *p){
 	}
 }
 
-uintptr_t systemCall_waitIO(void){
-	return systemCall1(SYSCALL_WAIT_IO);
+uintptr_t systemCall_waitIO(uintptr_t expected){
+	return systemCall2(SYSCALL_WAIT_IO, &expected);
 }
 
-uintptr_t systemCall_waitIOReturn(int returnCount, ...){
-	assert(returnCount >= 0 && returnCount < SYSTEM_CALL_MAX_RETURN_COUNT - 1);
+uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...){
+	assert(returnCount >= 0 && returnCount <= SYSTEM_CALL_MAX_RETURN_COUNT - 1);
 	va_list va;
 	va_start(va, returnCount);
 	uintptr_t ignoredReturnValue = 0;
@@ -442,6 +452,7 @@ uintptr_t systemCall_waitIOReturn(int returnCount, ...){
 	for(i = returnCount; i < (int)LENGTH_OF(returnValues); i++){
 		returnValues[i] = &ignoredReturnValue;
 	}
+	(*returnValues[0]) = expected;
 	uintptr_t rv0 = systemCall6(
 		SYSCALL_WAIT_IO,
 		returnValues[0],

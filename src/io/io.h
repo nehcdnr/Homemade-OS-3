@@ -23,10 +23,10 @@ struct IORequest{
 	FinishIORequest finish;
 };
 void putPendingIO(IORequest *ior);
-IORequest *waitIO(Task *t);
+IORequest *waitIO(Task *t, IORequest *expected);
 void resumeTaskByIO(IORequest *ior); // IORequestHandler
-uintptr_t systemCall_waitIO(void);
-uintptr_t systemCall_waitIOReturn(int returnCount, ...);
+uintptr_t systemCall_waitIO(uintptr_t expected);
+uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...);
 void initIORequest(
 	IORequest *this,
 	void *instance,

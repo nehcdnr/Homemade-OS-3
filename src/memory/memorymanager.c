@@ -247,6 +247,38 @@ static MemoryBlockManager *initKernelLinearBlock(
 	return m;
 }
 
+
+static LinearMemoryManager _kernelLinear;
+LinearMemoryManager *kernelLinear = &_kernelLinear;
+MemoryBlockManager *globalPhysical = NULL;
+
+void initKernelMemory(void){
+	assert(kernelLinear->linear == NULL && kernelLinear->page == NULL && kernelLinear->physical == NULL);
+	// reserved... are linear address
+	const uintptr_t reservedBase = KERNEL_LINEAR_BEGIN;
+	uintptr_t reservedBegin = reservedBase + (1 << 20);
+	uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
+	uintptr_t reservedEnd = reservedBase + (16 << 20);
+	globalPhysical = kernelLinear->physical = initKernelPhysicalBlock(
+		reservedBase, reservedBegin, reservedDirectMapEnd,
+		0, findMaxAddress()
+	);
+	reservedBegin = ((uintptr_t)kernelLinear->physical) + getMaxBlockManagerSize(kernelLinear->physical);
+
+	kernelLinear->linear = initKernelLinearBlock(
+		reservedBase, reservedBegin, reservedEnd,
+		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
+	);
+	reservedBegin = ((uintptr_t)kernelLinear->linear) + getMaxBlockManagerSize(kernelLinear->linear);
+	kernelLinear->page = initKernelPageTable(
+		reservedBase, reservedBegin, reservedEnd,
+		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
+	);
+
+	kernelSlab = createKernelSlabManager();
+}
+
+
 #ifndef NDEBUG
 #define TEST_N (90)
 void testMemoryManager(void){
@@ -327,34 +359,3 @@ void testMemoryManager3(void){
 
 #undef TEST_N
 #endif
-
-static LinearMemoryManager _kernelLinear;
-LinearMemoryManager *kernelLinear = &_kernelLinear;
-MemoryBlockManager *globalPhysical = NULL;
-
-void initKernelMemory(void){
-	assert(kernelLinear->linear == NULL && kernelLinear->page == NULL && kernelLinear->physical == NULL);
-	// reserved... are linear address
-	const uintptr_t reservedBase = KERNEL_LINEAR_BEGIN;
-	uintptr_t reservedBegin = reservedBase + (1 << 20);
-	uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
-	uintptr_t reservedEnd = reservedBase + (16 << 20);
-	globalPhysical = kernelLinear->physical = initKernelPhysicalBlock(
-		reservedBase, reservedBegin, reservedDirectMapEnd,
-		0, findMaxAddress()
-	);
-	reservedBegin = ((uintptr_t)kernelLinear->physical) + getMaxBlockManagerSize(kernelLinear->physical);
-
-	kernelLinear->linear = initKernelLinearBlock(
-		reservedBase, reservedBegin, reservedEnd,
-		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
-	);
-	reservedBegin = ((uintptr_t)kernelLinear->linear) + getMaxBlockManagerSize(kernelLinear->linear);
-	kernelLinear->page = initKernelPageTable(
-		reservedBase, reservedBegin, reservedEnd,
-		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
-	);
-
-	kernelSlab = createKernelSlabManager();
-
-}

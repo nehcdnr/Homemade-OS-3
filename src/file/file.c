@@ -12,9 +12,9 @@ uintptr_t systemCall_rwDisk(int driver,
 	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
 	uint32_t diskCode, int isWrite
 ){
-	uint32_t lbaLow = lba & 0xffffffff;
-	uint32_t lbaHigh = (lba >> 32) & 0xffffffff;
-	uint32_t rwSectorCount = sectorCount | (isWrite? 0x80000000: 0);
+	uint32_t lbaLow = (lba & 0xffffffff);
+	uint32_t lbaHigh = ((lba >> 32) & 0xffffffff);
+	uint32_t rwSectorCount = (sectorCount | (isWrite? 0x80000000: 0));
 	return systemCall6(driver,
 		&buffer, &lbaLow, &lbaHigh,
 		&rwSectorCount, &diskCode
@@ -28,7 +28,7 @@ uintptr_t systemCall_rwDiskSync(int driver,
 	uintptr_t ior1 = systemCall_rwDisk(driver, buffer, lba, sectorCount, diskCode, isWrite);
 	if(ior1 == IO_REQUEST_FAILURE)
 		return ior1;
-	uintptr_t ior2 = systemCall_waitIO();
+	uintptr_t ior2 = systemCall_waitIO(ior1);
 	assert(ior1 == ior2);
 	return ior1;
 }
@@ -121,7 +121,7 @@ void readPartitions(
 			continue;
 		}
 		//printk("\n");
-		if(buffer->partition[i].systemID == MBR_EXTENDED){
+		if(pe->systemID == MBR_EXTENDED){
 			readPartitions(driverName, diskDriver, diskCode, lba, pe->sectorCount, sectorSize);
 		}
 		if(addDiskPartition(pe->systemID, driverName, diskDriver,
@@ -180,15 +180,17 @@ static int finishNewDiskEvent(IORequest *ior, uintptr_t *returnValues){
 	acquireLock(nde->lock);
 	FileSystem *fs = nde->servingFS;
 	returnValues[0] = fs->driver;
-	returnValues[1] = fs->diskCode;
-	returnValues[2] = fs->sectorSize;
+	returnValues[1] = (fs->startLBA & 0xffffffff);
+	returnValues[2] = ((fs->startLBA >> 32) & 0xffffffff);
+	returnValues[3] = fs->diskCode;
+	returnValues[4] = fs->sectorSize;
 	assert(fs != NULL);
 	REMOVE_FROM_DQUEUE(fs);
 	ADD_TO_DQUEUE(fs, &nde->managedFSList);
 	putPendingIO(&nde->this);
 	serveNewFS(nde);
 	releaseLock(nde->lock);
-	return 3;
+	return 5;
 }
 
 static NewDiskEvent *createNewDiskEvent(Spinlock *lock){

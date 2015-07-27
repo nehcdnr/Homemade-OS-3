@@ -36,11 +36,11 @@ static void initSlab(Slab *slab, size_t unit){
 	uintptr_t p = ((uintptr_t)slab);
 	p += sizeof(Slab);
 	MemoryUnit *fl = NULL;
-	while(p + sizeof(MemoryUnit) + unit <= ((uintptr_t)slab) + SLAB_SIZE){
+	while(p/* + sizeof(MemoryUnit)*/ + unit <= ((uintptr_t)slab) + SLAB_SIZE){
 		MemoryUnit *u = (MemoryUnit*)p;
 		u->next = fl;
 		fl = u;
-		p = p + sizeof(MemoryUnit) + unit;
+		p = p/* + sizeof(MemoryUnit)*/ + unit;
 	}
 	slab->freeList = fl;
 }
@@ -66,7 +66,7 @@ static Slab *freeUnit(void *address){
 }
 
 // slab Manager
-static const size_t SlabUnit[] = {
+static const size_t slabUnit[] = {
 	16,
 	32,
 	64,
@@ -76,7 +76,7 @@ static const size_t SlabUnit[] = {
 	1024 - sizeof(Slab),
 	2048 - sizeof(Slab)
 };
-#define NUMBER_OF_SLAB_UNIT (LENGTH_OF(SlabUnit))
+#define NUMBER_OF_SLAB_UNIT (LENGTH_OF(slabUnit))
 static_assert(NUMBER_OF_SLAB_UNIT == 8);
 
 typedef struct SlabManager{
@@ -97,14 +97,14 @@ static int findSlab(size_t size){
 			panic("error allocating memory");
 			return i;
 		}
-		if(SlabUnit[i] >= size){
+		if(slabUnit[i] >= size){
 			return i;
 		}
 	}
 }
 
 void *allocateSlab(SlabManager *m, size_t size){
-	if(size >= SlabUnit[NUMBER_OF_SLAB_UNIT - 1]){
+	if(size >= slabUnit[NUMBER_OF_SLAB_UNIT - 1]){
 		return m->allocatePages(size, m->pageAttribute);
 	}
 	int i = findSlab(size);
@@ -117,7 +117,7 @@ void *allocateSlab(SlabManager *m, size_t size){
 			if(p == NULL){
 				break;
 			}
-			initSlab(p, SlabUnit[i]);
+			initSlab(p, slabUnit[i]);
 			ADD_TO_DQUEUE(p, m->usableSlab + i);
 		}
 		r = allocateUnit(p);
@@ -159,9 +159,9 @@ static SlabManager *createSlabManager(
 ){
 	size_t unit;
 	unsigned int i;
-	for(i = 0; SlabUnit[i] < sizeof(SlabManager); i++);
+	for(i = 0; slabUnit[i] < sizeof(SlabManager); i++);
 	assert(i < NUMBER_OF_SLAB_UNIT);
-	unit = SlabUnit[i];
+	unit = slabUnit[i];
 
 	Slab *s = allocatePagesFunction(SLAB_SIZE, pageAttribute);
 	initSlab(s, unit);
@@ -177,7 +177,7 @@ static SlabManager *createSlabManager(
 	for(i = 0; i < NUMBER_OF_SLAB_UNIT; i++){
 		m->usableSlab[i] = NULL;
 		m->usedSlab[i] = NULL;
-		if(SlabUnit[i] == unit){
+		if(slabUnit[i] == unit){
 			ADD_TO_DQUEUE(s, m->usableSlab + i);
 		}
 	}

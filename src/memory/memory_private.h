@@ -81,9 +81,4 @@ typedef struct LinearMemoryManager{
 }LinearMemoryManager;
 
 // slab.c (linear memory)
-typedef struct SlabManager SlabManager;
-void *allocateSlab(SlabManager *m, size_t size);
-void releaseSlab(SlabManager *m, void *address);
-
 SlabManager *createKernelSlabManager(void);
-SlabManager *createUserSlabManager(void);

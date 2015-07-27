@@ -37,8 +37,8 @@ void acquireSemaphore(Semaphore *s){
 		cli();
 	}
 	acquireLock(&s->lock);
-	if(s->quota > 0){
-		s->quota--;
+	if(s->quota >= 1){
+		s->quota -= 1;
 		releaseLock(&s->lock);
 	}
 	else{
@@ -54,13 +54,22 @@ void releaseSemaphore(Semaphore *s){
 	acquireLock(&s->lock);
 	t = popQueue(&s->taskQueue);
 	if(t == NULL){
-		s->quota++;
+		s->quota += 1;
 	}
 	releaseLock(&s->lock);
 	if(t != NULL){
 		resume(t);
 	}
 }
+
+int getSemaphoreValue(Semaphore *s){
+	int v;
+	acquireLock(&s->lock);
+	v = s->quota;
+	releaseLock(&s->lock);
+	return v;
+}
+
 /*
 void syscall_acquireSemaphore(Semaphore *s){
 	systemCall1(SYSCALL_ACQUIRE_SEMAPHORE, (uintptr_t)s);

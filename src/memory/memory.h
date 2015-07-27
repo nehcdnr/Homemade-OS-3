@@ -112,4 +112,9 @@ void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
 int systemCall_releaseHeap(void *address);
 PhysicalAddress systemCall_translatePage(void *address);
 
+typedef struct SlabManager SlabManager;
+SlabManager *createUserSlabManager(void);
+void *allocateSlab(SlabManager *m, size_t size);
+void releaseSlab(SlabManager *m, void *address);
+
 #endif
