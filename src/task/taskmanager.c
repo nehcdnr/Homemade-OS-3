@@ -386,6 +386,16 @@ void putPendingIO(IORequest *ior){
 	releaseLock(&t->ioListLock);
 }
 
+void resumeTaskByIO(IORequest *ior){
+	Task *t = ior->task;
+	acquireLock(&t->ioListLock);
+	REMOVE_FROM_DQUEUE(ior); // t->pendingIOList
+	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
+	ior->cancellable = 1;
+	releaseLock(&t->ioListLock);
+	releaseSemaphore(t->ioSemaphore);
+}
+
 IORequest *waitIO(Task *t, IORequest *expected){
 	// assume this is the only function acquiring ioSemaphore
 	int v = getSemaphoreValue(t->ioSemaphore);
@@ -414,32 +424,18 @@ static void waitIOHandler(InterruptParam *p){
 	sti();
 	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
 	ior = waitIO(processorLocalTask(), ior);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
-	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
-	int returnCount = ior->finish(ior, rv);
-	switch(returnCount){
-	case 5:
-		SYSTEM_CALL_RETURN_VALUE_5(p) = rv[4];
-	case 4:
-		SYSTEM_CALL_RETURN_VALUE_4(p) = rv[3];
-	case 3:
-		SYSTEM_CALL_RETURN_VALUE_3(p) = rv[2];
-	case 2:
-		SYSTEM_CALL_RETURN_VALUE_2(p) = rv[1];
-	case 1:
-		SYSTEM_CALL_RETURN_VALUE_1(p) = rv[0];
-	case 0:
-		break;
-	default:
-		assert(0);
-	}
+	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT];
+	rv[0] = (uintptr_t)ior;
+	int returnCount = ior->finish(ior, rv + 1);
+	assert(returnCount + 1 <= SYSTEM_CALL_MAX_RETURN_COUNT);
+	copyReturnValues(p, rv, returnCount + 1);
 }
 
-uintptr_t systemCall_waitIO(uintptr_t expected){
-	return systemCall2(SYSCALL_WAIT_IO, &expected);
+uintptr_t systemCall_waitIO(uintptr_t ioNumber){
+	return systemCall2(SYSCALL_WAIT_IO, &ioNumber);
 }
 
-uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...){
+uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
 	assert(returnCount >= 0 && returnCount <= SYSTEM_CALL_MAX_RETURN_COUNT - 1);
 	va_list va;
 	va_start(va, returnCount);
@@ -452,7 +448,7 @@ uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...){
 	for(i = returnCount; i < (int)LENGTH_OF(returnValues); i++){
 		returnValues[i] = &ignoredReturnValue;
 	}
-	(*returnValues[0]) = expected;
+	(*returnValues[0]) = ioNumber;
 	uintptr_t rv0 = systemCall6(
 		SYSCALL_WAIT_IO,
 		returnValues[0],
@@ -465,30 +461,60 @@ uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...){
 	return rv0;
 }
 
-void resumeTaskByIO(IORequest *ior){
-	Task *t = ior->task;
+static void cacnelIOHandler(InterruptParam *p){
+	sti();
+	IORequest *ioRequest = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p), *i;
+	Task *t = processorLocalTask();
+	IORequest **originList = NULL;
 	acquireLock(&t->ioListLock);
-	REMOVE_FROM_DQUEUE(ior);
-	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
+	for(i = t->pendingIOList; i != NULL && originList == NULL; i = i->next){
+		if(i == ioRequest){
+			originList = &t->pendingIOList;
+		}
+	}
+	for(i = t->finishedIOList; i != NULL && originList == NULL; i = i->next){
+		if(i == ioRequest){
+			originList = &t->finishedIOList;
+		}
+	}
+	int ok = 0;
+	if(originList != NULL){
+		REMOVE_FROM_DQUEUE(ioRequest);
+		ok = ioRequest->cancellable;
+	}
 	releaseLock(&t->ioListLock);
-	releaseSemaphore(t->ioSemaphore);
+	if(ok){
+		ioRequest->cancel(ioRequest);
+	}
+	SYSTEM_CALL_RETURN_VALUE_0(p) = ok;
+}
+
+int systemCall_cancelIO(uintptr_t io){
+	return (int)systemCall2(SYSCALL_CANCEL_IO, &io);
+}
+
+void setCancellable(IORequest *ior, int value){
+	acquireLock(&ior->task->ioListLock);
+	ior->cancellable = value;
+	releaseLock(&ior->task->ioListLock);
 }
 
 void initIORequest(
 	IORequest *this,
 	void *instance,
-	HandleIORequest h,
-	Task *t,
-	int (*c)(IORequest*),
-	FinishIORequest f
+	/*HandleIORequest h,
+	Task *t,*/
+	CancelIORequest cancelIORequest,
+	FinishIORequest finishIORequest
 ){
 	this->ioRequest = instance;
 	this->prev = NULL;
 	this->next = NULL;
-	this->handle = h;
-	this->task = t;
-	this->cancel = c;
-	this->finish = f;
+	this->handle = resumeTaskByIO;
+	this->task = processorLocalTask();
+	this->cancel = cancelIORequest;
+	this->cancellable = 1;
+	this->finish = finishIORequest;
 }
 
 static void allocateHeapHandler(InterruptParam *p){
@@ -545,6 +571,7 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_CANCEL_IO, cacnelIOHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_TRANSLATE_PAGE, translatePageHandler, 0);

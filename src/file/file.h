@@ -29,11 +29,11 @@ enum MBR_SystemID{
 	MBR_FAT16_LBA = 0x0e,
 	MBR_EXTENDED_LBA = 0x0f
 };
-#define MAX_FILE_SYSTEM_TYPE (0x10)
-typedef enum MBR_SystemID FileSystemType;
+#define MAX_DISK_TYPE (0x10)
+typedef enum MBR_SystemID DiskPartitionType;
 
 int addDiskPartition(
-	FileSystemType systemID, const char *driverName, int diskDriver,
+	DiskPartitionType systemID, const char *driverName, int diskDriver,
 	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
 	uint32_t diskCode
 );
@@ -44,7 +44,8 @@ void initFileSystemManager(SystemCallTable *sc);
 void readPartitions(const char *driverName, int diskDriver, uint32_t diskCode,
 	uint64_t lba, uint64_t sectorCount, uint32_t sectorSize);
 
-uintptr_t systemCall_discoverDisk(FileSystemType diskType);
+uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
+int systemCall_registerFileService(int fileService, const char *fileServiceName);
 
 // FAT32
 void fatDriver(void);

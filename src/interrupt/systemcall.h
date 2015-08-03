@@ -11,10 +11,12 @@ enum SystemCall{
 	//SYSCALL_REGISTER_SERVICE = 4,
 	SYSCALL_QUERY_SERVICE = 5,
 	SYSCALL_WAIT_IO = 6,
-	SYSCALL_DISCOVER_DISK = 7,
+	SYSCALL_CANCEL_IO = 7,
 	SYSCALL_ALLOCATE_HEAP = 8,
 	SYSCALL_RELEASE_HEAP = 9,
 	SYSCALL_TRANSLATE_PAGE = 10,
+	SYSCALL_REGISTER_FILE_SYSTEM = 11,
+	SYSCALL_DISCOVER_RESOURCE = 12,
 	// runtime registration
 	NUMBER_OF_RESERVED_SYSTEM_CALLS = 16,
 	NUMBER_OF_SYSTEM_CALLS = 32
@@ -45,6 +47,10 @@ uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, ui
 #define SYSTEM_CALL_RETURN_VALUE_4(P) ((P)->regs.esi)
 #define SYSTEM_CALL_RETURN_VALUE_5(P) ((P)->regs.edi)
 
+void copyArguments(uintptr_t *a, const InterruptParam *p, int argumentCount);
+void copyReturnValues(InterruptParam *p, const uintptr_t *rv, int returnCount);
+
+#define SYSTEM_CALL_MAX_ARGUMENT_COUNT (5)
 #define SYSTEM_CALL_MAX_RETURN_COUNT (6)
 
 typedef struct SystemCallTable SystemCallTable;

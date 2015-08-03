@@ -238,9 +238,10 @@ static int issueDMACommand(
 	volatile HBAPortRegister *pr, HBAPortMemory *pm, uint32_t sectorSize,
 	PhysicalAddress buffer, uint64_t lba, unsigned int sectorCount, int write
 ){
-	assert(sectorCount != 0);
-	assert(sectorCount <= 65536);
-	assert(sectorSize * sectorCount < (1 << 22));
+	if(sectorCount == 0 || sectorCount > 65536 ||
+	sectorSize * sectorCount >= (1 << 22)){
+		return 0;
+	}
 	// HBAPortMemory *pm
 	{
 		uint32_t ctbl = pm->commandHeader[0].commandTableBaseLow;
@@ -448,7 +449,6 @@ struct DiskRequest{
 	AHCIInterruptArgument *ahci;
 	int portIndex;
 	char isWrite;
-	char cancellable;
 	struct DiskRequest **prev, *next;
 };
 
@@ -477,27 +477,22 @@ static int destroyDiskRequest(IORequest *ior, __attribute__((__unused__)) uintpt
 	return 0;
 }
 
-static int cancelDiskRequest(IORequest *ior){
+static void cancelDiskRequest(IORequest *ior){
 	DiskRequest *dr = ior->diskRequest;
-	int cancellable;
 	acquireLock(dr->lock);
-	cancellable = dr->cancellable;
-	if(cancellable){
-		REMOVE_FROM_DQUEUE(dr);
-	}
+	REMOVE_FROM_DQUEUE(dr);
 	releaseLock(dr->lock);
-	return cancellable;
+	DELETE(dr);
 }
 
 static DiskRequest *createDiskRequest(
-	HandleIORequest callback, Task *task,
 	enum ATACommand cmd,
 	PhysicalAddress buffer, uint64_t lba, uint32_t sectorCount,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	initIORequest(&dr->this, dr, callback, task, cancelDiskRequest, destroyDiskRequest);
+	initIORequest(&dr->this, dr, cancelDiskRequest, destroyDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->buffer = buffer;
@@ -506,7 +501,6 @@ static DiskRequest *createDiskRequest(
 	dr->ahci = a;
 	dr->portIndex = portIndex;
 	dr->isWrite = isWrite;
-	dr->cancellable = 1;
 	dr->prev = NULL;
 	dr->next = NULL;
 	return dr;
@@ -530,7 +524,7 @@ static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
 	DiskRequest *dr = a->port[portIndex].pendingRequest;
 	if(dr != NULL){
 		REMOVE_FROM_DQUEUE(dr);
-		dr->cancellable = 0;
+		setCancellable(&dr->this, 0);
 		ADD_TO_DQUEUE(dr, &a->port[portIndex].servingRequest);
 		ok = sendDiskRequest(dr);
 	}
@@ -583,11 +577,12 @@ static void AHCIHandler(InterruptParam *param){
 		DiskRequest *dr = removeFromPortQueue(arg, p);
 		if(dr == NULL)
 			printk("warning: AHCI driver received unexpected interrupt\n");
-		else
+		else{
 			dr->this.handle(&dr->this);
+		}
 		if(servePortQueue(arg, p) == 0){
 			panic("servePortQueue == 0"); // TODO:
-			// this.handle(&this); // dr->this.fail()
+			// this.handle(&this);
 		}
 	}
 	processorLocalPIC()->endOfInterrupt(param);
@@ -652,7 +647,7 @@ static void AHCIServiceHandler(InterruptParam *p){
 	EXPECT(physicalBuffer.value != UINTPTR_NULL);
 	int ok = isValidHBAPortIndex(index);
 	EXPECT(ok);
-	DiskRequest *dr = createDiskRequest(resumeTaskByIO, processorLocalTask(),
+	DiskRequest *dr = createDiskRequest(
 		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
 		physicalBuffer, lba, sectorCount,
 		ahciArray[index.hbaIndex], index.portIndex, isWrite

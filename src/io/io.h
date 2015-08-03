@@ -2,6 +2,7 @@
 
 typedef struct IORequest IORequest;
 typedef void (*HandleIORequest)(IORequest*);
+typedef void (*CancelIORequest)(IORequest*);
 typedef int (*FinishIORequest)(IORequest*, uintptr_t*);
 typedef struct Task Task;
 struct IORequest{
@@ -11,29 +12,35 @@ struct IORequest{
 		struct DiskRequest *diskRequest;
 	};
 	// for Task.pendingIOList; see taskmanager.c
-	IORequest **prev,*next;
+	IORequest **prev, *next;
 	//TODO: handle = resumeTaskByIO
 	HandleIORequest handle;
 	Task *task;
-	//uintptr_t arg;
-	// return 1 if the request is cancelled
-	// return 0 if the request is being processing and not cancelled. the task must wait until it finishes.
-	int (*cancel)(IORequest*);
+	// the request can be pending or finished
+	// IORequest should be deleted in the function
+	CancelIORequest cancel;
+	int cancellable;
 	// return number of elements in returnValues
+	// IORequest should be deleted in this function
 	FinishIORequest finish;
 };
 void putPendingIO(IORequest *ior);
-IORequest *waitIO(Task *t, IORequest *expected);
+IORequest *waitIO(Task *t, IORequest *ioNumber);
 void resumeTaskByIO(IORequest *ior); // IORequestHandler
-uintptr_t systemCall_waitIO(uintptr_t expected);
-uintptr_t systemCall_waitIOReturn(uintptr_t expected, int returnCount, ...);
+
+uintptr_t systemCall_waitIO(uintptr_t ioNumber);
+uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
+int systemCall_cancelIO(uintptr_t io);
+
+void setCancellable(IORequest *ior, int value);
+
 void initIORequest(
 	IORequest *this,
 	void *instance,
-	HandleIORequest h,
-	Task* t,
-	int (*c)(struct IORequest*),
-	FinishIORequest f
+	//HandleIORequest handleIORequest,
+	//Task* t,
+	CancelIORequest cancelIORequest,
+	FinishIORequest finishIORequest
 );
 
 #define IO_REQUEST_FAILURE ((uintptr_t)0)
@@ -48,7 +55,7 @@ typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
 TimerEventList *createTimer(void);
 
-uintptr_t setAlarm(uint64_t millisecond, uint64_t isPeriodic);
+uintptr_t setAlarm(uint64_t millisecond, int isPeriodic);
 int sleep(uint64_t millisecond);
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);

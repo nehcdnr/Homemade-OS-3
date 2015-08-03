@@ -3,6 +3,7 @@
 #include"file.h"
 #include"interrupt/systemcall.h"
 #include"io/io.h"
+#include"multiprocessor/processorlocal.h"
 
 #pragma pack(1)
 
@@ -43,7 +44,7 @@ typedef struct __attribute__((__packed__)){
 	uint8_t sectorsPerCluster;
 	uint16_t reservedSectorCount;
 	uint8_t fatCount;
-	uint16_t directoryEntryCount;
+	uint16_t rootEntryCount;
 	uint16_t sectorCount;
 	uint8_t mediaType;
 	uint16_t sectorsPerFAT;
@@ -81,7 +82,7 @@ static_assert(sizeof(FATDirEntry) == 32);
 typedef struct __attribute__((__packed__)){
 	uint8_t position;
 	uint16_t fileName0[5];
-	uint8_t attribute; // 0x0f
+	uint8_t attribute;
 	uint8_t type; // 0
 	uint8_t checksum;
 	uint16_t fileName5[6];
@@ -89,52 +90,112 @@ typedef struct __attribute__((__packed__)){
 	uint16_t fileName11[2];
 }LongFATDirEntry;
 
+enum FATAttribute{
+	FAT_READ_ONLY = 0x01,
+	FAT_HIDDEN = 0x02,
+	FAT_SYSTEM = 0x04,
+	FAT_VOLUME_ID = 0x08,
+	FAT_DIRECTORY = 0x10,
+	FAT_ARCHIVE = 0x20,
+	FAT_LONG_FILE_NAME = 0x0f
+};
+
 static_assert(sizeof(LongFATDirEntry) == 32);
 
 #pragma pack()
 
 static struct SlabManager *slab = NULL;
-static void readFAT(int diskDriver, uint64_t startLBA, uintptr_t diskCode, uintptr_t sectorSize){
-	const size_t readSize = CEIL(sizeof(FATBootRecord), sectorSize);
-	volatile FATBootRecord *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
-	EXPECT(br != NULL);
-	MEMSET0((FATBootRecord*)br);
-	uintptr_t rwDisk = systemCall_rwDisk(diskDriver, (uintptr_t)br, startLBA, readSize / sectorSize, diskCode, 0);
+
+struct DiskParameter{
+	int diskDriver;
+	uint64_t startLBA;
+	uintptr_t diskCode;
+	uintptr_t sectorSize;
+};
+
+static void iterateDirectory(uint32_t beginClusterSector,
+	uint32_t sectorsPerCluster, const struct DiskParameter *dp){
+	const uint32_t clusterSize = sectorsPerCluster * dp->sectorSize;
+	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
+	EXPECT(rootDir != NULL);
+	uintptr_t rwDisk = systemCall_rwDiskSync(dp->diskDriver,
+		(uintptr_t)rootDir, beginClusterSector, sectorsPerCluster,
+		dp->diskCode, 0);
 	EXPECT(rwDisk != IO_REQUEST_FAILURE);
-	EXPECT(br->ebr32.ext.signature == 0x28 || br->ebr32.ext.signature == 0x29);
+	unsigned p;
+	for(p = 0; p < clusterSize / sizeof(FATDirEntry); p++){
+		if(rootDir[p].fileName[0] == 0)break;
+		if(rootDir[p].fileName[0] == 0xe5)continue;
+		int b;
+		for(b = 0; b < 11; b++){
+			printk("%c", rootDir[p].fileName[b]);
+		}
+		if(rootDir[p].attribute & FAT_DIRECTORY)
+			printk(" dir");
+		printk("\n");
+	}
+	systemCall_releaseHeap(rootDir);
+	return;
+	ON_ERROR;
+	systemCall_releaseHeap(rootDir);
+	ON_ERROR;
+	printk("cannot iterate directory\n");
+	return;
+};
 
-	const uint32_t fatBeginLBA = startLBA + br->reservedSectorCount;
-	const uint32_t sectorsPerFAT32 = br->ebr32.sectorsPerFAT32;
-	//uint32_t bytesPerCluster = br->sectorsPerCluster * br->bytesPerSector;
-	const uint32_t sectorsPerPage = PAGE_SIZE / sectorSize;
-	//printk("%x %x %x %x\n",br->ebr32.rootCluster, fatBeginLBA, sectorsPerFAT32, bytesPerCluster);
-	// allocate FAT
-	size_t fatSize = sectorsPerFAT32 * br->bytesPerSector;
-
+static uint32_t *loadFAT32(const FATBootRecord *br, const struct DiskParameter *dp){
+	const size_t fatSize = br->ebr32.sectorsPerFAT32 * br->bytesPerSector;
+	const uint64_t fatBeginLBA = dp->startLBA + br->reservedSectorCount;
+	const uint32_t sectorsPerPage = PAGE_SIZE / dp->sectorSize;
 	uint32_t *fat = systemCall_allocateHeap(CEIL(fatSize, PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
 	EXPECT(fat != NULL);
-	size_t p;
+	unsigned p;
 	for(p = 0; p * PAGE_SIZE < fatSize; p++){
-		rwDisk = systemCall_rwDiskSync(diskDriver,
+		uintptr_t rwDisk = systemCall_rwDiskSync(dp->diskDriver,
 			((uintptr_t)fat) + PAGE_SIZE * p, fatBeginLBA + p * sectorsPerPage,
-			sectorsPerPage, diskCode, 0);
+			sectorsPerPage, dp->diskCode, 0);
 		if(rwDisk == IO_REQUEST_FAILURE){
 			printk("warning: failed to read FAT\n"); //TODO
 			break;
 		}
 	}
 	EXPECT(p * PAGE_SIZE >= fatSize);
+	return fat;
+	ON_ERROR;
+	systemCall_releaseHeap(fat);
+	ON_ERROR;
+	return NULL;
 
-	const unsigned fatEntryCount = sectorsPerFAT32 * (sectorSize / 4);
-	for(p = 0; p < 50 && p < fatEntryCount; p++){
-		printk("%x ", fat[p]);
-	}
-	printk("\nread fat ok\n");
+}
+
+static void readFATDisk(const struct DiskParameter *dp){
+	const size_t readSize = CEIL(sizeof(FATBootRecord), dp->sectorSize);
+	FATBootRecord *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
+	EXPECT(br != NULL);
+	MEMSET0(br);
+	uintptr_t rwDisk = systemCall_rwDiskSync(
+		dp->diskDriver, (uintptr_t)br, dp->startLBA, readSize / dp->sectorSize,
+		dp->diskCode, 0);
+	EXPECT(rwDisk != IO_REQUEST_FAILURE);
+	EXPECT(br->ebr32.ext.signature == 0x28 || br->ebr32.ext.signature == 0x29);
+
+	//const uint32_t sectorsPerFAT32 = br->ebr32.sectorsPerFAT32;
+	//uint32_t bytesPerCluster = br->sectorsPerCluster * br->bytesPerSector;
+	//printk("%x %x %x %x\n",br->ebr32.rootCluster, fatBeginLBA, sectorsPerFAT32, bytesPerCluster);
+
+	uint32_t *fat = loadFAT32(br, dp);
+	EXPECT(fat != NULL);
+	//const unsigned fatEntryCount = br->ebr32.sectorsPerFAT32 * (sectorSize / 4);
+	//unsigned p;
+	const uint64_t rootClusterSector = dp->startLBA +
+		br->reservedSectorCount + br->ebr32.sectorsPerFAT32 * br->fatCount +
+		(br->ebr32.rootCluster-2) * br->sectorsPerCluster;
+	iterateDirectory(rootClusterSector, br->sectorsPerCluster, dp);
+	printk("read fat ok\n");
 	systemCall_releaseHeap(fat);
 	systemCall_releaseHeap((void*)br);
 	return;
-	ON_ERROR;
-	systemCall_releaseHeap(fat);
+	//systemCall_releaseHeap(br);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
@@ -143,21 +204,33 @@ static void readFAT(int diskDriver, uint64_t startLBA, uintptr_t diskCode, uintp
 	printk("warning: read FAT32 failed\n");
 }
 
+#define FAT32_SERVICE_NAME "fat32"
+
+static void fat32ServiceHandler(__attribute__((__unused__)) InterruptParam *p){
+
+}
+
 void fatDriver(void){
 	slab = createUserSlabManager(); // move it to user library
+	int fat32Service = registerService(global.syscallTable, FAT32_SERVICE_NAME, fat32ServiceHandler, 0);
+	EXPECT(fat32Service >= 0);
 	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
 	assert(discoverFAT != IO_REQUEST_FAILURE);
-	int diskDriver;
+	//int diskDriver;
 	uintptr_t startLBALow;
 	uintptr_t startLBAHigh;
-	uintptr_t diskCode;
-	uintptr_t sectorSize;
+	//uintptr_t diskCode;
+	//uintptr_t sectorSize;
 	while(1){
+		struct DiskParameter dp;
 		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
 			discoverFAT, 5,
-			(uintptr_t)&diskDriver, &startLBALow, &startLBAHigh, &diskCode, &sectorSize);
+			(uintptr_t)&dp.diskDriver, &startLBALow, &startLBAHigh, &dp.diskCode, &dp.sectorSize);
 		assert(discoverFAT == discoverFAT2);
+		dp.startLBA = (((uint64_t)startLBAHigh) << 32) + startLBALow;
 		//printk("fat received %u %x %u %u\n", diskDriver, startLBALow, diskCode, sectorSize);
-		readFAT(diskDriver, startLBALow + (((uint64_t)startLBAHigh) << 32), diskCode, sectorSize);
+		readFATDisk(&dp);
 	}
+	ON_ERROR;
+	panic("fail to register fat32Service");
 }

@@ -65,6 +65,46 @@ uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, ui
 	return r;
 }
 
+void copyReturnValues(InterruptParam *p, const uintptr_t *rv, int returnCount){
+	switch(returnCount){
+	case 6:
+		SYSTEM_CALL_RETURN_VALUE_5(p) = rv[5];
+	case 5:
+		SYSTEM_CALL_RETURN_VALUE_4(p) = rv[4];
+	case 4:
+		SYSTEM_CALL_RETURN_VALUE_3(p) = rv[3];
+	case 3:
+		SYSTEM_CALL_RETURN_VALUE_2(p) = rv[2];
+	case 2:
+		SYSTEM_CALL_RETURN_VALUE_1(p) = rv[1];
+	case 1:
+		SYSTEM_CALL_RETURN_VALUE_0(p) = rv[0];
+		break;
+	case 0:
+	default:
+		assert(0);
+	}
+}
+
+void copyArguments(uintptr_t *a, const InterruptParam *p, int argumentCount){
+	switch(argumentCount){
+	case 5:
+		a[4] = SYSTEM_CALL_ARGUMENT_4(p);
+	case 4:
+		a[3] = SYSTEM_CALL_ARGUMENT_3(p);
+	case 3:
+		a[2] = SYSTEM_CALL_ARGUMENT_2(p);
+	case 2:
+		a[1] = SYSTEM_CALL_ARGUMENT_1(p);
+	case 1:
+		a[0] = SYSTEM_CALL_ARGUMENT_0(p);
+	case 0:
+		break;
+	default:
+		assert(0);
+	}
+}
+
 struct SystemCallTable{
 	Spinlock lock;
 	unsigned int usedCount;

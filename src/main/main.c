@@ -10,8 +10,7 @@
 #include"assembly/assembly.h"
 #include"io/io.h"
 #include"file/file.h"
-
-void c_entry(void);
+#include"resource/resource.h"
 
 SystemGlobal global;
 
@@ -27,6 +26,7 @@ static void initService(void){
 	}
 }
 
+void c_entry(void);
 void c_entry(void){
 	static volatile int first = 1;
 	int isBSP = first;
@@ -68,6 +68,7 @@ void c_entry(void){
 	// 9. file
 	if(isBSP){
 		initFileSystemManager(global.syscallTable);
+		initResourceManager(global.syscallTable);
 	}
 	// 10. driver
 	initLocalTimer(pic, global.idt, timer);

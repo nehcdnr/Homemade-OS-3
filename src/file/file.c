@@ -1,10 +1,11 @@
-#include"file.h"
 #include"memory/memory.h"
 #include"io/io.h"
 #include"multiprocessor/spinlock.h"
 #include"interrupt/systemcall.h"
 #include"multiprocessor/processorlocal.h"
 #include"common.h"
+#include"file.h"
+#include"resource/resource.h"
 
 // disk driver interface
 
@@ -69,27 +70,25 @@ struct MBR{
 static_assert(sizeof(struct MBR) == 512);
 static_assert(sizeof(struct PartitionEntry) == 16);
 
-typedef struct FileSystem FileSystem;
-struct FileSystem{
-	FileSystemType type;
+typedef struct DiskPartition DiskPartition;
+struct DiskPartition{
+	Resource resource;
+	DiskPartitionType type;
 	ServiceName driverName;
 	int driver;
 	uint32_t diskCode; // assigned by disk driver
 	uint64_t startLBA;
 	uint64_t sectorCount;
 	uint32_t sectorSize;
-	int fileService;
-
-	FileSystem *next, **prev;
 };
-
-struct FileSystemManager{
+/*
+struct DiskPartitionManager{
 	Spinlock lock; // improve: read-write lock
-	struct FileSystem *unknownFSList;
-	struct NewDiskEvent *listenDiskEvent[MAX_FILE_SYSTEM_TYPE];
+	struct DiskPartition *unknownDPList;
+	struct NewDiskEvent *listenDiskEvent[MAX_DISK_TYPE];
 };
-static struct FileSystemManager fsManager;
-
+static struct DiskPartitionManager diskManager;
+*/
 void readPartitions(
 	const char *driverName, int diskDriver, uint32_t diskCode, uint64_t relativeLBA,
 	uint64_t sectorCount, uint32_t sectorSize
@@ -139,193 +138,138 @@ void readPartitions(
 }
 
 // file system interface
-
+/*
 typedef struct NewDiskEvent{
 	IORequest this;
 	Spinlock *lock;
-	FileSystem *newFSList;
-	FileSystem *servingFS;
-	FileSystem *managedFSList;
+	DiskPartition *newDPList;
+	DiskPartition *servingDP;
+	DiskPartition *discoveredDPList;
 }NewDiskEvent;
-
-// assume locked
-static void serveNewFS(NewDiskEvent *nde){
-	FileSystem *fs = nde->newFSList;
-	if(fs == NULL)
-		return;
-	if(nde->servingFS != NULL)
-		return;
-	REMOVE_FROM_DQUEUE(fs);
-	ADD_TO_DQUEUE(fs, &nde->servingFS);
-	nde->this.handle(&nde->this);
-}
-
-static int cancelNewDiskEvent(IORequest *ior){
-	NewDiskEvent *nde = ior->ioRequest;
-	FileSystem **fsTail;
-	acquireLock(&fsManager.lock);
-	fsTail = &fsManager.unknownFSList;
-	FIND_DQUEUE_TAIL(fsTail);
-	APPEND_TO_DQUEUE(&nde->newFSList, fsTail);
-	FIND_DQUEUE_TAIL(fsTail);
-	APPEND_TO_DQUEUE(&nde->managedFSList, fsTail);
-	FIND_DQUEUE_TAIL(fsTail);
-	APPEND_TO_DQUEUE(&nde->servingFS, fsTail);
-	releaseLock(&fsManager.lock);
-	return 1;
-}
-
-static int finishNewDiskEvent(IORequest *ior, uintptr_t *returnValues){
-	NewDiskEvent *nde = ior->ioRequest;
-	acquireLock(nde->lock);
-	FileSystem *fs = nde->servingFS;
-	returnValues[0] = fs->driver;
-	returnValues[1] = (fs->startLBA & 0xffffffff);
-	returnValues[2] = ((fs->startLBA >> 32) & 0xffffffff);
-	returnValues[3] = fs->diskCode;
-	returnValues[4] = fs->sectorSize;
-	assert(fs != NULL);
-	REMOVE_FROM_DQUEUE(fs);
-	ADD_TO_DQUEUE(fs, &nde->managedFSList);
-	putPendingIO(&nde->this);
-	serveNewFS(nde);
-	releaseLock(nde->lock);
+*/
+static int returnDiskValues(Resource *resource, uintptr_t *returnValues){
+	DiskPartition *dp = resource->instance;
+	returnValues[0] = dp->driver;
+	returnValues[1] = (dp->startLBA & 0xffffffff);
+	returnValues[2] = ((dp->startLBA >> 32) & 0xffffffff);
+	returnValues[3] = dp->diskCode;
+	returnValues[4] = dp->sectorSize;
 	return 5;
 }
 
-static NewDiskEvent *createNewDiskEvent(Spinlock *lock){
-	NewDiskEvent *NEW(nde);
-	if(nde == NULL){
-		return NULL;
-	}
-	initIORequest(&nde->this, nde,
-		resumeTaskByIO, processorLocalTask(),
-		cancelNewDiskEvent, finishNewDiskEvent);
-	nde->lock = lock;
-	nde->newFSList = NULL;
-	nde->servingFS = NULL;
-	nde->managedFSList = NULL;
-	return nde;
-}
-
-static void discoverDiskHandler(InterruptParam *p){
-	sti();
-	FileSystemType fsType = SYSTEM_CALL_ARGUMENT_0(p);
-	EXPECT(fsType >= 0 && fsType < MAX_FILE_SYSTEM_TYPE);
-
-	NewDiskEvent *nde = createNewDiskEvent(&fsManager.lock);
-	EXPECT(nde != NULL);
-	acquireLock(&fsManager.lock);
-	EXPECT(fsManager.listenDiskEvent[fsType] == NULL); // file service already exists
-	fsManager.listenDiskEvent[fsType] = nde;
-	putPendingIO(&nde->this);
-	FileSystem *fs, *fsNext;
-	for(fs = fsManager.unknownFSList; fs != NULL; fs = fsNext){
-		fsNext = fs->next;
-		if(fs->type != fsType)
-			continue;
-		REMOVE_FROM_DQUEUE(fs);
-		ADD_TO_DQUEUE(fs, &nde->newFSList);
-	}
-	serveNewFS(nde);
-	releaseLock(&fsManager.lock);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)nde;
-	return;
-	ON_ERROR;
-	releaseLock(&fsManager.lock);
-	DELETE(nde);
-	ON_ERROR;
-	ON_ERROR;
-	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
-}
-
-uintptr_t systemCall_discoverDisk(FileSystemType diskType){
-	return systemCall2(SYSCALL_DISCOVER_DISK, &diskType);
-}
-
-/*
-#define RESIZE_LENGTH (16)
-
-static int resizePartitionArray(struct FileSystemManager *pa){
-	int newLength;
-	if(pa->length == pa->maxLength){ // extend
-		newLength = pa->maxLength + RESIZE_LENGTH;
-	}
-	else{ // shrink
-		newLength = CEIL(pa->length, RESIZE_LENGTH) + RESIZE_LENGTH;
-		if(newLength >= pa->maxLength){
-			return 1;
-		}
-	}
-	struct FileSystem *NEW_ARRAY(array2, newLength);
-	if(array2 == NULL){
+static int matchDiskType(Resource *resource, const uintptr_t *arguments){
+	DiskPartition *dp = resource->instance;
+	if(dp->type != (DiskPartitionType)arguments[1])
 		return 0;
-	}
-	memcpy(array2, pa->array, sizeof(*array2) * pa->length);
-	DELETE(pa->array);
-	pa->array = array2;
-	pa->maxLength = newLength;
 	return 1;
 }
-*/
+
+uintptr_t systemCall_discoverDisk(DiskPartitionType diskType){
+	uintptr_t resourceType = RESOURCE_DISK_PARTITION;
+	return systemCall3(SYSCALL_DISCOVER_RESOURCE, &resourceType, &diskType);
+}
+
 // assume all arguments are valid
 int addDiskPartition(
-	FileSystemType fsType, const char *driverName, int diskDriver,
+	DiskPartitionType diskType, const char *driverName, int diskDriver,
 	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
 	uint32_t diskCode
 ){
-	EXPECT(fsType >= 0 && fsType < MAX_FILE_SYSTEM_TYPE);
-	struct FileSystem *NEW(fs);
-	EXPECT(fs != NULL);
-	fs->type = fsType;
-	strncpy(fs->driverName, driverName, MAX_NAME_LENGTH);
-	fs->driver = diskDriver;
-	fs->diskCode = diskCode;
-	fs->startLBA = startLBA;
-	fs->sectorCount = sectorCount;
-	fs->sectorSize = sectorSize;
-	fs->fileService = SERVICE_NOT_EXISTING;
-	acquireLock(&fsManager.lock);
-	NewDiskEvent *nde = fsManager.listenDiskEvent[fsType];
-	if(nde == NULL){
-		ADD_TO_DQUEUE(fs, &fsManager.unknownFSList);
-	}
-	else{
-		ADD_TO_DQUEUE(fs, &nde->newFSList);
-		serveNewFS(nde);
-	}
-	releaseLock(&fsManager.lock);
+	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE);
+	struct DiskPartition *NEW(dp);
+	EXPECT(dp != NULL);
+	initResource(&dp->resource, dp, matchDiskType, returnDiskValues);
+	dp->type = diskType;
+	strncpy(dp->driverName, driverName, MAX_NAME_LENGTH);
+	dp->driver = diskDriver;
+	dp->diskCode = diskCode;
+	dp->startLBA = startLBA;
+	dp->sectorCount = sectorCount;
+	dp->sectorSize = sectorSize;
+	addResource(RESOURCE_DISK_PARTITION, &dp->resource);
 	return 1;
 	// DELETE(dp);
 	ON_ERROR;
 	ON_ERROR;
 	return 0;
 }
-
+/*
 int removeDiskPartition(int diskDriver, uint32_t diskCode){
-	struct FileSystem *fs;
+	struct DiskPartition *dp;
 	int ok = 0;
-	acquireLock(&fsManager.lock);
-	for(fs = fsManager.unknownFSList; fs != NULL; fs = fs->next){
-		if(fs->driver == diskDriver && fs->diskCode == diskCode){
+	acquireLock(&diskManager.lock);
+	for(dp = diskManager.unknownDPList; dp != NULL; dp = dp->next){
+		if(dp->driver == diskDriver && dp->diskCode == diskCode){
 			break;
 		}
 	}
-	if(fs != NULL){
+	if(dp != NULL){
 		ok = 1;
-		REMOVE_FROM_DQUEUE(fs);
+		REMOVE_FROM_DQUEUE(dp);
 	}
-	releaseLock(&fsManager.lock);
+	releaseLock(&diskManager.lock);
 	return ok;
+}
+*/
+#define MAX_FILE_SERVICE_NAME_LENGTH (8)
+
+typedef struct FileSystem{
+	int fileService;
+	char name[MAX_FILE_SERVICE_NAME_LENGTH];
+	struct FileSystem *next, **prev;
+}FileSystem;
+struct FileSystemManager{
+	Spinlock lock;
+	FileSystem *fsList;
+};
+static struct FileSystemManager fileManager;
+
+static void registerFileServiceHandler(InterruptParam *p){
+	int fileService = (int)SYSTEM_CALL_ARGUMENT_0(p);
+	uint32_t name32[MAX_FILE_SERVICE_NAME_LENGTH / 4];
+	name32[0] = SYSTEM_CALL_ARGUMENT_1(p);
+	name32[1] = SYSTEM_CALL_ARGUMENT_2(p);
+	// init FileSystem
+	FileSystem *NEW(fs);
+	EXPECT(fs != NULL);
+	fs->fileService = fileService;
+	strncpy(fs->name, (char*)name32, MAX_FILE_SERVICE_NAME_LENGTH);
+	fs->next = NULL;
+	fs->prev = NULL;
+	// query/add fileManager
+	acquireLock(&fileManager.lock);
+	int ok = 1;
+	FileSystem *i;
+	for(i = fileManager.fsList; i != NULL; i = i->next){
+		if(strncmp(i->name, fs->name, MAX_FILE_SERVICE_NAME_LENGTH) == 0){
+			ok = 0;
+			break;
+		}
+	}
+	if(ok){
+		ADD_TO_DQUEUE(fs, &fileManager.fsList);
+	}
+	releaseLock(&fileManager.lock);
+	EXPECT(ok);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = 1;
+	return;
+	ON_ERROR;
+	ON_ERROR;
+	DELETE(fs);
+	SYSTEM_CALL_RETURN_VALUE_0(p) = 0;
+}
+
+
+int systemCall_registerFileService(int fileService, const char *fileServiceName){
+	uintptr_t fs = (unsigned)fileService;
+	uint32_t name[MAX_FILE_SERVICE_NAME_LENGTH / 4];
+	strncpy((char*)name, fileServiceName, MAX_FILE_SERVICE_NAME_LENGTH);
+	return (int)systemCall4(SYSCALL_REGISTER_FILE_SYSTEM, &fs, name + 0, name + 1);
 }
 
 void initFileSystemManager(SystemCallTable *sc){
-	assert(fsManager.unknownFSList == NULL);
-	fsManager.unknownFSList = NULL;
-	fsManager.lock = initialSpinlock;
-	registerSystemCall(sc, SYSCALL_DISCOVER_DISK, discoverDiskHandler, 0);
-	int i;
-	for(i = 0; i < MAX_FILE_SYSTEM_TYPE; i++){
-		fsManager.listenDiskEvent[i] = NULL;
-	}
+	// file
+	registerSystemCall(sc, SYSCALL_REGISTER_FILE_SYSTEM, registerFileServiceHandler, 0);
+	fileManager.lock = initialSpinlock;
+	fileManager.fsList = NULL;
 }

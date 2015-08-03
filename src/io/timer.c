@@ -24,15 +24,14 @@ struct TimerEventList{
 	TimerEvent *head;
 };
 
-static int cancelTimerEvent(IORequest *ior){
+static void cancelTimerEvent(IORequest *ior){
 	TimerEvent *te = ior->timerEvent;
 	acquireLock(te->lock);
-	if(IS_IN_DQUEUE(te)){
+	if(IS_IN_DQUEUE(te)){ // not expire
 		REMOVE_FROM_DQUEUE(te);
 	}
 	releaseLock(te->lock);
-	// TODO: DELETE?
-	return 1;
+	DELETE(te);
 }
 
 static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
@@ -48,14 +47,12 @@ static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_
 	return 0;
 }
 
-static TimerEvent *createTimerEvent(
-	HandleIORequest callback, Task *t, uint64_t periodTicks
-){
+static TimerEvent *createTimerEvent(uint64_t periodTicks){
 	TimerEvent *NEW(te);
 	if(te == NULL){
 		return NULL;
 	}
-	initIORequest(&te->this, te, callback, t, cancelTimerEvent, finishTimerEvent);
+	initIORequest(&te->this, te, cancelTimerEvent, finishTimerEvent);
 	te->countDownTicks = 0;
 	te->tickPeriod = periodTicks;
 	te->isSentToTask = 0;
@@ -74,13 +71,12 @@ static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *t
 }
 
 // TODO:systemCall_sleep(uint64_t millisecond);
-uintptr_t setAlarm(uint64_t millisecond, uint64_t isPeriodic){
+uintptr_t setAlarm(uint64_t millisecond, int isPeriodic){
 	if(millisecond > 1000000000 * (uint64_t)1000){
 		return IO_REQUEST_FAILURE;
 	}
 	const uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
-	Task *t = processorLocalTask();
-	TimerEvent *te = createTimerEvent(resumeTaskByIO, t, (isPeriodic? tick: 0));
+	TimerEvent *te = createTimerEvent((isPeriodic? tick: 0));
 	if(te == NULL){
 		return IO_REQUEST_FAILURE;
 	}
