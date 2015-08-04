@@ -193,83 +193,54 @@ int addDiskPartition(
 	ON_ERROR;
 	return 0;
 }
-/*
-int removeDiskPartition(int diskDriver, uint32_t diskCode){
-	struct DiskPartition *dp;
-	int ok = 0;
-	acquireLock(&diskManager.lock);
-	for(dp = diskManager.unknownDPList; dp != NULL; dp = dp->next){
-		if(dp->driver == diskDriver && dp->diskCode == diskCode){
-			break;
-		}
-	}
-	if(dp != NULL){
-		ok = 1;
-		REMOVE_FROM_DQUEUE(dp);
-	}
-	releaseLock(&diskManager.lock);
-	return ok;
-}
-*/
+
 #define MAX_FILE_SERVICE_NAME_LENGTH (8)
 
 typedef struct FileSystem{
+	Resource resource;
 	int fileService;
 	char name[MAX_FILE_SERVICE_NAME_LENGTH];
-	struct FileSystem *next, **prev;
 }FileSystem;
+/*
 struct FileSystemManager{
 	Spinlock lock;
-	FileSystem *fsList;
 };
 static struct FileSystemManager fileManager;
+*/
+static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
+	FileSystem *fs = resource->instance;
+	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};
+	if(((char*)name32)[0] == '\0' || // match any file system
+	strncmp(fs->name, (const char*)name32, MAX_FILE_SERVICE_NAME_LENGTH) == 0)
+		return 1;
+	return 0;
+}
 
-static void registerFileServiceHandler(InterruptParam *p){
-	int fileService = (int)SYSTEM_CALL_ARGUMENT_0(p);
-	uint32_t name32[MAX_FILE_SERVICE_NAME_LENGTH / 4];
-	name32[0] = SYSTEM_CALL_ARGUMENT_1(p);
-	name32[1] = SYSTEM_CALL_ARGUMENT_2(p);
-	// init FileSystem
+static int returnFileService(Resource *resource, uintptr_t *returnValues){
+	FileSystem *fs = resource->instance;
+	returnValues[0] = fs->fileService;
+	return 1;
+}
+
+int addFileSystem(int fileService, const char *name, size_t nameLength){
+	EXPECT(nameLength <= MAX_FILE_SERVICE_NAME_LENGTH);
 	FileSystem *NEW(fs);
 	EXPECT(fs != NULL);
+	initResource(&fs->resource, fs, matchFileSystemName, returnFileService);
+	MEMSET0(fs->name);
+	strncpy(fs->name, name, nameLength);
 	fs->fileService = fileService;
-	strncpy(fs->name, (char*)name32, MAX_FILE_SERVICE_NAME_LENGTH);
-	fs->next = NULL;
-	fs->prev = NULL;
-	// query/add fileManager
-	acquireLock(&fileManager.lock);
-	int ok = 1;
-	FileSystem *i;
-	for(i = fileManager.fsList; i != NULL; i = i->next){
-		if(strncmp(i->name, fs->name, MAX_FILE_SERVICE_NAME_LENGTH) == 0){
-			ok = 0;
-			break;
-		}
-	}
-	if(ok){
-		ADD_TO_DQUEUE(fs, &fileManager.fsList);
-	}
-	releaseLock(&fileManager.lock);
-	EXPECT(ok);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = 1;
-	return;
+	addResource(RESOURCE_FILE_SYSTEM, &fs->resource);
+	return 1;
+	//DELETE(fs);
 	ON_ERROR;
 	ON_ERROR;
-	DELETE(fs);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = 0;
+	return 0;
 }
 
-
-int systemCall_registerFileService(int fileService, const char *fileServiceName){
-	uintptr_t fs = (unsigned)fileService;
-	uint32_t name[MAX_FILE_SERVICE_NAME_LENGTH / 4];
-	strncpy((char*)name, fileServiceName, MAX_FILE_SERVICE_NAME_LENGTH);
-	return (int)systemCall4(SYSCALL_REGISTER_FILE_SYSTEM, &fs, name + 0, name + 1);
-}
-
-void initFileSystemManager(SystemCallTable *sc){
-	// file
-	registerSystemCall(sc, SYSCALL_REGISTER_FILE_SYSTEM, registerFileServiceHandler, 0);
-	fileManager.lock = initialSpinlock;
-	fileManager.fsList = NULL;
+uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
+	uintptr_t type = RESOURCE_FILE_SYSTEM;
+	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)];
+	strncpy((char*)name32, name, nameLength);
+	return systemCall4(SYSCALL_DISCOVER_RESOURCE, &type, name32 + 0, name32 + 1);
 }

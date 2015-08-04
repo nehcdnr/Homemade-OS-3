@@ -37,15 +37,16 @@ int addDiskPartition(
 	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
 	uint32_t diskCode
 );
-int removeDiskPartition(int diskDriver, uint32_t diskCode);
-typedef struct SystemCallTable SystemCallTable;
-void initFileSystemManager(SystemCallTable *sc);
+//int removeDiskPartition(int diskDriver, uint32_t diskCode);
 
 void readPartitions(const char *driverName, int diskDriver, uint32_t diskCode,
 	uint64_t lba, uint64_t sectorCount, uint32_t sectorSize);
 
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
-int systemCall_registerFileService(int fileService, const char *fileServiceName);
+
+// file interface
+int addFileSystem(int fileService, const char *name, size_t nameLength);
+uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
 // FAT32
 void fatDriver(void);

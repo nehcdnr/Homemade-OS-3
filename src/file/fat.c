@@ -168,7 +168,7 @@ static uint32_t *loadFAT32(const FATBootRecord *br, const struct DiskParameter *
 
 }
 
-static void readFATDisk(const struct DiskParameter *dp){
+static int readFATDisk(const struct DiskParameter *dp){
 	const size_t readSize = CEIL(sizeof(FATBootRecord), dp->sectorSize);
 	FATBootRecord *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(br != NULL);
@@ -194,7 +194,7 @@ static void readFATDisk(const struct DiskParameter *dp){
 	printk("read fat ok\n");
 	systemCall_releaseHeap(fat);
 	systemCall_releaseHeap((void*)br);
-	return;
+	return 1;
 	//systemCall_releaseHeap(br);
 	ON_ERROR;
 	ON_ERROR;
@@ -202,6 +202,7 @@ static void readFATDisk(const struct DiskParameter *dp){
 	systemCall_releaseHeap((void*)br);
 	ON_ERROR;
 	printk("warning: read FAT32 failed\n");
+	return 0;
 }
 
 #define FAT32_SERVICE_NAME "fat32"
@@ -221,16 +222,30 @@ void fatDriver(void){
 	uintptr_t startLBAHigh;
 	//uintptr_t diskCode;
 	//uintptr_t sectorSize;
-	while(1){
+	char fatName[]="fat?";
+	for(fatName[3] = '0'; fatName[3] <= '9'; fatName[3]++){
 		struct DiskParameter dp;
 		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
 			discoverFAT, 5,
 			(uintptr_t)&dp.diskDriver, &startLBALow, &startLBAHigh, &dp.diskCode, &dp.sectorSize);
-		assert(discoverFAT == discoverFAT2);
+		if(discoverFAT != discoverFAT2){
+			printk("discover disk failure\n");
+			continue;
+		}
 		dp.startLBA = (((uint64_t)startLBAHigh) << 32) + startLBALow;
 		//printk("fat received %u %x %u %u\n", diskDriver, startLBALow, diskCode, sectorSize);
-		readFATDisk(&dp);
+		if(readFATDisk(&dp) == 0){
+			printk("read fat failure\n");
+			continue;
+		}
+		if(addFileSystem(fat32Service, fatName, 4) != 1){
+			printk("add file system failure\n");
+		}
+	}
+	printk("too many fat systems\n");
+	while(1){
+		sleep(1000);
 	}
 	ON_ERROR;
-	panic("fail to register fat32Service");
+	panic("cannot initialize FAT32 service");
 }

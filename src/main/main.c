@@ -67,7 +67,6 @@ void c_entry(void){
 	setProcessorLocal(pic, gdt, taskManager, timer);
 	// 9. file
 	if(isBSP){
-		initFileSystemManager(global.syscallTable);
 		initResourceManager(global.syscallTable);
 	}
 	// 10. driver
