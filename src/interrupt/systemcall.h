@@ -88,7 +88,6 @@ SystemCallTable *initSystemCall(InterruptTable *t);
 #define MOUSE_SERVICE_NAME ("mouse")
 #define VIDEO_SERVICE_NAME ("video")
 #define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
-#define PCI_SERVICE_NAME ("enumeratepci")
 #define AHCI_SERVICE_NAME ("ahci")
 
 #endif

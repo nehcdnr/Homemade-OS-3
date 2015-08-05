@@ -351,7 +351,6 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	return NULL;
 }
 
-
 typedef struct AHCIInterruptArgument{
 	volatile HBARegisters *hbaRegisters;
 
@@ -367,7 +366,9 @@ typedef struct AHCIInterruptArgument{
 		struct DiskRequest *servingRequest;
 	}port[HBA_MAX_PORT_COUNT];
 
+	// manager
 	struct AHCIInterruptArgument *next;
+	uint16_t hbaIndex;
 }AHCIInterruptArgument;
 
 typedef struct AHCIPortQueue AHCIPortQueue;
@@ -387,7 +388,7 @@ static void resetAHCI(volatile HBARegisters *hba){
 	}while(hba->globalHostControl & (1 << 0));
 }
 */
-static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
+static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 	// enable interrupt
 	AHCIInterruptArgument *NEW(arg);
 	EXPECT(arg != NULL);
@@ -399,6 +400,9 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 	arg->hbaRegisters = hba;
 	arg->lock = initialSpinlock;
 	arg->desc.sectorSize = DEFAULT_SECTOR_SIZE;
+	//arg->desc.sectorCount = 1;
+	//arg->hbaIndex = 0xffff;
+	//arg->next = NULL;
 	//resetAHCI(hba);
 	hba->globalHostControl |= ((1<<31)/*AHCI mode*/ | (1 << 1) /*enable interrupt*/);
 	//printk("bar5: %x %x\n",bar, hba);
@@ -421,9 +425,8 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 		}
 		arg->port[p].hbaPortMemory = pm;
 	}
-	arg->next = *argList;
-	*argList = arg;
-	return 1;
+
+	return arg;
 
 	ON_ERROR;
 	printk("unsupported AHCI version: %x\n", hba->ahciVersion);
@@ -433,9 +436,8 @@ static int initAHCIRegisters(uint32_t bar, AHCIInterruptArgument **argList){
 	DELETE(arg);
 	ON_ERROR;
 	printk("cannot allocate linear memory for HBA interrupt handler\n");
-	return 0;
+	return NULL;
 }
-
 
 // system call
 typedef struct DiskRequest DiskRequest;
@@ -509,8 +511,11 @@ static DiskRequest *createDiskRequest(
 }
 
 // disk request queue
-static AHCIInterruptArgument **ahciArray = NULL;
-static int ahciCount = 0;
+typedef struct AHCIManager{
+	Spinlock lock;
+	AHCIInterruptArgument *ahciList;
+	int ahciCount;
+}AHCIManager;
 
 // return 0 if failed to issue command
 // return 1 if command was issued or no request
@@ -614,15 +619,23 @@ static_assert(sizeof(HBAPortIndex) == sizeof(uint32_t));
 
 static_assert(HBA_MAX_PORT_COUNT < 0x1000);
 
-static int isValidHBAPortIndex(HBAPortIndex index){
-	if(/*index.portIndex < 0 || */index.portIndex >= HBA_MAX_PORT_COUNT)
-		return 0;
-	if(/*index.hbaIndex < 0 || */index.hbaIndex >= ahciCount)
-		return 0;
-	AHCIInterruptArgument *a = ahciArray[index.hbaIndex];
-	if(hasPort(a, index.portIndex) == 0)
-		return 0;
-	return 1;
+static AHCIInterruptArgument *searchHBAByPortIndex(AHCIManager *am, HBAPortIndex index){
+	AHCIInterruptArgument *a = NULL;
+	EXPECT(/*index.portIndex >= 0 && */index.portIndex < HBA_MAX_PORT_COUNT);
+	acquireLock(&am->lock);
+	EXPECT(/*index.hbaIndex >= 0 && */index.hbaIndex < am->ahciCount);
+	for(a = am->ahciList; a != NULL; a = a->next){
+		if(a->hbaIndex == index.hbaIndex){
+			break;
+		}
+	}
+	ON_ERROR;
+	releaseLock(&am->lock);
+	ON_ERROR;
+	if(a == NULL){
+		return NULL;
+	}
+	return hasPort(a, index.portIndex)? a: NULL;
 }
 
 static HBAPortIndex toDiskCode(int a, int p){
@@ -634,7 +647,7 @@ static HBAPortIndex toDiskCode(int a, int p){
 
 static void AHCIServiceHandler(InterruptParam *p){
 	sti();
-	assert(ahciArray == (AHCIInterruptArgument**)p->argument);
+	AHCIManager *am = (AHCIManager*)p->argument;
 	uintptr_t linearBuffer;
 	uint64_t lba;
 	uint32_t sectorCount;
@@ -645,19 +658,19 @@ static void AHCIServiceHandler(InterruptParam *p){
 		getTaskLinearMemory(processorLocalTask()), (void*)linearBuffer
 	);
 	EXPECT(physicalBuffer.value != UINTPTR_NULL);
-	int ok = isValidHBAPortIndex(index);
-	EXPECT(ok);
+	AHCIInterruptArgument *hba = searchHBAByPortIndex(am, index);
+	EXPECT(hba != NULL);
 	DiskRequest *dr = createDiskRequest(
 		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
 		physicalBuffer, lba, sectorCount,
-		ahciArray[index.hbaIndex], index.portIndex, isWrite
+		hba, index.portIndex, isWrite
 	);
 	// improve: multiple physical regions
-assert(sectorCount * ahciArray[index.hbaIndex]->desc.sectorSize <= PAGE_SIZE);
+assert(sectorCount * hba->desc.sectorSize <= PAGE_SIZE);
 	EXPECT(dr != NULL);
 	putPendingIO(&dr->this);
 	addToPortQueue(dr, index.portIndex);
-	if(servePortQueue(ahciArray[index.hbaIndex], index.portIndex) == 0){
+	if(servePortQueue(hba, index.portIndex) == 0){
 		assert(0);
 		// TODO: dr->this.handle(&dr->this); // dr->this.fail()
 	}
@@ -735,82 +748,60 @@ static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *
 	return 0;
 }
 
-static int enumerateAndInitAHCI(AHCIInterruptArgument **ahciList){
+static AHCIInterruptArgument *initAHCI(AHCIManager *am, uint8_t bus, uint8_t dev, uint8_t func){
 	PIC *pic = processorLocalPIC();
-	int pciIndex = 0;
-	int enumCount = 0;
-	while(1){
-		uint8_t bus, dev, func;
-		// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
-		pciIndex = systemCall_enumeratePCI(&bus, &dev, &func, pciIndex, 0x01060100, 0xffffff00);
-		if(pciIndex == 0xffff){
-			break;
-		}
-		pciIndex++;
-		uint32_t bar5 = readPCIConfig(bus, dev, func, BASE_ADDRESS_5);
-		uint32_t intInfo  = readPCIConfig(bus, dev, func, INTERRUPT_INFORMATION);
-		int ok = initAHCIRegisters(bar5, ahciList);
+	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
+	uint32_t bar5 = readPCIConfig(bus, dev, func, BASE_ADDRESS_5);
+	uint32_t intInfo  = readPCIConfig(bus, dev, func, INTERRUPT_INFORMATION);
 
-		if(ok == 0){
-			continue;
-		}
-		enumCount++;
-		const AHCIInterruptArgument *arg = *ahciList;
-		InterruptVector *v = pic->irqToVector(pic, (intInfo & 0xff));
-		setHandler(v, AHCIHandler, (uintptr_t)arg);
-		pic->setPICMask(pic, (intInfo & 0xff), 0);
+	AHCIInterruptArgument *arg = initAHCIRegisters(bar5);
+	if(arg == NULL){
+		return NULL;
 	}
-	return enumCount;
+	// add to manager
+	acquireLock(&am->lock);
+	arg->hbaIndex = (uint16_t)am->ahciCount;
+	arg->next = am->ahciList;
+	am->ahciList = arg;
+	am->ahciCount++;
+	releaseLock(&am->lock);
+
+	InterruptVector *v = pic->irqToVector(pic, (intInfo & 0xff));
+	setHandler(v, AHCIHandler, (uintptr_t)arg);
+	pic->setPICMask(pic, (intInfo & 0xff), 0);
+	return arg;
 }
 
+// must be in kernel space
+static AHCIManager ahciManager = {INITIAL_SPINLOCK, NULL, 0};
+
 void ahciDriver(void){
-	if(ahciArray != NULL || ahciCount != 0){
+	if(ahciManager.ahciList != NULL || ahciManager.ahciCount != 0){
 		panic("cannot initialize AHCI driver");
 	}
-
-	ahciCount = 0;
-	AHCIInterruptArgument *ahciList = NULL;
-	ahciCount = enumerateAndInitAHCI(&ahciList);
-
-	NEW_ARRAY(ahciArray, ahciCount);
-	EXPECT(ahciArray != NULL);
-	{
-		if(ahciArray == NULL){
-			panic("cannot initialize AHCI driver");
-		}
-		int a;
-		AHCIInterruptArgument *arg = ahciList;
-		for(a = 0; a < ahciCount; a++){
-			ahciArray[a] = arg;
-			arg = arg->next;
-		}
-		assert(arg == NULL);
+	int ahciDriver = registerService(global.syscallTable, AHCI_SERVICE_NAME,
+		AHCIServiceHandler, (uintptr_t)&ahciManager);
+	if(ahciDriver < 0){
+		panic("cannot register ahci interrupt handler\n");
 	}
-	int ahciDriver = registerService(global.syscallTable, AHCI_SERVICE_NAME, AHCIServiceHandler, (uintptr_t)ahciArray);
-	EXPECT(ahciDriver >= 0);
+	uintptr_t discoverPCI = systemCall_discoverPCI(0x01060100, 0xffffff00);
+	while(1){
+		uintptr_t bus, dev, func;
+		uintptr_t discoverPCI2 = systemCall_waitIOReturn(discoverPCI, 3, &bus, &dev, &func);
+		assert(discoverPCI == discoverPCI2);
+		AHCIInterruptArgument *arg = initAHCI(&ahciManager, bus, dev, func);
 
-	int a, p;
-	for(a = 0; a < ahciCount; a++){
+		int p;
 		for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
-			if(hasPort(ahciArray[a], p) == 0){
+			if(hasPort(arg, p) == 0){
 				continue;
 			}
-			if(identifyDisk(ahciDriver, toDiskCode(a, p), &ahciArray[a]->desc) == 0){
-				printk("identify hba %d port %d failed\n", a, p);
+			if(identifyDisk(ahciDriver, toDiskCode(arg->hbaIndex, p), &arg->desc) == 0){
+				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
 			}
-			readPartitions(AHCI_SERVICE_NAME, ahciDriver, toDiskCode(a, p).value, 0,
-				ahciArray[a]->desc.sectorCount, ahciArray[a]->desc.sectorSize);
+			readPartitions(AHCI_SERVICE_NAME, ahciDriver, toDiskCode(arg->hbaIndex, p).value, 0,
+			arg->desc.sectorCount, arg->desc.sectorSize);
 		}
-	}
-	printk("found %d AHCI devices\n", ahciCount);
-	while(1){
-		hlt(); // TODO: create FIFO and wait for interrupt
-	}
-	ON_ERROR;
-	ON_ERROR;
-	printk("cannot initialize AHCI driver\n");
-	while(1){
-		hlt();
 	}
 }

@@ -78,9 +78,8 @@ void pciDriver(void);
 // return index of found PCI configuration space
 // return 0xffff if no element matches
 // call this function with index + 1 to enumerate next one
-int systemCall_enumeratePCI(
-	uint8_t *bus, uint8_t *dev, uint8_t *func, // return values
-	int index, uint32_t classCode, uint32_t classMask // parameters
+uintptr_t systemCall_discoverPCI(
+	uint32_t classCode, uint32_t classMask // parameters
 );
 
 enum PCIConfigRegister{

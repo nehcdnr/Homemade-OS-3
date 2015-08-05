@@ -1,10 +1,9 @@
 #include"io.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
-#include"task/task.h"
+#include"interrupt/systemcall.h"
 #include"multiprocessor/processorlocal.h"
-#include"interrupt/handler.h"
-#include"interrupt/controller/pic.h"
+#include"resource/resource.h"
 
 // USB 1.0 (UHCI)
 /*
@@ -80,7 +79,9 @@ uint32_t readPCIConfig(uint8_t bus, uint8_t dev, uint8_t func, enum PCIConfigReg
 	return in32(0xcfc);
 }
 
-typedef struct PCIConfigSpaceList{
+typedef struct PCIConfigSpace{
+	Resource resource;
+
 	union PCIConfigSpaceLocation{
 		struct{
 			uint16_t function: 7;
@@ -99,24 +100,37 @@ typedef struct PCIConfigSpaceList{
 		};
 		uint8_t cacheLineSize, latencyTimer, headerType, bist;
 	}regs;
-
-	const struct PCIConfigSpaceList *next;
-}PCIConfigSpaceList;
+}PCIConfigSpace;
 static_assert(sizeof(struct PCIConfigRegisters) == 16);
 
-static int readConfigSpace(
-	uint8_t b, uint8_t d, uint8_t f,
-	const PCIConfigSpaceList **head
-){
+static int matchPCIClassCodes(Resource *resource, const uintptr_t *arguments){
+	PCIConfigSpace *cs = resource->instance;
+
+	if((cs->regs.classCodes & arguments[2]) == (arguments[1] & arguments[2])){
+		return 1;
+	}
+	return 0;
+}
+
+static int returnPCILocation(Resource *resource, uintptr_t *returnValues){
+	PCIConfigSpace *cs = resource->instance;
+	returnValues[0] = cs->location.bus;
+	returnValues[1] = cs->location.device;
+	returnValues[2] = cs->location.function;
+	return 3;
+}
+
+static PCIConfigSpace *readAndAddConfigSpace(uint8_t b, uint8_t d, uint8_t f){
 	uint32_t device_vendor = readPCIConfig(b, d, f, DEVICE_VENDOR);
 	if((device_vendor & 0xffff) == 0xffff){
-		return 0;
+		return NULL;
 	}
-	PCIConfigSpaceList *NEW(cs);
+	PCIConfigSpace *NEW(cs);
 	if(cs == NULL){
 		printk("cannot allocate memory for PCI configuration space\n");
-		return 0;
+		return NULL;
 	}
+	initResource(&cs->resource, cs, matchPCIClassCodes, returnPCILocation);
 	cs->location.bus = b;
 	cs->location.device = d;
 	cs->location.function = f;
@@ -125,34 +139,23 @@ static int readConfigSpace(
 	((uint32_t*)&cs->regs)[1] = readPCIConfig(b, d, f, STATUS_COMMAND);
 	((uint32_t*)&cs->regs)[2] = readPCIConfig(b, d, f, CLASS_REVISION);
 	((uint32_t*)&cs->regs)[3] = readPCIConfig(b, d, f, HEADER_TYPE);
-	cs->next = *head;
-	*head = cs;
-	return 1;
-}
-
-static void deleteConfigSpaceList(const PCIConfigSpaceList **cs){
-	const PCIConfigSpaceList *cs1 = (*cs), *cs2;
-	while(cs1 != NULL){
-		cs2 = cs1->next;
-		DELETE((void*)cs1);
-		cs1 = cs2;
-	}
-	*cs = NULL;
+	addResource(RESOURCE_PCI_DEVICE, &cs->resource);
+	return cs;
 }
 
 // return number of found configuration spaces
-static int enumeratePCIBridge(uint32_t bus, const PCIConfigSpaceList **csListHead){
-	int d;
+static int enumeratePCIBridge(uint32_t bus){
+	int dev;
 	int configSpaceCount = 0;
-	for(d = 0; d < 32; d++){
-		int f, functionCount = 1;
-		for(f = 0; f < functionCount; f++){
-			if(readConfigSpace(bus, d, f, csListHead) == 0){
+	for(dev = 0; dev < 32; dev++){
+		int func, functionCount = 1;
+		for(func = 0; func < functionCount; func++){
+			const PCIConfigSpace *cs = readAndAddConfigSpace(bus, dev, func);
+			if(cs == NULL){
 				continue;
 			}
 			configSpaceCount++;
-			const PCIConfigSpaceList *cs = *csListHead;
-			if(f == 0 && (cs->regs.headerType & 0x80)){
+			if(func == 0 && (cs->regs.headerType & 0x80)){
 				functionCount = 8;
 			}
 
@@ -160,9 +163,9 @@ static int enumeratePCIBridge(uint32_t bus, const PCIConfigSpaceList **csListHea
 			// bus, d, f, cs->regs.classCode, cs->regs.subclassCode, cs->regs.programInterface,
 			// cs->regs.deviceID, cs->regs.vendorID, cs->regs.headerType);
 			if(cs->regs.classCode == 6 && cs->regs.subclassCode == 4/*PCI bridge*/){
-				uint32_t busNumber = readPCIConfig(bus, d, f, BUS_NUMBER);
+				uint32_t busNumber = readPCIConfig(bus, dev, func, BUS_NUMBER);
 				if(((busNumber >> 8) & 0xff)/*secondary*/ != ((busNumber >> 16) & 0xff)/*subordinate*/){
-					configSpaceCount += enumeratePCIBridge(((busNumber >> 8) & 0xff), csListHead);
+					configSpaceCount += enumeratePCIBridge(((busNumber >> 8) & 0xff));
 				}
 			}
 			// USB
@@ -192,12 +195,9 @@ static int enumeratePCIBridge(uint32_t bus, const PCIConfigSpaceList **csListHea
 	return configSpaceCount;
 }
 
-static int enumerateHostBridge(const PCIConfigSpaceList **csListHead){
-	// TODO: lock csListHead if we want to reload driver
-	if(*csListHead != NULL){
-		printk("reload PCI configuration space");
-		deleteConfigSpaceList(csListHead);
-	}
+// TODO: function for reload driver
+
+static int enumerateHostBridge(void){
 	uint32_t classCode = readPCIConfig(0, 0, 0, CLASS_REVISION);
 	if(((classCode >> 24) & 0xff)/*class code*/ != 6 || ((classCode >> 16) & 0xff)/*subclass code*/ != 0){
 		printk("bus 0, device 0, function 0 is not PCI Host Bridge\n");
@@ -207,75 +207,22 @@ static int enumerateHostBridge(const PCIConfigSpaceList **csListHead){
 	int f, functionCount = (((headerType >> 16) & 0x80)? 8: 1);
 	int configSpaceCount = 0;
 	for(f= 0; f < functionCount; f++){
-		configSpaceCount += enumeratePCIBridge(f, csListHead);
+		configSpaceCount += enumeratePCIBridge(f);
 	}
 	return configSpaceCount;
 }
 
-const PCIConfigSpaceList **csArray = NULL;
-int csArrayLength = 0;
-
-static void enumeratePCIHandler(InterruptParam *p){
-	sti();
-	int index = (SYSTEM_CALL_ARGUMENT_0(p) & 0xffff);
-	if(index >= csArrayLength || index < 0){
-		SYSTEM_CALL_RETURN_VALUE_0(p) = 0xffffffff;
-		return;
-	}
-	uint32_t queryClassCode = SYSTEM_CALL_ARGUMENT_1(p);
-	uint32_t classMask = SYSTEM_CALL_ARGUMENT_2(p);
-	while(index < csArrayLength){
-		uint32_t csClassCode = csArray[index]->regs.classCodes;
-		if((csClassCode & classMask) == (queryClassCode & classMask)){
-			break;
-		}
-		index++;
-	}
-	if(index >= csArrayLength){
-		SYSTEM_CALL_RETURN_VALUE_0(p) = 0xffffffff;
-	}
-	else{
-		SYSTEM_CALL_RETURN_VALUE_0(p) =
-		(index & 0xffff) + (((uint32_t)csArray[index]->location.value) << 16);
-	}
-}
-
-int systemCall_enumeratePCI(
-	uint8_t *bus, uint8_t *dev, uint8_t *func,
-	int index, uint32_t classCode, uint32_t classMask
+uintptr_t systemCall_discoverPCI(
+	uint32_t classCode, uint32_t classMask
 ){
-	static int pciService = -1;
-	while(pciService < 0){
-		pciService = systemCall_queryService(PCI_SERVICE_NAME);
-		if(pciService >= 0){
-			break;
-		}
-		printk("warning: PCI service has not initalized...\n");
-		sleep(20);
-	}
-	uint32_t indexLow = (index & 0xffff);
-	uint32_t r = systemCall4(pciService, &indexLow, &classCode ,&classMask);
-	union PCIConfigSpaceLocation location = {value: r >> 16};
-	*bus = location.bus;
-	*dev = location.device;
-	*func = location.function;
-	return r & 0xffff;
+	uintptr_t type = RESOURCE_PCI_DEVICE;
+	return systemCall4(SYSCALL_DISCOVER_RESOURCE, &type, &classCode ,&classMask);
 }
 
 void pciDriver(void){
-	const PCIConfigSpaceList *csListHead = NULL, *cs;
-	csArrayLength = enumerateHostBridge(&csListHead);
-	NEW_ARRAY(csArray, csArrayLength);
-	int i;
-	cs = csListHead;
-	for(i = 0; i < csArrayLength; i++){
-		csArray[i] = cs;
-		cs = cs->next;
-	}
-	assert(cs == NULL);
-	printk("%d PCI config spaces enumerated\n", csArrayLength);
-	registerService(global.syscallTable, PCI_SERVICE_NAME, enumeratePCIHandler, 0);
+	int pciCount = enumerateHostBridge();
+	printk("%d PCI devices enumerated\n", pciCount);
 	while(1){
-		hlt();
+		sleep(1000);
 	}
 }
