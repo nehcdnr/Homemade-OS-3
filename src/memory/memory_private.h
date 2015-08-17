@@ -4,15 +4,16 @@
 typedef struct MemoryBlockManager MemoryBlockManager;
 // if failure, return UINTPTR_NULL
 // if success, return address and *size = allocated size, which is >= input value
-uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size);
+typedef uint8_t MemoryBlockFlags;
+uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
 extern const size_t minBlockManagerSize;
 extern const size_t maxBlockManagerSize;
 size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address);
 
 // return whether an address is a valid argument of releaseBlock
-int isReleasableBlock(MemoryBlockManager *m, uintptr_t address);
+int isReleasableAddress(MemoryBlockManager *m, uintptr_t address);
+// no concern with flags
 void releaseBlock(MemoryBlockManager *m, uintptr_t address);
-int checkAndReleaseBlock(MemoryBlockManager *m, uintptr_t address);
 
 uintptr_t getBeginAddress(MemoryBlockManager *m);
 
@@ -20,17 +21,19 @@ MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,
 	uintptr_t beginAddr,
-	uintptr_t endAddr,
+	uintptr_t initEndAddr,
 	uintptr_t maxEndAddr
 );
 int getMaxBlockCount(MemoryBlockManager *m);
 size_t getMaxBlockManagerSize(MemoryBlockManager *m);
 int getFreeBlockSize(MemoryBlockManager *m);
 
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size);
+#define WITH_PHYSICAL_PAGES_FLAG ((MemoryBlockFlags)1)
+uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags);
 int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, int releasePhysical);
 #define checkAndUnmapLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 0)
 #define checkAndReleaseLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 1)
+void releaseAllLinearBlocks(LinearMemoryManager *m);
 
 // 4K~1G
 // block is always aligned to MIN_BLOCK_SIZE

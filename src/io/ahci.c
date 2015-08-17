@@ -621,17 +621,17 @@ static_assert(HBA_MAX_PORT_COUNT < 0x1000);
 
 static AHCIInterruptArgument *searchHBAByPortIndex(AHCIManager *am, HBAPortIndex index){
 	AHCIInterruptArgument *a = NULL;
-	EXPECT(/*index.portIndex >= 0 && */index.portIndex < HBA_MAX_PORT_COUNT);
+	if(/*index.portIndex < 0 || */index.portIndex >= HBA_MAX_PORT_COUNT)
+		return NULL;
 	acquireLock(&am->lock);
-	EXPECT(/*index.hbaIndex >= 0 && */index.hbaIndex < am->ahciCount);
-	for(a = am->ahciList; a != NULL; a = a->next){
-		if(a->hbaIndex == index.hbaIndex){
-			break;
+	if(/*index.hbaIndex >= 0 && */index.hbaIndex < am->ahciCount){
+		for(a = am->ahciList; a != NULL; a = a->next){
+			if(a->hbaIndex == index.hbaIndex){
+				break;
+			}
 		}
 	}
-	ON_ERROR;
 	releaseLock(&am->lock);
-	ON_ERROR;
 	if(a == NULL){
 		return NULL;
 	}

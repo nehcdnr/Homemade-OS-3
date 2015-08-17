@@ -45,8 +45,9 @@ void releaseLock(Spinlock *spinlock){
 		return;
 	}
 	assert(spinlock->acquirable == NOT_ACQUIRABLE);
+	int interruptEnabled = spinlock->interruptFlag;
 	xchg8(&spinlock->acquirable, ACQUIRABLE);
-	if(spinlock->interruptFlag){
+	if(interruptEnabled){
 		sti();
 	}
 }
@@ -64,22 +65,19 @@ void testSpinlock(void){
 
 // barrier
 
-void resetBarrier(SpinlockBarrier *b){
-	b->lock = initialSpinlock;
+const Barrier initialBarrier = INITIAL_BARRIER;
+
+void resetBarrier(Barrier *b){
 	b->count = 0;
 }
 
-void waitAtBarrier(SpinlockBarrier *b, int threadCount){
-	acquireLock(&b->lock);
-	b->count++;
-	releaseLock(&b->lock);
-	int continueFlag = 1;
-	while(continueFlag){
-		acquireLock(&b->lock);
-		if(b->count >= threadCount){
-			continueFlag = 0;
-		}
-		releaseLock(&b->lock);
+void addBarrier(Barrier *b){
+	lock_add32(&b->count, 1);
+}
+
+void addAndWaitAtBarrier(Barrier *b, uint32_t threadCount){
+	lock_add32(&b->count, 1);
+	while(lock_cmpxchg32(&b->count, threadCount, threadCount) != threadCount){
 		pause();
 	}
 }

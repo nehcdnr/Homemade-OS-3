@@ -149,6 +149,7 @@ static void ps2Handler(InterruptParam *p){
 }
 
 static void readKeyboardHandler(InterruptParam *p){
+	sti();
 	PS2Data *ps2Data = (PS2Data*)(p->argument);
 	uintptr_t key;
 	if(readFIFO(ps2Data->sysFIFO, &key) == 0){

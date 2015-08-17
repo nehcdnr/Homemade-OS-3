@@ -13,6 +13,40 @@
 #include"interrupt/systemcall.h"
 #include"common.h"
 
+typedef struct TaskMemoryManager{
+	LinearMemoryManager linear;
+	Spinlock lock;
+	int referenceCount;
+}TaskMemoryManager;
+
+static TaskMemoryManager *kernelTaskMemory = NULL;
+
+static int addReference(TaskMemoryManager *m, int value){
+	acquireLock(&m->lock);
+	m->referenceCount += value;
+	int r = m->referenceCount;
+	releaseLock(&m->lock);
+	return r;
+}
+
+static TaskMemoryManager *createTaskMemory(PageManager *p, MemoryBlockManager *b){
+	TaskMemoryManager *NEW(m);
+	if(m == NULL)
+		return NULL;
+	assert(p != NULL);
+	m->linear.page = p;
+	m->linear.linear = b;
+	m->linear.physical = kernelLinear->physical;
+	m->lock = initialSpinlock;
+	m->referenceCount = 0;
+	return m;
+}
+
+static void deleteTaskMemory(TaskMemoryManager *m){
+	assert(m->referenceCount == 0 && isAcquirable(&m->lock));
+	DELETE(m);
+}
+
 typedef struct Task{
 	// context
 	// uint32_t ss;
@@ -122,7 +156,7 @@ static void callAfterTaskSwitchFunc(void){
 }
 
 // assume interrupt is disabled
-static void taskSwitch(void (*func)(Task *t, uintptr_t), uintptr_t arg){
+void taskSwitch(void (*func)(Task*, uintptr_t), uintptr_t arg){
 	TaskManager *tm = processorLocalTaskManager();
 	// putting into suspendQueue and switching to another task have to be atomic
 	tm->afterTaskSwitchFunc = func;
@@ -140,7 +174,7 @@ static void taskSwitch(void (*func)(Task *t, uintptr_t), uintptr_t arg){
 	//releaseLock(&readyQueue->lock);
 	setTSSKernelStack(tm->gdt, tm->current->espInterrupt);
 	if(tm->current != tm->oldTask){// otherwise, esp0 will be wrong value
-		contextSwitch(&tm->oldTask->esp0, tm->current->esp0, toCR3(getPageManager(tm->current->taskMemory)));
+		contextSwitch(&tm->oldTask->esp0, tm->current->esp0, toCR3(tm->current->taskMemory->linear.page));
 		// may go to startTask or return here
 	}
 	callAfterTaskSwitchFunc();
@@ -152,16 +186,12 @@ void startTask(void){
 	sti();
 }
 
-void suspendCurrent(void (*afterTaskSwitchFunc)(Task*, uintptr_t), uintptr_t arg){
-	taskSwitch(afterTaskSwitchFunc, arg);
-}
-
 void schedule(){
 	taskSwitch(NULL, 0);
 }
 
 static int initV8086Memory(void){
-	PageManager *p = getPageManager(processorLocalTask()->taskMemory);
+	PageManager *p = processorLocalTask()->taskMemory->linear.page;
 	PhysicalAddress biosLow = {0x0}, // ~ 0x500: BIOS reserved
 	v8086Stack = {V8086_STACK_BOTTOM}, // ~ 0x7c00: free
 	v8086Text = {V8086_STACK_TOP}, // ~ 0x80000: free (OS)
@@ -227,8 +257,7 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
 static Task *createTask(
-	uint32_t esp0, uint32_t espInterrupt, uintptr_t heapBegin, uintptr_t heapEnd,
-	PageManager *pageManager, MemoryBlockManager *linearMemory, int priority
+	uint32_t esp0, uint32_t espInterrupt, TaskMemoryManager *taskMemory, int priority
 ){
 	Task *NEW(t);
 	EXPECT(t != NULL);
@@ -240,8 +269,8 @@ static Task *createTask(
 	t->ioListLock = initialSpinlock;
 	t->pendingIOList = NULL;
 	t->finishedIOList = NULL;
-	t->taskMemory = createTaskMemory(pageManager, linearMemory, heapBegin, heapEnd);
-	EXPECT(t->taskMemory != NULL);
+	t->taskMemory = taskMemory;
+	addReference(taskMemory, 1);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
@@ -250,9 +279,7 @@ static Task *createTask(
 	t->prev = NULL;
 
 	return t;
-
-	ON_ERROR;
-	DELETE(t->ioSemaphore);
+	//deleteSemaphore(t->ioSemaphore);
 	ON_ERROR;
 	DELETE(t);
 	ON_ERROR;
@@ -261,18 +288,42 @@ static Task *createTask(
 
 #define KERNEL_STACK_SIZE ((size_t)8192)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
-static Task *createUserTask(
-	void (*eip0)(void),	int priority
-){
+
+static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pageManager, MemoryBlockManager *linearMemory){
+	// kernel task stack
+	void *stackBottom = allocateKernelPages(KERNEL_STACK_SIZE, KERNEL_PAGE);
+	EXPECT(stackBottom != NULL);
+	uintptr_t stackTop = ((uintptr_t)stackBottom) + KERNEL_STACK_SIZE;
+	// create task
+	EFlags eflags = getEFlags();
+	eflags.bit.interrupt = 0;
+	uintptr_t initialESP0 = stackTop -
+		initTaskStack(eflags.value, (uint32_t)eip0, stackTop);
+	TaskMemoryManager *tm = createTaskMemory(
+		pageManager, (MemoryBlockManager*)linearMemory);
+	EXPECT(tm != NULL);
+	Task *t = createTask(initialESP0, stackTop - 4, tm, priority);
+	EXPECT(t != NULL);
+	return t;
+	//DELETE(t);
+	ON_ERROR;
+	assert(tm->referenceCount == 0);
+	deleteTaskMemory(tm);
+	ON_ERROR;
+	checkAndReleaseKernelPages(stackBottom);
+	ON_ERROR;
+	return NULL;
+}
+
+Task *createUserTask(void (*eip0)(void), int priority){
 	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxBlockManagerSize, PAGE_SIZE);
 	const uintptr_t targetPageTable = targetBlockManager - sizeOfPageTableSet;
-	const uintptr_t targetESP0 = targetPageTable;
-	const uintptr_t targetStackBottom = targetESP0 - KERNEL_STACK_SIZE;
-
+	const uintptr_t heapEnd = targetPageTable;
 	assert(minBlockManagerSize <= PAGE_SIZE);
 	// 1. task PageManager
+	// IMPROVE: map to user space
 	PageManager *pageManager = createAndMapUserPageTable(
-		targetStackBottom, targetBlockManager + PAGE_SIZE, targetPageTable);
+		targetPageTable, targetBlockManager + PAGE_SIZE, targetPageTable);
 	EXPECT(pageManager != NULL);
 	// 2. task MemoryBlock
 	int ok = mapPage_L(pageManager, (void*)targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
@@ -281,49 +332,107 @@ static Task *createUserTask(
 		mapExistingPagesToKernel(pageManager, targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(mappedBlockManager != NULL);
 	MemoryBlockManager *_mappedBlockManager = createMemoryBlockManager((uintptr_t)mappedBlockManager,
-		maxBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, targetStackBottom);
+		maxBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
 	EXPECT(_mappedBlockManager == (void*)mappedBlockManager);
-	// 3. task kernel stack
-	ok = mapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
-	EXPECT(ok);
-	void *mappedStackBottom = mapExistingPagesToKernel(pageManager, targetStackBottom, KERNEL_STACK_SIZE, KERNEL_PAGE);
-	EXPECT(mappedStackBottom != NULL);
-	// 4. create task
-	EFlags eflags = getEFlags();
-	eflags.bit.interrupt = 0;
-	uintptr_t initialESP0 = targetESP0 -
-	initTaskStack(eflags.value, (uint32_t)eip0, ((uintptr_t)mappedStackBottom) + (targetESP0 - targetStackBottom));
-	Task *t = createTask(
-		initialESP0, targetESP0 - 4,
-		0, targetStackBottom,
-		pageManager, (MemoryBlockManager*)targetBlockManager,
-		priority
-	);
+	Task *t = createKernelTask(eip0, priority, pageManager, (MemoryBlockManager*)targetBlockManager);
 	EXPECT(t != NULL);
-	unmapKernelPages(mappedStackBottom);
 	unmapKernelPages(mappedBlockManager);
 	unmapUserPageTableSet(pageManager);
 	// 5. see startTask
 	return t;
-	//DELETE(t);
-	ON_ERROR;
-	unmapKernelPages(mappedStackBottom);
-	ON_ERROR;
-	unmapPage_L(pageManager, (void*)targetStackBottom, KERNEL_STACK_SIZE);
 	ON_ERROR;
 	ON_ERROR;
 	unmapKernelPages(mappedBlockManager);
 	ON_ERROR;
 	unmapPage_L(pageManager, (void*)targetBlockManager, PAGE_SIZE);
 	ON_ERROR;
-	deleteUserPageTable(pageManager);
+	releasePageTable(pageManager);
 	ON_ERROR;
 	return NULL;
 }
 
-Task *createKernelTask(void (*eip0)(void), int priority){
-	Task *t = createUserTask(eip0, priority);
-	return t;
+static int tryToCancelIO(Task *t, IORequest *ior);
+
+static void cancelAllIORequests(void){
+	Task *t = processorLocalTask();
+	// cancel or wait all IORequest
+	while(1){
+		acquireLock(&t->ioListLock);
+		IORequest *ior = (t->pendingIOList != NULL? t->pendingIOList: t->finishedIOList);
+		releaseLock(&t->ioListLock);
+		if(ior == NULL)
+			break;
+		if(tryToCancelIO(t, ior))
+			continue;
+		waitIO(t, ior);
+		if(tryToCancelIO(t, ior))
+			continue;
+		panic("cannot cancel All IO requests");
+	}
+}
+
+typedef struct TaskQueueAndLock{
+	TaskQueue queue;
+	Spinlock lock;
+}TaskQueueAndLock;
+
+static void clearTerminateQueue(TaskQueueAndLock *ql){
+	while(1){
+		acquireLock(&ql->lock);
+		Task *t = popQueue(&ql->queue);
+		releaseLock(&ql->lock);
+		if(t == NULL)
+			break;
+		assert(t->state == SUSPENDED);
+		//printk("clearTerminateQueue: %x\n",t);
+		// TODO: DLELTE(t->stack);
+		DELETE(t);
+	}
+}
+
+static void pushTerminateQueue(Task *oldTask, uintptr_t arg){
+	// cannot releaseKernelMemory(oldTask) here because interrupt is disabled
+	// push oldTask into the queue and delete it later
+	TaskQueueAndLock *ql = (TaskQueueAndLock*)arg;
+	acquireLock(&ql->lock);
+	pushQueue(&ql->queue, oldTask);
+	//printk("pushTerminateQueue: %x\n",oldTask);
+	releaseLock(&ql->lock);
+}
+
+void terminateCurrentTask(void){
+	static TaskQueueAndLock terminateQueue = {INITIAL_TASK_QUEUE, INITIAL_SPINLOCK};
+	clearTerminateQueue(&terminateQueue);
+	cancelAllIORequests();
+	Task *t = processorLocalTask();
+	// delete ioSemaphore
+	assert(getSemaphoreValue(t->ioSemaphore) == 0);
+	deleteSemaphore(t->ioSemaphore);
+	t->ioSemaphore = NULL;
+	// delete user space
+	TaskMemoryManager *tmm = t->taskMemory;
+	int refCnt = addReference(tmm, -1);
+	if(refCnt == 0){
+		//PageManager *p = tmm->linear.page;
+		releaseAllLinearBlocks(&tmm->linear);
+		cli();
+		// temporary page manager; see deleteOldTask
+		// addReference(kernelTaskMemory);
+		t->taskMemory = kernelTaskMemory;
+		//invalidatePageTable(p, kernelTaskMemory->linear.page);
+		sti();
+		deleteTaskMemory(tmm);
+		//releaseInvalidatedPageTable(p);
+	}
+	else{
+		cli();
+		// addReference(kernelTaskMemory);
+		t->taskMemory = kernelTaskMemory;
+		sti();
+	}
+	cli();
+	taskSwitch(pushTerminateQueue, (uintptr_t)&terminateQueue);
+	assert(0); // never return
 }
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
@@ -344,7 +453,7 @@ Task *currentTask(TaskManager *tm){
 }
 
 LinearMemoryManager *getTaskLinearMemory(Task *t){
-	return getLinearMemoryManager(t->taskMemory);
+	return &t->taskMemory->linear;
 }
 
 static void taskDefinedHandler(InterruptParam *p){
@@ -358,13 +467,14 @@ static void taskDefinedHandler(InterruptParam *p){
 
 TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
+	assert(kernelTaskMemory != NULL);
 	// each processor needs an idle task
 	// create a task for current running bootstrap thread. not need to initialize eip and esp
 	TaskManager *NEW(tm);
 	if(tm == NULL){
-		panic("cannot initialize bootstrap task");
+		panic("cannot initialize task manager");
 	}
-	tm->current = createTask(0, 0, 0, 0, kernelPageManager, NULL, NUMBER_OF_PRIORITIES - 1);
+	tm->current = createTask(/*esp0*/0, /*espinterrupt*/0, kernelTaskMemory, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
@@ -396,6 +506,20 @@ void resumeTaskByIO(IORequest *ior){
 	releaseSemaphore(t->ioSemaphore);
 }
 
+static int searchIOList(Task *t, IORequest *ior){
+	int found = 0;
+	acquireLock(&t->ioListLock);
+	IORequest *i;
+	for(i = t->pendingIOList; found == 0 && i != NULL; i = i->next){
+		found += (i == ior);
+	}
+	for(i = t->finishedIOList; found == 0 && i != NULL; i = i->next){
+		found += (i == ior);
+	}
+	releaseLock(&t->ioListLock);
+	return found;
+}
+
 IORequest *waitIO(Task *t, IORequest *expected){
 	// assume this is the only function acquiring ioSemaphore
 	int v = getSemaphoreValue(t->ioSemaphore);
@@ -423,7 +547,12 @@ IORequest *waitIO(Task *t, IORequest *expected){
 static void waitIOHandler(InterruptParam *p){
 	sti();
 	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
-	ior = waitIO(processorLocalTask(), ior);
+	Task *t = processorLocalTask();
+	if(searchIOList(t, ior) == 0){
+		SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
+		return;
+	}
+	ior = waitIO(t, ior);
 	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT];
 	rv[0] = (uintptr_t)ior;
 	int returnCount = ior->finish(ior, rv + 1);
@@ -461,32 +590,28 @@ uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
 	return rv0;
 }
 
-static void cacnelIOHandler(InterruptParam *p){
-	sti();
-	IORequest *ioRequest = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p), *i;
-	Task *t = processorLocalTask();
-	IORequest **originList = NULL;
-	acquireLock(&t->ioListLock);
-	for(i = t->pendingIOList; i != NULL && originList == NULL; i = i->next){
-		if(i == ioRequest){
-			originList = &t->pendingIOList;
-		}
-	}
-	for(i = t->finishedIOList; i != NULL && originList == NULL; i = i->next){
-		if(i == ioRequest){
-			originList = &t->finishedIOList;
-		}
-	}
-	int ok = 0;
-	if(originList != NULL){
-		REMOVE_FROM_DQUEUE(ioRequest);
-		ok = ioRequest->cancellable;
+static int tryToCancelIO(Task *t, IORequest *ior){
+	//FIXME: synchronize with resumeTaskByIO	acquireLock(&t->ioListLock);
+	int ok = ior->cancellable;
+	if(ok){
+		REMOVE_FROM_DQUEUE(ior);
 	}
 	releaseLock(&t->ioListLock);
 	if(ok){
-		ioRequest->cancel(ioRequest);
+		ior->cancel(ior);
 	}
-	SYSTEM_CALL_RETURN_VALUE_0(p) = ok;
+	return ok;
+}
+
+static void cacnelIOHandler(InterruptParam *p){
+	sti();
+	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
+	Task *t = processorLocalTask();
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (
+		searchIOList(t, ior)?
+		(unsigned)tryToCancelIO(t, ior):
+		0
+	);
 }
 
 int systemCall_cancelIO(uintptr_t io){
@@ -520,8 +645,8 @@ void initIORequest(
 static void allocateHeapHandler(InterruptParam *p){
 	sti();
 	uintptr_t size = SYSTEM_CALL_ARGUMENT_0(p);
-	PageAttribute attribute  =SYSTEM_CALL_ARGUMENT_1(p);
-	void *ret = allocatePages(getLinearMemoryManager(processorLocalTask()->taskMemory), size, attribute);
+	PageAttribute attribute = SYSTEM_CALL_ARGUMENT_1(p);
+	void *ret = allocatePages(&processorLocalTask()->taskMemory->linear, size, attribute);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ret;
 }
 
@@ -534,7 +659,7 @@ void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribute){
 static void releaseHeapHandler(InterruptParam *p){
 	sti();
 	uintptr_t address = SYSTEM_CALL_ARGUMENT_0(p);
-	int ret = checkAndReleasePages(getLinearMemoryManager(processorLocalTask()->taskMemory), (void*)address);
+	int ret = checkAndReleasePages(&processorLocalTask()->taskMemory->linear, (void*)address);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = ret;
 }
 
@@ -548,7 +673,7 @@ int systemCall_releaseHeap(void *address){
 static void translatePageHandler(InterruptParam *p){
 	uintptr_t address = SYSTEM_CALL_ARGUMENT_0(p);
 	PhysicalAddress ret = checkAndTranslatePage(
-		getLinearMemoryManager(processorLocalTask()->taskMemory), (void*)address);
+		&processorLocalTask()->taskMemory->linear, (void*)address);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = ret.value;
 }
 
@@ -568,7 +693,10 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	for(p = 0; p < NUMBER_OF_PRIORITIES; p++){
 		globalQueue->taskQueue[p] = initialTaskQueue;
 	}
-
+	kernelTaskMemory = createTaskMemory(kernelLinear->page, kernelLinear->linear/*NULL*/);
+	if(kernelTaskMemory == NULL){
+		panic("cannot create kernel task memory");
+	}
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_CANCEL_IO, cacnelIOHandler, 0);
@@ -577,3 +705,45 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	registerSystemCall(systemCallTable, SYSCALL_TRANSLATE_PAGE, translatePageHandler, 0);
 	//initSemaphore(systemCallTable);
 }
+
+#ifndef NDEBUG
+int getFreeBlockSize(MemoryBlockManager *m);
+void releaseAllLinearBlocks(LinearMemoryManager *m);
+void testMemoryTask(void){
+	int a,loop;
+	int r = 47;
+	//sleep(10);
+	for(loop=0;loop<15;loop++){//hlt();continue;
+
+		LinearMemoryManager *lm = &processorLocalTask()->taskMemory->linear;
+		// size_t phyFr[4], linFr[4];
+		// phyFr[0] = getFreeBlockSize(kernelLinear->physical);
+		// linFr[0] = getFreeBlockSize(lm->linear);
+		releaseAllLinearBlocks(lm);
+		// phyFr[1] = getFreeBlockSize(kernelLinear->physical);
+		// linFr[1] = getFreeBlockSize(lm->linear);
+
+		for(a=0;a<5;a++){
+			unsigned s = (r&0xffff)*PAGE_SIZE;
+			r=(r*7+5)%101+1;
+			uint8_t *buf = systemCall_allocateHeap(s, KERNEL_PAGE);
+			if(buf==NULL)
+				continue;
+			unsigned b;
+			for(b=0;b<30&&b<s;b++){
+				buf[b] = buf[s-1-b]= 'Z';
+			}
+		}
+		/*
+		phyFr[2] = getFreeBlockSize(kernelLinear->physical);
+		linFr[2] = getFreeBlockSize(lm->linear);
+		releaseAllLinearBlocks(lm);
+		phyFr[3] = getFreeBlockSize(kernelLinear->physical);
+		linFr[3] = getFreeBlockSize(lm->linear);
+		printk("physical Free: %x %x %x %x\n", phyFr[0], phyFr[1], phyFr[2], phyFr[3]);
+		printk("linear Free  : %x %x %x %x\n", linFr[0], linFr[1], linFr[2], linFr[3]);
+		*/
+	}
+	terminateCurrentTask();
+}
+#endif

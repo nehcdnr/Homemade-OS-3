@@ -52,19 +52,19 @@ static void initMultiprocessor(
 	int isBSP, InterruptTable *t,
 	LAPIC *lapic, IOAPIC *ioapic
 ){
-	static SpinlockBarrier barrier1, barrier2;
+	static Barrier barrier1 = INITIAL_BARRIER, barrier2 = INITIAL_BARRIER;
 	if(isBSP){
 		resetBarrier(&barrier1);
 		resetBarrier(&barrier2);
 		wakeupOtherProcessors(lapic, ioapic);
 	}
 	// synchronize
-	waitAtBarrier(&barrier1, getNumberOfLAPIC(ioapic));
+	addAndWaitAtBarrier(&barrier1, getNumberOfLAPIC(ioapic));
 	if(isBSP){
 		assert(t == global.idt);
 		initMultiprocessorPaging(t);
 	}
-	waitAtBarrier(&barrier2, getNumberOfLAPIC(ioapic));
+	addAndWaitAtBarrier(&barrier2, getNumberOfLAPIC(ioapic));
 }
 
 PIC *castAPIC(APIC *apic){

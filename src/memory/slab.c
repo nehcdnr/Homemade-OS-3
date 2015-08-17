@@ -3,6 +3,7 @@
 #include"memory.h"
 #include"memory_private.h"
 #include"multiprocessor/spinlock.h"
+#include"assembly/assembly.h"
 // MemoryManager functions
 
 typedef union MemoryUnit{
@@ -128,11 +129,12 @@ void *allocateSlab(SlabManager *m, size_t size){
 		}
 	}while(0);
 	releaseLock(&(m->lock));
-	assert(((uintptr_t)r) % MIN_BLOCK_SIZE != 0);
+	assert(r == NULL || ((uintptr_t)r) % MIN_BLOCK_SIZE != 0);
 	return r;
 }
 
 void releaseSlab(SlabManager *m, void *address){
+	assert(getEFlags().bit.interrupt == 1);
 	uintptr_t a = (uintptr_t)address;
 	if(a % MIN_BLOCK_SIZE == 0){
 		int ok = m->releasePages(address);

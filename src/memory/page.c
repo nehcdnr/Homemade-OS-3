@@ -239,13 +239,15 @@ uint32_t toCR3(PageManager *p){
 
 static Spinlock *pdLockByLinearAddress(PageManager *p, uintptr_t linear){
 	uintptr_t hashValue = PD_INDEX(linear) % NUMBER_OF_PAGE_LOCKS;
+	//if(linear >= KERNEL_LINEAR_BEGIN && linear < KERNEL_LINEAR_END){
+	//}
 	return p->pdLock + hashValue;
 }
 
 static PageTable *pageTableByLinearAddress(PageManager *p, uintptr_t linear){
-
 	if(linear >= KERNEL_LINEAR_BEGIN && linear < KERNEL_LINEAR_END){
-		assert(p == kernelPageManager);// TODO:
+		// assert(p == kernelPageManager);
+		// TODO:
 		return kernelPageManager->page->pt + PD_INDEX_ADD_BASE(kernelPageManager, linear);
 	}
 	return p->page->pt + PD_INDEX_ADD_BASE(p, linear);
@@ -259,7 +261,7 @@ static PageTableAttribute *linearAddressOfPageTableAttribute(PageManager *p, uin
 
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
 	size_t p_size = size;
-	PhysicalAddress p_address = {allocateBlock(physical, &p_size)};
+	PhysicalAddress p_address = {allocateBlock(physical, &p_size, 0)};
 	//assert(p_address.value != UINTPTR_NULL);
 	if(p_address.value == UINTPTR_NULL){
 		p_address.value = UINTPTR_NULL;
@@ -280,7 +282,7 @@ static PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress, in
 #endif
 	PageTable *pt = pageTableByLinearAddress(p, linearAddress);
 	if(isPresent != isPTEPresent(pt->entry + i2)){
-		panic("translatePage: page present bit differs to expected");
+		panic("translatePage: page present bit differs from expected");
 	}
 	return getPTEAddress(pt->entry + i2);
 }
@@ -557,14 +559,13 @@ static void sendINVLPG_disabled(
 }
 
 struct INVLPGArguments{
-	// int finishCount;
 	volatile uint32_t cr3;
 	volatile uintptr_t linearAddress;
 	volatile size_t size;
 	volatile int isGlobal;
-	SpinlockBarrier barrier;
+	Barrier barrier;
 };
-struct INVLPGArguments args;
+static struct INVLPGArguments args = {0, 0, 0, 0, INITIAL_BARRIER};
 static InterruptVector *invlpgVector = NULL;
 static void (*sendINVLPG)(uint32_t cr3, uintptr_t linearAddress, size_t size) = sendINVLPG_disabled;
 
@@ -573,18 +574,14 @@ static void invlpgHandler(InterruptParam *p){
 		invlpgOrSetCR3(args.linearAddress, args.size);
 	}
 	processorLocalPIC()->endOfInterrupt(p);
-	waitAtBarrier(&(args.barrier), 1); // do not wait for the thread generating this interrupt
+	addBarrier(&(args.barrier)); // do not wait for the thread generating this interrupt
 	sti();
 }
 
 static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t size){
 	static Spinlock lock = INITIAL_SPINLOCK;
 	// disabling interrupt during sendINVLPG may result in deadlock
-	EFlags ef = getEFlags();
-	if(ef.bit.interrupt != 1){
-		printk("invlpg with interrupt disabled %x %x\n", getMemoryMappedLAPICID(), ef.value);
-	}
-	assert(ef.bit.interrupt == 1);
+	assert(getEFlags().bit.interrupt == 1);
 	acquireLock(&lock);
 	{
 		PIC *pic = processorLocalPIC();
@@ -595,7 +592,8 @@ static void sendINVLPG_enabled(uint32_t cr3, uintptr_t linearAddress, size_t siz
 		resetBarrier(&(args.barrier));
 		pic->interruptAllOther(pic, invlpgVector);
 		invlpgOrSetCR3(linearAddress, size);
-		waitAtBarrier(&(args.barrier), pic->numberOfProcessors); // see invlpgHandler
+		addAndWaitAtBarrier(&(args.barrier), pic->numberOfProcessors); // see invlpgHandler
+		// assert(args.barrier.count == (unsigned)pic->numberOfProcessors);
 	}
 	releaseLock(&lock);
 }
@@ -607,20 +605,26 @@ void initMultiprocessorPaging(InterruptTable *t){
 
 // assume the linear memory manager has checked the arguments
 void _unmapPage(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
+	if(size == 0)
+		return;
+
 	size_t s = size;
-	while(s != 0){
+	do{
 		s -= PAGE_SIZE;
 		invalidatePage(p, ((uintptr_t)linearAddress) + s);
-	}
+	}while(s != 0);
+
 	sendINVLPG(p->physicalPD.value, (uintptr_t)linearAddress, size);
+
 	// the pages are not yet released by linear memory manager
 	// it is safe to keep address in PTE, and
 	// separate invalidatePage & releaseInvalidatedPage
 	s = size;
-	while(s != 0){
+	do{
 		s -= PAGE_SIZE;
 		releaseInvalidatedPage(p, physical, ((uintptr_t)linearAddress) + s, releasePhysical);
-	}
+	}while(s != 0);
+
 }
 
 // user page table
@@ -635,7 +639,7 @@ PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reserve
 	assert(reservedBase % PAGE_SIZE == 0 && reservedEnd % PAGE_SIZE == 0);
 	uintptr_t evalSize = evaluateSizeOfPageTableSet(reservedBase, reservedEnd);
 	assert(tablesLoadAddress >= reservedBase && tablesLoadAddress + sizeOfPageTableSet <= reservedEnd);
-	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE);
+	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE && evalSize % PAGE_SIZE == 0);
 
 	PageManager *NEW(p);
 	EXPECT(p != NULL);
@@ -656,20 +660,34 @@ PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reserve
 	return NULL;
 }
 
-// assume the page manager remains only reservedBase ~ reservedEnd; the other pages do not need to be released
-void deleteUserPageTable(PageManager *p){
-	assert(getCR3() == p->physicalPD.value);
+// assume the page manager remains only reservedBase ~ reservedEnd
+// the other pages have been released by releaseAllLinearBlocks
+// TODO: release page directory
+void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
+	assert(getCR3() != toCR3(deletePage) || getEFlags().bit.interrupt == 0);
+
 	PhysicalAddress reservedPhysical[MAX_USER_RESERVED_PAGES];
-	assert(p->reservedBase % PAGE_SIZE == 0 && p->reservedEnd % PAGE_SIZE == 0);
-	uintptr_t r;
-	int i;
-	for(r = p->reservedBase, i = 0; r < p->reservedEnd; r += PAGE_SIZE, i++){
-		reservedPhysical[i] = translatePage(p, r, 1);
+	uintptr_t evalSize = evaluateSizeOfPageTableSet(deletePage->reservedBase, deletePage->reservedEnd);
+	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE && evalSize % PAGE_SIZE == 0);
+
+	uintptr_t i;
+	for(i = 0; i * PAGE_SIZE < evalSize; i++){
+		reservedPhysical[i] = translatePage(deletePage, ((uintptr_t)deletePage->page) + i * PAGE_SIZE, 1);
 	}
-	for(r = p->reservedBase, i = 0; r < p->reservedEnd; r += PAGE_SIZE, i++){
+	if(loadPage != NULL){
+		setCR3(toCR3(loadPage));
+	}
+	for(i = 0; i * PAGE_SIZE < evalSize; i++){
 		releasePhysicalPages(reservedPhysical[i]);
 	}
-	DELETE(p);
+}
+
+void releaseInvalidatedPageTable(PageManager *deletePage){
+	DELETE(deletePage);
+}
+
+void releasePageTable(PageManager *deletePage){
+	invalidatePageTable(deletePage, NULL);
 }
 
 int _mapPage_LP(
@@ -688,6 +706,7 @@ int _mapPage_LP(
 	}
 	EXPECT(s >= size);
 	return 1;
+
 	ON_ERROR;
 	_unmapPage_LP(p, physical, linearAddress, s);
 	return 0;
@@ -713,10 +732,10 @@ int _mapPage_L(
 		}
 	}
 	EXPECT(s >= size);
-
 	return 1;
 
 	ON_ERROR;
+
 	_unmapPage_L(p, physical, linearAddress, s);
 	return 0;
 }

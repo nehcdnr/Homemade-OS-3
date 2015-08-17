@@ -18,10 +18,7 @@ typedef struct __attribute__((__packed__)){
 
 typedef struct __attribute__((__packed__)){
 	FATExtBootRecord ext;
-	uint8_t bootCode[448];
 }FAT12BootRecord;
-
-static_assert(sizeof(FAT12BootRecord) == 512 - 36 - 2);
 
 typedef struct __attribute((__packed__)){
 	uint32_t sectorsPerFAT32;
@@ -32,35 +29,39 @@ typedef struct __attribute((__packed__)){
 	uint16_t backupBootSector;
 	uint8_t reserved[12];
 	FATExtBootRecord ext;
-	uint8_t bootCode[420];
 }FAT32BootRecord;
 
-static_assert(sizeof(FAT32BootRecord) == sizeof(FAT12BootRecord));
-
 typedef struct __attribute__((__packed__)){
-	uint8_t jmp[3];
-	uint8_t oemName[8];
-	uint16_t bytesPerSector;
-	uint8_t sectorsPerCluster;
-	uint16_t reservedSectorCount;
-	uint8_t fatCount;
-	uint16_t rootEntryCount;
-	uint16_t sectorCount;
-	uint8_t mediaType;
-	uint16_t sectorsPerFAT;
-	uint16_t sectorsPerTrack;
-	uint16_t headCount;
-	uint32_t hiddenSectorCount;
-	uint32_t SectorCount2;
-	// extended boot record
+	struct __attribute__((__packed__)){
+		uint8_t jmp[3];
+		uint8_t oemName[8];
+		uint16_t bytesPerSector;
+		uint8_t sectorsPerCluster;
+		uint16_t reservedSectorCount;
+		uint8_t fatCount;
+		uint16_t rootEntryCount;
+		uint16_t sectorCount;
+		uint8_t mediaType;
+		uint16_t sectorsPerFAT;
+		uint16_t sectorsPerTrack;
+		uint16_t headCount;
+		uint32_t hiddenSectorCount;
+		uint32_t SectorCount2;
+	};
 	union{
-		FAT12BootRecord ebr12;
-		FAT32BootRecord ebr32;
+		struct{
+			FAT12BootRecord ebr12;
+			uint8_t fat12bootCode[448];
+		};
+		struct{
+			FAT32BootRecord ebr32;
+			uint8_t fat32BootCode[420];
+		};
 	};
 	uint16_t bootSignature; // 0xaa55
-}FATBootRecord;
+}FATBootSector;
 
-static_assert(sizeof(FATBootRecord) == 512);
+static_assert(sizeof(FATBootSector) == 512);
 
 typedef struct __attribute__((__packed__)){
 	uint8_t fileName[11];
@@ -113,37 +114,7 @@ struct DiskParameter{
 	uintptr_t sectorSize;
 };
 
-static void iterateDirectory(uint32_t beginClusterSector,
-	uint32_t sectorsPerCluster, const struct DiskParameter *dp){
-	const uint32_t clusterSize = sectorsPerCluster * dp->sectorSize;
-	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
-	EXPECT(rootDir != NULL);
-	uintptr_t rwDisk = systemCall_rwDiskSync(dp->diskDriver,
-		(uintptr_t)rootDir, beginClusterSector, sectorsPerCluster,
-		dp->diskCode, 0);
-	EXPECT(rwDisk != IO_REQUEST_FAILURE);
-	unsigned p;
-	for(p = 0; p < clusterSize / sizeof(FATDirEntry); p++){
-		if(rootDir[p].fileName[0] == 0)break;
-		if(rootDir[p].fileName[0] == 0xe5)continue;
-		int b;
-		for(b = 0; b < 11; b++){
-			printk("%c", rootDir[p].fileName[b]);
-		}
-		if(rootDir[p].attribute & FAT_DIRECTORY)
-			printk(" dir");
-		printk("\n");
-	}
-	systemCall_releaseHeap(rootDir);
-	return;
-	ON_ERROR;
-	systemCall_releaseHeap(rootDir);
-	ON_ERROR;
-	printk("cannot iterate directory\n");
-	return;
-};
-
-static uint32_t *loadFAT32(const FATBootRecord *br, const struct DiskParameter *dp){
+static uint32_t *loadFAT32(const FATBootSector *br, const struct DiskParameter *dp){
 	const size_t fatSize = br->ebr32.sectorsPerFAT32 * br->bytesPerSector;
 	const uint64_t fatBeginLBA = dp->startLBA + br->reservedSectorCount;
 	const uint32_t sectorsPerPage = PAGE_SIZE / dp->sectorSize;
@@ -165,12 +136,42 @@ static uint32_t *loadFAT32(const FATBootRecord *br, const struct DiskParameter *
 	systemCall_releaseHeap(fat);
 	ON_ERROR;
 	return NULL;
-
 }
 
+static void iterateDirectory(uint32_t beginClusterSector,
+	uint32_t sectorsPerCluster, const struct DiskParameter *dp){
+	const uint32_t clusterSize = sectorsPerCluster * dp->sectorSize;
+	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
+	EXPECT(rootDir != NULL);
+	uintptr_t rwDisk = systemCall_rwDiskSync(dp->diskDriver,
+		(uintptr_t)rootDir, beginClusterSector, sectorsPerCluster,
+		dp->diskCode, 0);
+	EXPECT(rwDisk != IO_REQUEST_FAILURE);
+	unsigned p;
+	for(p = 0; p < clusterSize / sizeof(FATDirEntry); p++){
+		if(rootDir[p].fileName[0] == 0)break;
+		if(rootDir[p].fileName[0] == 0xe5)continue;
+		int b;
+		for(b = 0; b < 11; b++){
+			printk("%c", rootDir[p].fileName[b]);
+		}
+		if(rootDir[p].attribute & FAT_DIRECTORY)
+			printk(" (dir)");
+		printk(" cluster %d %d size %d", rootDir[p].clusterHigh, rootDir[p].clusterLow, rootDir[p].fileSize);
+		printk("\n");
+	}
+	systemCall_releaseHeap(rootDir);
+	return;
+	ON_ERROR;
+	systemCall_releaseHeap(rootDir);
+	ON_ERROR;
+	printk("cannot iterate directory\n");
+	return;
+};
+
 static int readFATDisk(const struct DiskParameter *dp){
-	const size_t readSize = CEIL(sizeof(FATBootRecord), dp->sectorSize);
-	FATBootRecord *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
+	const size_t readSize = CEIL(sizeof(FATBootSector), dp->sectorSize);
+	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(br != NULL);
 	MEMSET0(br);
 	uintptr_t rwDisk = systemCall_rwDiskSync(

@@ -2,6 +2,7 @@
 #include"common.h"
 #include"memory.h"
 #include"memory_private.h"
+#include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"
 
 enum MemoryBlockStatus{
@@ -16,16 +17,20 @@ typedef uint16_t sizeorder_t;
 typedef struct MemoryBlock{
 	sizeorder_t sizeOrder;
 	enum MemoryBlockStatus status;
+	// for linear memory,
+	// this value is indicates whether the linear block is mapped to physical pages.
+	// for physical memory, it is 0
+	uint8_t flags: 8;
 	struct MemoryBlock**prev, *next;
 }MemoryBlock;
 
 static_assert(sizeof(MemoryBlock) == 12);
 
 struct MemoryBlockManager{
-	uintptr_t beginAddress;
-	int blockCount, maxBlockCount;
-	size_t freeSize;
 	Spinlock lock;
+	uintptr_t beginAddress;
+	int initialBlockCount, blockCount, maxBlockCount;
+	size_t freeSize;
 	MemoryBlock *freeBlock[MAX_BLOCK_ORDER - MIN_BLOCK_ORDER + 1];
 	MemoryBlock block[0];
 };
@@ -35,12 +40,13 @@ static_assert(sizeof(*((MemoryBlockManager*)NULL)->block) == sizeof(MemoryBlock)
 static void initMemoryBlock(MemoryBlock *mb){
 	mb->sizeOrder = MIN_BLOCK_ORDER;
 	mb->status = MEMORY_USING;
+	mb->flags = 0;
 	mb->next = NULL;
 	mb->prev = NULL;
 }
 
 static uintptr_t getAddress(MemoryBlockManager *m, MemoryBlock *mb){
-	return (((uintptr_t)(mb - (m->block))) << MIN_BLOCK_ORDER) + m->beginAddress;
+	return (((uintptr_t)(mb - m->block)) << MIN_BLOCK_ORDER) + m->beginAddress;
 }
 
 static int isInRange(MemoryBlockManager *m, uintptr_t address){
@@ -82,7 +88,7 @@ static size_t ceilAllocateOrder(size_t s){
 	return i;
 }
 
-static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
+static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags){
 	assert(isAcquirable(&m->lock) == 0);
 	// assert(size >= MIN_BLOCK_SIZE);
 	size_t i = ceilAllocateOrder(*size), i2;
@@ -100,6 +106,7 @@ static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 	REMOVE_FROM_DQUEUE(b);
 	assert(b->status == MEMORY_FREE_OR_COVERED);
 	b->status = MEMORY_USING;
+	b->flags = flags;
 	while(i2 != i){
 		// split b and get buddy
 		b->sizeOrder--;
@@ -117,10 +124,10 @@ static uintptr_t allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 	return ret;
 }
 
-uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size){
+uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags){
 	uintptr_t r;
 	acquireLock(&m->lock);
-	r = allocateBlock_noLock(m, size);
+	r = allocateBlock_noLock(m, size, flags);
 	releaseLock(&m->lock);
 	return r;
 }
@@ -130,11 +137,7 @@ size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address){
 	return (1 << b->sizeOrder);
 }
 
-static int isReleasableBlock_noLock(MemoryBlockManager *m, uintptr_t address){
-	if(isInRange(m, address) == 0){
-		return 0;
-	}
-	MemoryBlock *b1 = getBlock(m, address);
+static int isReleasableBlock_noLock(MemoryBlockManager *m, MemoryBlock *b1){
 #ifndef NDEBUG
 	MemoryBlock *b2 = getBuddy(m, b1);
 #endif
@@ -164,10 +167,17 @@ static int isReleasableBlock_noLock(MemoryBlockManager *m, uintptr_t address){
 	}
 }
 
-int isReleasableBlock(MemoryBlockManager *m, uintptr_t address){
+static int isReleasableAddress_noLock(MemoryBlockManager *m, uintptr_t address){
+	if(isInRange(m, address) == 0){
+		return 0;
+	}
+	return isReleasableBlock_noLock(m, getBlock(m, address));
+}
+
+int isReleasableAddress(MemoryBlockManager *m, uintptr_t address){
 	int r = 0;
 	acquireLock(&m->lock);
-	r = isReleasableBlock_noLock(m, address);
+	r = isReleasableAddress_noLock(m, address);
 	releaseLock(&m->lock);
 	return r;
 }
@@ -182,6 +192,7 @@ static void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 	assert(IS_IN_DQUEUE(b) == 0);
 	assert(b->status == MEMORY_USING || b->status == MEMORY_RELEASING);
 	b->status = MEMORY_FREE_OR_COVERED;
+	b->flags = 0;
 	while(b->sizeOrder < MAX_BLOCK_ORDER){
 		MemoryBlock *buddy = getBuddy(m, b);
 		if(buddy == NULL)
@@ -208,7 +219,7 @@ static void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 
 void releaseBlock(MemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->lock);
-	assert(isReleasableBlock_noLock(m, address));
+	assert(isReleasableAddress_noLock(m, address));
 	releaseBlock_noLock(m, 	getBlock(m, address));
 	releaseLock(&m->lock);
 }
@@ -222,11 +233,12 @@ static int isUsingBlock_noLock(MemoryBlockManager *m, uintptr_t address){
 		b2 = getBuddy(m, b1);
 		// b1 is not covered by other blocks
 		if(b2 == NULL || b2->sizeOrder <= b1->sizeOrder){
-			return (b1->status == MEMORY_USING);
+			break;
 		}
 		assert(b2 < b1);
 		b1 = b2;
 	}
+	return (b1->status == MEMORY_USING);
 }
 
 const size_t minBlockManagerSize = sizeof(MemoryBlockManager);
@@ -245,17 +257,28 @@ int getFreeBlockSize(MemoryBlockManager *m){
 	return m->freeSize;
 }
 
+static void resetBlockArray(MemoryBlockManager *bm){
+	int i;
+	bm->blockCount = bm->initialBlockCount;
+	bm->freeSize = 0;
+	for(i = 0; i < bm->blockCount; i++){
+		initMemoryBlock(&bm->block[i]);
+	}
+	for(i = 0; i <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; i++){
+		bm->freeBlock[i] = NULL;
+	}
+}
+
 MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,
 	uintptr_t beginAddr,
-	uintptr_t endAddr,
+	uintptr_t initEndAddr,
 	uintptr_t maxEndAddr
 ){
 	assert(manageBase % sizeof(uintptr_t) == 0);
 	MemoryBlockManager *bm = (MemoryBlockManager*)manageBase;
 	bm->lock = initialSpinlock;
-	bm->freeSize = 0;
 	assert(beginAddr % MIN_BLOCK_SIZE == 0);
 	//assert(UINTPTR_NULL < beginAddr || UINTPTR_NULL >= maxEndAddr);
 	bm->beginAddress = beginAddr;
@@ -265,15 +288,8 @@ MemoryBlockManager *createMemoryBlockManager(
 		panic("buddy memory manager initialization error");
 		return bm == NULL? ((void*)0xffffffff): NULL;
 	}
-	bm->blockCount = (endAddr - bm->beginAddress) / MIN_BLOCK_SIZE;
-	int i;
-	for(i = 0; i < bm->blockCount; i++){
-		initMemoryBlock(&bm->block[i]);
-	}
-	for(i = 0; i <= MAX_BLOCK_ORDER - MIN_BLOCK_ORDER; i++){
-		bm->freeBlock[i] = NULL;
-	}
-
+	bm->initialBlockCount = (initEndAddr - bm->beginAddress) / MIN_BLOCK_SIZE;
+	resetBlockArray(bm);
 	return bm;
 }
 
@@ -294,28 +310,11 @@ static int getExtendBlockCount(MemoryBlockManager *m, size_t size){
 	return newBlockCount - m->blockCount;
 }
 
-static int extendBlockArray(MemoryBlockManager *m, int addBlockCount){
-	assert(isAcquirable(&m->lock) == 0);
-	if(addBlockCount < 0 || addBlockCount > m->maxBlockCount - m->blockCount){
-		return 0;
-	}
-	m->blockCount += addBlockCount;
-	int i;
-	for(i = m->blockCount - addBlockCount; i < m->blockCount; i++){
-		initMemoryBlock(&m->block[i]);
-	}
-	for(i = m->blockCount - addBlockCount; i < m->blockCount; i++){
-		// updated m->blockCount is accessed here
-		releaseBlock_noLock(m, &m->block[i]);
-	}
-	return 1;
-}
-
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
+uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags){
 	MemoryBlockManager *bm = m->linear;
 	size_t l_size = *size;
 	acquireLock(&bm->lock);
-	uintptr_t linearAddress = allocateBlock_noLock(bm, &l_size);
+	uintptr_t linearAddress = allocateBlock_noLock(bm, &l_size, flags);
 	if(linearAddress != UINTPTR_NULL){ // ok
 		(*size) = l_size;
 		goto alcOrExt_return;
@@ -325,27 +324,32 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	if(exCount == 0){ // error
 		goto alcOrExt_return;
 	}
-	uintptr_t exPageBegin = (uintptr_t)(bm->block + bm->blockCount);
-	exPageBegin = CEIL(exPageBegin, PAGE_SIZE);
-	uintptr_t exPageEnd = (uintptr_t)(bm->block + bm->blockCount + exCount);
-	exPageEnd = CEIL(exPageEnd, PAGE_SIZE);
-	int ok = mapPage_L(m->page, (void*)exPageBegin, exPageEnd - exPageBegin, KERNEL_PAGE);
-	if(!ok){
-		goto alcOrExt_return;
-	}
-	ok = extendBlockArray(bm, exCount);
-	if(!ok){
-		assert(0);
-		goto alcOrExt_return;
+	int newBlockcount = bm->blockCount + exCount;
+	uintptr_t exPage = CEIL((uintptr_t)(bm->block + bm->blockCount), PAGE_SIZE);
+	while(bm->blockCount < newBlockcount){
+		MemoryBlock *const lastBlock = bm->block + bm->blockCount;
+		if((uintptr_t)(lastBlock + 1) > exPage){
+			// if mapPage_L fails, it calls _unmapPage which is not allowed in interrupt-disabled section
+			// in order to prevent from calling _unmapPage, allocate only one page in each call
+			int ok = mapPage_L(m->page, (void*)exPage, PAGE_SIZE, KERNEL_PAGE);
+			if(!ok){
+				break;
+			}
+			exPage += PAGE_SIZE;
+		}
+		bm->blockCount++;
+		initMemoryBlock(lastBlock);
+		// updated bm->blockCount is accessed here
+		releaseBlock_noLock(bm, lastBlock);
 	}
 
 	l_size = *size;
-	linearAddress = allocateBlock_noLock(m->linear, &l_size);
+	linearAddress = allocateBlock_noLock(bm, &l_size, flags);
 	if(linearAddress != UINTPTR_NULL){
 		(*size) = l_size;
 	}
 	alcOrExt_return:
-	releaseLock(&m->linear->lock);
+	releaseLock(&bm->lock);
 	return linearAddress;
 }
 
@@ -356,7 +360,7 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	size_t s;
 	MemoryBlock *b;
 	acquireLock(&bm->lock);
-	r = isReleasableBlock_noLock(bm, linearAddress);
+	r = isReleasableAddress_noLock(bm, linearAddress);
 	if(r == 0){
 		// r = 0;
 		goto chkAndRls_return;
@@ -365,13 +369,15 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	s = (1 << b->sizeOrder);
 	if(s % PAGE_SIZE != 0){
 		r = 0;
+		panic("linear block must align to PAGE_SIZE");
 		goto chkAndRls_return;
 	}
 	prepareReleaseBlock(b);
-
+	// TODO: remove releasePhysical
+	assert(b->flags == (unsigned)releasePhysical);
 	releaseLock(&bm->lock);
 
-	_unmapPage(m->page, m->physical, (void*)linearAddress, s, releasePhysical);
+	_unmapPage(m->page, m->physical, (void*)linearAddress, s, b->flags & WITH_PHYSICAL_PAGES_FLAG);
 
 	acquireLock(&bm->lock);
 	releaseBlock_noLock(bm, getBlock(bm, linearAddress));
@@ -379,7 +385,32 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	chkAndRls_return:
 	releaseLock(&bm->lock);
 	return r;
-
+}
+#include"assembly/assembly.h"
+// release every m->linear->block and reset m->linear->blockCount to initialBlockCount
+// assume single thread
+void releaseAllLinearBlocks(LinearMemoryManager *m){
+	MemoryBlockManager *bm = m->linear;
+	int i = 0;//bm->initialBlockCount;
+	while(i < bm->blockCount){
+		assert(bm->block[i].status != MEMORY_RELEASING);
+		if(getEFlags().bit.interrupt==0){
+			printk("--%d--\n",i);
+		}
+		_checkAndUnmapLinearBlock(m, getAddress(bm, bm->block + i), bm->block[i].flags);
+		if(getEFlags().bit.interrupt==0){
+			printk("--%d %d--\n",i, (1 << bm->block[i].sizeOrder) / MIN_BLOCK_SIZE);
+		}
+		// no lock
+		// no matter the block is free, using, or covered, adding the block size does not skip any using block
+		i += (1 << bm->block[i].sizeOrder) / MIN_BLOCK_SIZE;
+	}
+	assert(i == bm->blockCount);
+	// see allocateOrExtendLinearBlock
+	uintptr_t rlsPageBegin = CEIL((uintptr_t)(bm->block + bm->initialBlockCount), PAGE_SIZE);
+	uintptr_t rlsPageEnd = CEIL((uintptr_t)(bm->block + bm->blockCount), PAGE_SIZE);
+	unmapPage_L(m->page, (void*)rlsPageBegin, rlsPageEnd - rlsPageBegin);
+	resetBlockArray(bm);
 }
 
 static PhysicalAddress checkAndTranslateBlock(LinearMemoryManager *m, uintptr_t linearAddress){

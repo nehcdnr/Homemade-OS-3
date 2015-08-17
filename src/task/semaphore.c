@@ -31,9 +31,9 @@ static void pushSemaphoreQueue(Task *t, uintptr_t s_ptr){
 }
 
 void acquireSemaphore(Semaphore *s){
-	int interruptFlag = getEFlags().bit.interrupt;
+	int interruptEnabled = getEFlags().bit.interrupt;
 	// turn off interrupt to prevent sti in releaseLock in pushSemaphoreQueue
-	if(interruptFlag){
+	if(interruptEnabled){
 		cli();
 	}
 	acquireLock(&s->lock);
@@ -42,9 +42,9 @@ void acquireSemaphore(Semaphore *s){
 		releaseLock(&s->lock);
 	}
 	else{
-		suspendCurrent(pushSemaphoreQueue, (uintptr_t)s);
+		taskSwitch(pushSemaphoreQueue, (uintptr_t)s);
 	}
-	if(interruptFlag){
+	if(interruptEnabled){
 		sti();
 	}
 }
@@ -89,7 +89,8 @@ Semaphore *createSemaphore(){
 }
 
 void deleteSemaphore(Semaphore *s){
-	s=(void*)s; // TODO:
+	assert(s->taskQueue.head == NULL && s->quota == 0);
+	DELETE(s);
 }
 /*
 void initSemaphore(SystemCallTable *systemCallTable){

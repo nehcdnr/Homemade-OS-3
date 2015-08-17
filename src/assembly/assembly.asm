@@ -9,6 +9,21 @@ _xchg8:
 	xchg [edx], al
 	ret
 
+global _lock_add32
+_lock_add32:
+	mov edx, [esp + 4]
+	mov eax, [esp + 8]
+	lock add [edx], eax
+	ret
+
+global _lock_cmpxchg32
+_lock_cmpxchg32:
+	mov edx, [esp + 4]
+	mov eax, [esp + 8]
+	mov ecx, [esp + 12]
+	lock cmpxchg [edx], ecx
+	ret
+
 global _getEFlags
 _getEFlags:
 	pushfd

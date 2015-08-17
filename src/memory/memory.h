@@ -9,13 +9,12 @@ typedef struct{
 }PhysicalAddress;
 
 typedef struct MemoryBlockManager MemoryBlockManager;
-extern MemoryBlockManager *globalPhysical;
 
 // if failure, return NULL, which is not a usable physical address
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
-#define allocatePhysicalPages(SIZE) _allocatePhysicalPages(globalPhysical, (SIZE))
+#define allocatePhysicalPages(SIZE) _allocatePhysicalPages(kernelLinear->physical, (SIZE))
 void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
-#define releasePhysicalPages(ADDRESS) _releasePhysicalPages(globalPhysical, (ADDRESS))
+#define releasePhysicalPages(ADDRESS) _releasePhysicalPages(kernelLinear->physical, (ADDRESS))
 
 // return free size
 //size_t physicalMemoryUsage(size_t *totalSize);
@@ -29,7 +28,12 @@ extern PageManager *kernelPageManager;
 extern const size_t sizeOfPageTableSet;
 PageManager *createAndMapUserPageTable(uintptr_t reserveBase, uintptr_t reserveEnd, uintptr_t tablesLoadAddress);
 void unmapUserPageTableSet(PageManager *p);
-void deleteUserPageTable(PageManager *p);
+
+// must cli
+void invalidatePageTable(PageManager *deletePage, PageManager *loadPage);
+// must sti
+void releaseInvalidatedPageTable(PageManager *deletePage);
+void releasePageTable(PageManager *deletePage);
 
 #define USER_PAGE_FLAG (1 << 1)
 #define WRITABLE_PAGE_FLAG (1 << 2)
@@ -97,6 +101,7 @@ PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddres
 void testMemoryManager(void);
 void testMemoryManager2(void);
 void testMemoryManager3(void);
+void testMemoryTask(void);
 #endif
 
 //see kernel.ld

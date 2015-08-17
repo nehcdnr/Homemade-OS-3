@@ -212,6 +212,7 @@ static const struct{
 };
 
 static void setVBEArgument(InterruptParam *p){
+	sti();
 	Video *v = (Video*)(p->argument);
 	p->regs.eax = (p->regs.ebx >> 16);
 	p->regs.ebx &= 0xffff;

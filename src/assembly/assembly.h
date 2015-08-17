@@ -23,6 +23,11 @@ void out8(uint16_t port, uint8_t value);
 void out16(uint16_t port, uint16_t value);
 void out32(uint16_t port, uint32_t value);
 uint8_t xchg8(volatile uint8_t *a, uint8_t b);
+void lock_add32(volatile uint32_t *a, uint32_t b);
+//if(*dst != cmp)cmp = *dst
+//else *dst = src
+//return cmp
+uint32_t lock_cmpxchg32(volatile uint32_t *dst, uint32_t cmp, uint32_t src);
 
 typedef union EFlags{
 	uint32_t value;

@@ -16,14 +16,30 @@ SystemGlobal global;
 
 static void initService(void){
 	void (*services[])(void) = {
-		ps2Driver,/* vbeDriver, */kernelConsoleService, pciDriver, ahciDriver//, fatDriver
+		ps2Driver,
+		//vbeDriver,
+		kernelConsoleService,
+		pciDriver,
+		ahciDriver,
+		//fatDriver,
+		//testMemoryTask,
 	};
 	unsigned int i;
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
-		t = createKernelTask(services[i], 0);
+		t = createUserTask(services[i], 1);
 		resume(t);
 	}
+	/*
+	for(i = 0; i < 1000; i++){
+		t = createUserTask(testMemoryTask, 1);
+		if(t!= NULL)
+			resume(t);
+		else{
+			i--;
+		}
+	}
+	*/
 }
 
 void c_entry(void);

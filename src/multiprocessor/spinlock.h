@@ -21,12 +21,15 @@ void releaseLock(Spinlock *spinlock);
 
 // barrier
 
-typedef struct SpinlockBarrier{
-	Spinlock lock;
-	volatile int count;
-}SpinlockBarrier;
+typedef struct Barrier{
+	volatile uint32_t count;
+}Barrier;
 
-void resetBarrier(SpinlockBarrier *b);
-void waitAtBarrier(SpinlockBarrier *b, int threadCount);
+#define INITIAL_BARRIER {0}
+const Barrier initialBarrier;
+
+void resetBarrier(Barrier *b);
+void addBarrier(Barrier *b);
+void addAndWaitAtBarrier(Barrier *b, uint32_t threadCount);
 
 #endif
