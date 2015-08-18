@@ -5,7 +5,7 @@
 #include"interrupt/controller/pic.h"
 #include"common.h"
 #include"memory/memory.h"
-#include"segment/segment.h"
+#include"memory/segment.h"
 #include"task/task.h"
 #include"assembly/assembly.h"
 #include"io/io.h"

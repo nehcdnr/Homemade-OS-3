@@ -1,7 +1,7 @@
 #include"interrupt/handler.h"
 #include"interrupt.h"
 #include"internalinterrupt.h"
-#include"segment/segment.h"
+#include"memory/segment.h"
 #include"controller/pic_private.h"
 #include"common.h"
 #include"assembly/assembly.h"
@@ -141,9 +141,6 @@ static void noEOI(InterruptParam *p){
 }
 
 void (*endOfInterrupt)(InterruptParam *p) = noEOI;
-
-// segmentdescriptor.h
-uint16_t toShort(SegmentSelector* s);
 
 InterruptTable *initInterruptTable(SegmentTable *gdt){
 	struct InterruptTable *NEW(t);

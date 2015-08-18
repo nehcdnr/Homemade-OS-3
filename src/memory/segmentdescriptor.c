@@ -1,7 +1,7 @@
 #include"common.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
-#include"segment/segment.h"
+#include"segment.h"
 
 typedef struct{
 	uint16_t limit_0_16;
