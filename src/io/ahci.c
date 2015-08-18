@@ -474,7 +474,7 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static int destroyDiskRequest(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
+static int finishDiskRequest(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
 	DELETE(ior->diskRequest);
 	return 0;
 }
@@ -494,7 +494,7 @@ static DiskRequest *createDiskRequest(
 ){
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	initIORequest(&dr->this, dr, cancelDiskRequest, destroyDiskRequest);
+	initIORequest(&dr->this, dr, cancelDiskRequest, finishDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->buffer = buffer;
@@ -520,8 +520,8 @@ typedef struct AHCIManager{
 // return 0 if failed to issue command
 // return 1 if command was issued or no request
 static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
+	assert(isAcquirable(&a->lock) == 0);
 	int ok = 1;
-	acquireLock(&a->lock);
 	// 2 tasks call this function simultaneously
 	if(a->port[portIndex].servingRequest != NULL){
 		goto servePortQueue_return;
@@ -534,27 +534,23 @@ static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
 		ok = sendDiskRequest(dr);
 	}
 	servePortQueue_return:
-	releaseLock(&a->lock);
 	return ok;
 }
 
-static void addToPortQueue(DiskRequest *dr, int portIndex){
-	AHCIInterruptArgument *a = dr->ahci;
-	struct AHCIPortQueue *p = a->port + portIndex;
-	acquireLock(&a->lock);
+static void addToPortQueue(DiskRequest *dr, /*hba, */int portIndex){
+	assert(isAcquirable(dr->lock) == 0);
+	struct AHCIPortQueue *p = dr->ahci->port + portIndex;
 	ADD_TO_DQUEUE(dr, &p->pendingRequest);
-	releaseLock(&a->lock);
 }
 
 static DiskRequest *removeFromPortQueue(AHCIInterruptArgument *a, int portIndex){
+	assert(isAcquirable(&a->lock) == 0);
 	AHCIPortQueue *p = &a->port[portIndex];
 	DiskRequest *dr;
-	acquireLock(&a->lock);
 	dr = p->servingRequest;
 	if(dr != NULL){
 		REMOVE_FROM_DQUEUE(dr);
 	}
-	releaseLock(&a->lock);
 	return dr;
 }
 
@@ -570,15 +566,11 @@ static void AHCIHandler(InterruptParam *param){
 		if((hostStatus & (1 << p)) == 0)
 			continue;
 		uint32_t portStatus = arg->hbaRegisters->port[p].interruptStatus;
-		arg->hbaRegisters->port[p].interruptStatus = portStatus;
-		int i;
-		for(i = 0; i < 32; i++){
-			if((portStatus & (1 << i)) == 0)
-				continue;
-		}
 		if(portStatus == 0)
 			continue;
+		arg->hbaRegisters->port[p].interruptStatus = portStatus;
 
+		acquireLock(&arg->lock);
 		DiskRequest *dr = removeFromPortQueue(arg, p);
 		if(dr == NULL)
 			printk("warning: AHCI driver received unexpected interrupt\n");
@@ -589,6 +581,7 @@ static void AHCIHandler(InterruptParam *param){
 			panic("servePortQueue == 0"); // TODO:
 			// this.handle(&this);
 		}
+		releaseLock(&arg->lock);
 	}
 	processorLocalPIC()->endOfInterrupt(param);
 	sti();
@@ -669,12 +662,13 @@ static void AHCIServiceHandler(InterruptParam *p){
 assert(sectorCount * hba->desc.sectorSize <= PAGE_SIZE);
 	EXPECT(dr != NULL);
 	putPendingIO(&dr->this);
-	addToPortQueue(dr, index.portIndex);
+	acquireLock(dr->lock);
+	addToPortQueue(dr, /*hba, */index.portIndex);
 	if(servePortQueue(hba, index.portIndex) == 0){
 		assert(0);
 		// TODO: dr->this.handle(&dr->this); // dr->this.fail()
 	}
-
+	releaseLock(dr->lock);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uint32_t)dr;
 	return;
 	// destroy(dr);

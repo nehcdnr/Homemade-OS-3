@@ -14,8 +14,7 @@ struct NewResource{
 typedef struct NewResourceEvent NewResourceEvent;
 struct NewResourceEvent{
 	IORequest this;
-	Spinlock *managerLock;
-	Spinlock lock;
+	Spinlock *lock;
 	NewResource *newResourceList, *servingResource;
 	uintptr_t arguments[SYSTEM_CALL_MAX_ARGUMENT_COUNT];
 	NewResourceEvent **prev, *next;
@@ -23,6 +22,7 @@ struct NewResourceEvent{
 
 // assume locked
 static void serveNewResource(NewResourceEvent *nre){
+	assert(isAcquirable(nre->lock) == 0);
 	NewResource *nr = nre->newResourceList;
 	if(nr == NULL){
 		return;
@@ -37,14 +37,12 @@ static void serveNewResource(NewResourceEvent *nre){
 
 static void cancelNewResourceEvent(IORequest *ior){
 	NewResourceEvent *nre = ior->ioRequest;
-	acquireLock(nre->managerLock);
+	acquireLock(nre->lock);
 	REMOVE_FROM_DQUEUE(nre); // resourceManager->listener
-	releaseLock(nre->managerLock);
-	acquireLock(&nre->lock);
 	NewResource *cleanList[2] = {nre->newResourceList, nre->servingResource};
 	nre->newResourceList = NULL;
 	nre->servingResource = NULL;
-	releaseLock(&nre->lock);
+	releaseLock(nre->lock);
 	unsigned i;
 	for(i = 0; i < LENGTH_OF(cleanList); i++){
 		while(cleanList[i] != NULL){
@@ -58,32 +56,36 @@ static void cancelNewResourceEvent(IORequest *ior){
 
 static int finishNewResourceEvent(IORequest *ior, uintptr_t *returnValues){
 	NewResourceEvent *nre = ior->ioRequest;
-	acquireLock(&nre->lock);
+	acquireLock(nre->lock);
 	NewResource *nr = nre->servingResource;
 	REMOVE_FROM_DQUEUE(nr);
+	releaseLock(nre->lock);
+
 	putPendingIO(&nre->this);
+
+	acquireLock(nre->lock);
 	serveNewResource(nre);
-	releaseLock(&nre->lock);
+	releaseLock(nre->lock);
+	// assume setReturnValues is stateless
+	// lock nr->resource if we allow resource deletion
 	int returnCount = nr->resource->setReturnValues(nr->resource, returnValues);
 	DELETE(nr);
 	return returnCount;
 }
 
-static NewResourceEvent *createNewResourceEvent(Spinlock *lock, NewResourceEvent **list, const InterruptParam *p){
+static NewResourceEvent *createNewResourceEvent(Spinlock *managerLock, const InterruptParam *p){
 	NewResourceEvent *NEW(nre);
 	if(nre == NULL){
 		return NULL;
 	}
 	initIORequest(&nre->this, nre,
 		cancelNewResourceEvent, finishNewResourceEvent);
-	nre->managerLock = lock;
-	nre->lock = initialSpinlock;
+	nre->lock = managerLock;
 	nre->newResourceList = NULL;
 	nre->servingResource = NULL;
 	nre->next = NULL;
 	nre->prev = NULL;
 	copyArguments(nre->arguments, p, SYSTEM_CALL_MAX_ARGUMENT_COUNT);
-	ADD_TO_DQUEUE(nre, list);
 	return nre;
 }
 
@@ -96,7 +98,9 @@ typedef struct ResourceManager{
 static ResourceManager resourceManager[MAX_RESOURCE_TYPE];
 
 // return 1 if added
+// assume locked
 static int addResourceToListener(Resource *r, NewResourceEvent *nre){
+	assert(isAcquirable(nre->lock) == 0);
 	if(r->matchArguments(r, nre->arguments) == 0)
 		return 0;
 	NewResource *NEW(nr);
@@ -116,15 +120,16 @@ static void discoverResourceHandler(InterruptParam *p){
 	ResourceType t = SYSTEM_CALL_ARGUMENT_0(p);
 	Resource *r;
 	ResourceManager *rm = resourceManager + t;
-	NewResourceEvent *nre = createNewResourceEvent(&rm->lock, &rm->listener, p);
+	NewResourceEvent *nre = createNewResourceEvent(&rm->lock, p);
 	EXPECT(nre != NULL);
 	putPendingIO(&nre->this);
-	acquireLock(&nre->lock);
+	acquireLock(&rm->lock);
+	ADD_TO_DQUEUE(nre, &rm->listener);
 	for(r = rm->list; r != NULL; r = r->next){
-		addResourceToListener(r, nre);
+		addResourceToListener(r, nre); // ignore return value
 	}
 	serveNewResource(nre);
-	releaseLock(&nre->lock);
+	releaseLock(&rm->lock);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)nre;
 	return;
 	ON_ERROR;
@@ -137,6 +142,7 @@ void addResource(ResourceType t, Resource* r){
 	acquireLock(&rm->lock);
 	ADD_TO_DQUEUE(r, &rm->list);
 	for(nre = rm->listener; nre != NULL; nre = nre->next){
+		assert(&rm->lock == nre->lock);
 		if(addResourceToListener(r, nre)){
 			serveNewResource(nre);
 		}

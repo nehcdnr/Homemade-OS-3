@@ -591,7 +591,7 @@ uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior){
-	//FIXME: synchronize with resumeTaskByIO	acquireLock(&t->ioListLock);
+	acquireLock(&t->ioListLock);
 	int ok = ior->cancellable;
 	if(ok){
 		REMOVE_FROM_DQUEUE(ior);

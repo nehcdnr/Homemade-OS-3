@@ -23,6 +23,10 @@ struct IORequest{
 	// return number of elements in returnValues
 	// IORequest should be deleted in this function
 	FinishIORequest finish;
+	// in the above 3 functions and initIORequest,
+	// initIORequest(), cancel() and finish() are always invoked by its own task;
+	// handle() may be invoked by different task.
+	// handle() and cancel() may run concurrently.
 };
 void putPendingIO(IORequest *ior);
 IORequest *waitIO(Task *t, IORequest *ioNumber);

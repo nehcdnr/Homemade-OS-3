@@ -56,6 +56,7 @@ static TimerEvent *createTimerEvent(uint64_t periodTicks){
 	te->countDownTicks = 0;
 	te->tickPeriod = periodTicks;
 	te->isSentToTask = 0;
+	te->lock = NULL;
 	te->prev = NULL;
 	te->next = NULL;
 	return te;
