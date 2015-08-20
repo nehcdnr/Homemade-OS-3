@@ -72,12 +72,11 @@ static PhysicalAddress getPTEAddress(volatile PageTableEntry *e){
 static void setPTEAddress(PageTableEntry *e, PhysicalAddress a){
 	SET_ENTRY_ADDRESS(e, a.value);
 }
-/*
+
 static PhysicalAddress getPDEAddress(volatile PageDirectoryEntry *e){
 	PhysicalAddress a = {GET_ENTRY_ADDRESS(e)};
 	return a;
 }
-*/
 
 static void setPDEAddress(PageDirectoryEntry *e, PhysicalAddress a){
 	SET_ENTRY_ADDRESS(e, a.value);
@@ -239,12 +238,14 @@ uint32_t toCR3(PageManager *p){
 
 static Spinlock *pdLockByLinearAddress(PageManager *p, uintptr_t linear){
 	uintptr_t hashValue = PD_INDEX(linear) % NUMBER_OF_PAGE_LOCKS;
-	//if(linear >= KERNEL_LINEAR_BEGIN && linear < KERNEL_LINEAR_END){
-	//}
+	if(linear >= KERNEL_LINEAR_BEGIN && linear < KERNEL_LINEAR_END){
+		assert(p == kernelPageManager);
+		//return kernelPageManager->pdLock + hashValue;
+	}
 	return p->pdLock + hashValue;
 }
 
-static PageTable *pageTableByLinearAddress(PageManager *p, uintptr_t linear){
+static PageTable *ptByLinearAddress(PageManager *p, uintptr_t linear){
 	if(linear >= KERNEL_LINEAR_BEGIN && linear < KERNEL_LINEAR_END){
 		// assert(p == kernelPageManager);
 		// TODO:
@@ -257,6 +258,14 @@ static PageTableAttribute *linearAddressOfPageTableAttribute(PageManager *p, uin
 	return p->page->ptAttribute + PD_INDEX_ADD_BASE(p, linear);
 }
 */
+static volatile PageDirectoryEntry *pdeByLinearAddress(const PageManager *p, uintptr_t linear){
+	return p->page->pd.entry + PD_INDEX(linear);
+}
+
+static volatile PageTableEntry *pteByLinearAddress(PageTable *p, uintptr_t linear){
+	return p->entry + PT_INDEX(linear);
+}
+
 #undef PD_INDEX_ADD_BASE
 
 PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
@@ -275,16 +284,13 @@ void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address
 
 // assume the arguments are valid
 static PhysicalAddress translatePage(PageManager *p, uintptr_t linearAddress, int isPresent){
-	int i2 = PT_INDEX(linearAddress);
-#ifndef NDEBUG
-	int i1 = PD_INDEX(linearAddress);
-	assert(isPDEPresent(p->page->pd.entry + i1));
-#endif
-	PageTable *pt = pageTableByLinearAddress(p, linearAddress);
-	if(isPresent != isPTEPresent(pt->entry + i2)){
+	assert(isPDEPresent(pdeByLinearAddress(p, linearAddress)));
+	PageTable *pt = ptByLinearAddress(p, linearAddress);
+	volatile PageTableEntry *pte = pteByLinearAddress(pt, linearAddress);
+	if(isPresent != isPTEPresent(pte)){
 		panic("translatePage: page present bit differs from expected");
 	}
-	return getPTEAddress(pt->entry + i2);
+	return getPTEAddress(pte);
 }
 
 PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress){
@@ -301,16 +307,15 @@ static int setPage(
 	PageAttribute attribute
 ){
 	assert((physicalAddress.value & 4095) == 0 && (linearAddress & 4095) == 0);
-	int i1 = PD_INDEX(linearAddress);
-	int i2 = PT_INDEX(linearAddress);
+	volatile PageDirectoryEntry *pde = pdeByLinearAddress(p, linearAddress);
 	Spinlock *lock = pdLockByLinearAddress(p, linearAddress);
-	PageTable *pt_linear = pageTableByLinearAddress(p, linearAddress);
+	PageTable *pt_linear = ptByLinearAddress(p, linearAddress);
 	int pdeOK = 1;
 	if(physical != NULL){
 		acquireLock(lock);
 	}
 	//PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p, linearAddress);
-	while(isPDEPresent(p->page->pd.entry + i1) == 0){
+	while(isPDEPresent(pde) == 0){
 		pdeOK = 2;
 		if(physical == NULL || linearAddress >= KERNEL_LINEAR_BEGIN){
 			panic("physical memory manager == NULL");
@@ -326,7 +331,7 @@ static int setPage(
 		//pt_attribute->deleteWhenEmpty = 1;
 		//pt_attribute->presentCount = 0;
 		// the userAccesible/writable bits in all page levels must be 1 to allow the operations
-		setPDE(p->page->pd.entry + i1, USER_WRITABLE_PAGE, pt_physical);
+		setPDE(pde, USER_WRITABLE_PAGE, pt_physical);
 		size_t s;
 		for(s = 0; s < sizeof(PageTable); s += PAGE_SIZE){
 			PhysicalAddress pt_physical_s = {pt_physical.value + s};
@@ -351,8 +356,9 @@ static int setPage(
 	//	pt_attribute->presentCount++;
 	//}
 	// page is protected by linear memory manager, so do not lock PTE
-	setPTE(pt_linear->entry + i2, attribute, physicalAddress);
-	assert(pt_linear->entry[i2].present == 1);
+	volatile PageTableEntry *pte = pteByLinearAddress(pt_linear, linearAddress);
+	setPTE(pte, attribute, physicalAddress);
+	assert(pte->present == 1);
 
 	return 1;
 }
@@ -363,12 +369,9 @@ static void invalidatePage(
 ){
 	// Spinlock *lock = pdLockByLinearAddress(p, linear);
 	// acquireLock(lock);
-#ifndef NDEBUG
-	int i1 = PD_INDEX(linear);
-	assert(isPDEPresent(p->page->pd.entry + i1));
-#endif
+	assert(isPDEPresent(pdeByLinearAddress(p, linear)));
 	int i2 = PT_INDEX(linear);
-	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
+	PageTable *pt_linear = ptByLinearAddress(p, linear);
 	assert(isPTEPresent(pt_linear->entry + i2));
 	invalidatePTE(pt_linear->entry + i2);
 	// releaseLock(lock);
@@ -380,13 +383,12 @@ static void releaseInvalidatedPage(
 	uintptr_t linear,
 	int releasePhysical
 ){
-	PageTable *pt_linear = pageTableByLinearAddress(p, linear);
+	PageTable *pt_linear = ptByLinearAddress(p, linear);
 	Spinlock *pdLock = pdLockByLinearAddress(p, linear);
 	//PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p ,linear);
 #ifndef NDEBUG
-	int i1 = PD_INDEX(linear);
 	int i2 = PT_INDEX(linear);
-	assert(isPDEPresent(p->page->pd.entry + i1));
+	assert(isPDEPresent(pdeByLinearAddress(p, linear)));
 	assert(isPTEPresent(pt_linear->entry + i2) == 0);
 #endif
 	if(releasePhysical){
@@ -453,7 +455,7 @@ static void initPageManager(
 	p->pageInUserSpace = tablesLoadAddress;
 	p->physicalPD = linearToPhysical(mapping, &(tables->pd));
 	p->pdIndexBase = (PAGE_DIRECTORY_LENGTH - PD_INDEX(reservedBase)) & (PAGE_DIRECTORY_LENGTH - 1);
-	assert(pageTableByLinearAddress(p, reservedBase) == tables->pt + 0);
+	assert(ptByLinearAddress(p, reservedBase) == tables->pt + 0);
 	int i;
 	for(i = 0; i < NUMBER_OF_PAGE_LOCKS; i++){
 		p->pdLock[i] = initialSpinlock;
@@ -466,20 +468,18 @@ static void initPageManagerPD(
 	PageManager *p,
 	uintptr_t linearBase, uintptr_t linearEnd, enum PhyscialMapping mapping
 ){
-	PageTableSet *pts = p->page;
 	uintptr_t a;
-	// avoid overflow
+	// use index to avoid overflow
 	const uintptr_t b = PD_INDEX(linearBase), e = PD_INDEX(linearEnd - 1);
 	for(a = b; a <= e; a++){
-		int pdIndex = PD_INDEX(a * PAGE_TABLE_REGION_SIZE);
-		PageTable *kpt = pageTableByLinearAddress(p, a * PAGE_TABLE_REGION_SIZE);
+		PageTable *kpt = ptByLinearAddress(p, a * PAGE_TABLE_REGION_SIZE);
 		//PageTableAttribute *kpta = linearAddressOfPageTableAttribute(p, a * PAGE_TABLE_REGION_SIZE);
 		MEMSET0(kpt);
 		//kpta->presentCount = 0;
 		//kpta->deleteWhenEmpty = 0;
 		//kpta->external = 0;
 		PhysicalAddress kpt_physical = linearToPhysical(mapping, kpt);
-		setPDE(pts->pd.entry + pdIndex, KERNEL_PAGE, kpt_physical);
+		setPDE(pdeByLinearAddress(p, a * PAGE_TABLE_REGION_SIZE), KERNEL_PAGE, kpt_physical);
 	}
 }
 
@@ -506,7 +506,7 @@ static void initPageManagerPT(
 ){
 	uintptr_t a;
 	for(a = linearBegin; a < linearEnd; a += PAGE_SIZE){
-		assert(isPDEPresent(p->page->pd.entry + PD_INDEX(a)));
+		assert(isPDEPresent(pdeByLinearAddress(p, a)));
 		PhysicalAddress kp_physical = linearToPhysical(mapping, (void*)(a - linearBegin + mappedLinearBegin));
 		setPage(p, NULL, a, kp_physical, KERNEL_PAGE);
 	}
@@ -662,17 +662,33 @@ PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reserve
 
 // assume the page manager remains only reservedBase ~ reservedEnd
 // the other pages have been released by releaseAllLinearBlocks
-// TODO: release page directory
 void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
 	assert(getCR3() != toCR3(deletePage) || getEFlags().bit.interrupt == 0);
 
 	PhysicalAddress reservedPhysical[MAX_USER_RESERVED_PAGES];
 	uintptr_t evalSize = evaluateSizeOfPageTableSet(deletePage->reservedBase, deletePage->reservedEnd);
 	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE && evalSize % PAGE_SIZE == 0);
-
+	// see initPageManagerPT
 	uintptr_t i;
 	for(i = 0; i * PAGE_SIZE < evalSize; i++){
 		reservedPhysical[i] = translatePage(deletePage, ((uintptr_t)deletePage->page) + i * PAGE_SIZE, 1);
+	}
+	{ // see copyPageManagerPD & initPageManagerPD
+		int rPDBegin = PD_INDEX(deletePage->reservedBase), rPDEnd = PD_INDEX(deletePage->reservedEnd - 1),
+			kPDBegin = PD_INDEX(kLinearBegin), kPDEnd = PD_INDEX(kLinearEnd - 1), p;
+		for(p = 0; p < PAGE_DIRECTORY_LENGTH; p++){
+			if((p >= rPDBegin && p <= rPDEnd)){
+				p = rPDEnd;
+				continue;
+			}
+			if(p >= kPDBegin && p <= kPDEnd){
+				p = kPDEnd;
+				continue;
+			}
+			if(isPDEPresent(deletePage->page->pd.entry + p)){
+				releasePhysicalPages(getPDEAddress(deletePage->page->pd.entry + p));
+			}
+		}
 	}
 	if(loadPage != NULL){
 		setCR3(toCR3(loadPage));

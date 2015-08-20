@@ -17,15 +17,20 @@ typedef struct{
 typedef struct InterruptParam{
 	uintptr_t argument; // pushed by os
 	InterruptVector *vector;
-	uint32_t _unused;
 	GeneralRegisters regs;
-	uint32_t
-	errorCode, // pushed by cpu or os
-	eip, cs;
-	EFlags eflags; // pushed by cpu
-	uint32_t esp, ss; // pushed if privilege changed
-	uint32_t es8086, ds8086, fs8086, gs8086; // pushed if from virtual 8086 mode
+	// errorCode is pushed by cpu or os
+	uint32_t errorCode;
+	// the following are pushed by cpu
+	uint32_t eip, cs;
+	EFlags eflags;
+	// pushed if privilege changed
+	uint32_t esp, ss;
+	// pushed if cpu was in virtual 8086 mode
+	uint32_t es8086, ds8086, fs8086, gs8086;
 }InterruptParam;
+#define PRIVILEGE_UNCHANGED_INTERRUPT_PARAM_SIZE ((size_t)&((InterruptParam*)0)->esp)
+#define PRIVILEGE_CHANGED_INTERRUPT_PARAM_SIZE ((size_t)&((InterruptParam*)0)->es8086)
+#define VIRTUAL_8086_INTERRUPT_PARAM_SIZE ((size_t)sizeof(InterruptParam))
 
 // handler
 void defaultInterruptHandler(InterruptParam *param);

@@ -65,7 +65,6 @@ _intEntriesAddress:
 	dd _intEntries ; operand: _intEntries
 
 	add eax, edx
-	push DWORD 0 ; TODO: remove this
 	push DWORD [eax + 8] ; vector address
 	push DWORD [eax + 12] ; parameter
 	mov edx, esp
@@ -76,7 +75,7 @@ _intEntriesAddress:
 global _returnFromInterrupt
 _returnFromInterrupt:
 	cli
-	add esp, 16
+	add esp, 12
 	pop gs
 	pop fs
 	pop es

@@ -46,26 +46,31 @@ static void deleteTaskMemory(TaskMemoryManager *m){
 	assert(m->referenceCount == 0 && isAcquirable(&m->lock));
 	DELETE(m);
 }
-
+enum TaskState{
+	// RUNNING,
+	READY,
+	SUSPENDED,
+};
 typedef struct Task{
-	// context
+	// kernel space memory
 	// uint32_t ss;
+	// SegmentTable *ldt;
 	uint32_t esp0;
 	uint32_t espInterrupt;
-	// SegmentTable *ldt;
+	void *stackBottom;
+
+	// user space memory
 	TaskMemoryManager *taskMemory;
-	// queue data
-	enum TaskState{
-		// RUNNING,
-		READY,
-		SUSPENDED,
-	}state;
+
+	// scheduling
+	enum TaskState state;
 	int priority;
 
 	// system call
 	SystemCallFunction taskDefinedSystemCall;
 	uintptr_t taskDefinedArgument;
 
+	// blocking
 	Spinlock ioListLock;
 	Semaphore *ioSemaphore; // length of finishedIOLIst
 	IORequest *pendingIOList, *finishedIOList;
@@ -257,12 +262,13 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
 static Task *createTask(
-	uint32_t esp0, uint32_t espInterrupt, TaskMemoryManager *taskMemory, int priority
+	uint32_t esp0, uint32_t espInterrupt, void *stackBottom, TaskMemoryManager *taskMemory, int priority
 ){
 	Task *NEW(t);
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
 	t->espInterrupt = espInterrupt;
+	t->stackBottom = stackBottom;
 
 	t->ioSemaphore = createSemaphore();
 	EXPECT(t->ioSemaphore != NULL);
@@ -302,7 +308,7 @@ static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pag
 	TaskMemoryManager *tm = createTaskMemory(
 		pageManager, (MemoryBlockManager*)linearMemory);
 	EXPECT(tm != NULL);
-	Task *t = createTask(initialESP0, stackTop - 4, tm, priority);
+	Task *t = createTask(initialESP0, stackTop - 4, stackBottom, tm, priority);
 	EXPECT(t != NULL);
 	return t;
 	//DELETE(t);
@@ -385,7 +391,7 @@ static void clearTerminateQueue(TaskQueueAndLock *ql){
 			break;
 		assert(t->state == SUSPENDED);
 		//printk("clearTerminateQueue: %x\n",t);
-		// TODO: DLELTE(t->stack);
+		DELETE(t->stackBottom);
 		DELETE(t);
 	}
 }
@@ -413,16 +419,16 @@ void terminateCurrentTask(void){
 	TaskMemoryManager *tmm = t->taskMemory;
 	int refCnt = addReference(tmm, -1);
 	if(refCnt == 0){
-		//PageManager *p = tmm->linear.page;
+		PageManager *p = tmm->linear.page;
 		releaseAllLinearBlocks(&tmm->linear);
 		cli();
 		// temporary page manager; see deleteOldTask
 		// addReference(kernelTaskMemory);
 		t->taskMemory = kernelTaskMemory;
-		//invalidatePageTable(p, kernelTaskMemory->linear.page);
+		invalidatePageTable(p, kernelTaskMemory->linear.page);
 		sti();
 		deleteTaskMemory(tmm);
-		//releaseInvalidatedPageTable(p);
+		releaseInvalidatedPageTable(p);
 	}
 	else{
 		cli();
@@ -474,7 +480,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	if(tm == NULL){
 		panic("cannot initialize task manager");
 	}
-	tm->current = createTask(/*esp0*/0, /*espinterrupt*/0, kernelTaskMemory, NUMBER_OF_PRIORITIES - 1);
+	tm->current = createTask(/*esp0*/0, /*espInterrupt*/0, /*stackBottom*/0, kernelTaskMemory, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
