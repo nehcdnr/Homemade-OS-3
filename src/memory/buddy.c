@@ -373,7 +373,7 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 		goto chkAndRls_return;
 	}
 	prepareReleaseBlock(b);
-	// TODO: remove releasePhysical
+	// TODO: remove releasePhysical¡@parameter
 	assert(b->flags == (unsigned)releasePhysical);
 	releaseLock(&bm->lock);
 
@@ -386,7 +386,7 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	releaseLock(&bm->lock);
 	return r;
 }
-#include"assembly/assembly.h"
+
 // release every m->linear->block and reset m->linear->blockCount to initialBlockCount
 // assume single thread
 void releaseAllLinearBlocks(LinearMemoryManager *m){
@@ -394,13 +394,7 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	int i = 0;//bm->initialBlockCount;
 	while(i < bm->blockCount){
 		assert(bm->block[i].status != MEMORY_RELEASING);
-		if(getEFlags().bit.interrupt==0){
-			printk("--%d--\n",i);
-		}
 		_checkAndUnmapLinearBlock(m, getAddress(bm, bm->block + i), bm->block[i].flags);
-		if(getEFlags().bit.interrupt==0){
-			printk("--%d %d--\n",i, (1 << bm->block[i].sizeOrder) / MIN_BLOCK_SIZE);
-		}
 		// no lock
 		// no matter the block is free, using, or covered, adding the block size does not skip any using block
 		i += (1 << bm->block[i].sizeOrder) / MIN_BLOCK_SIZE;

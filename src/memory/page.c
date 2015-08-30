@@ -637,7 +637,7 @@ const size_t sizeOfPageTableSet = sizeof(PageTableSet);
 // the other entries are not accessible in kernel
 PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reservedEnd, uintptr_t tablesLoadAddress){
 	assert(reservedBase % PAGE_SIZE == 0 && reservedEnd % PAGE_SIZE == 0);
-	uintptr_t evalSize = evaluateSizeOfPageTableSet(reservedBase, reservedEnd);
+	size_t evalSize = evaluateSizeOfPageTableSet(reservedBase, reservedEnd);
 	assert(tablesLoadAddress >= reservedBase && tablesLoadAddress + sizeOfPageTableSet <= reservedEnd);
 	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE && evalSize % PAGE_SIZE == 0);
 
@@ -666,7 +666,7 @@ void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
 	assert(getCR3() != toCR3(deletePage) || getEFlags().bit.interrupt == 0);
 
 	PhysicalAddress reservedPhysical[MAX_USER_RESERVED_PAGES];
-	uintptr_t evalSize = evaluateSizeOfPageTableSet(deletePage->reservedBase, deletePage->reservedEnd);
+	size_t evalSize = evaluateSizeOfPageTableSet(deletePage->reservedBase, deletePage->reservedEnd);
 	assert(evalSize <= MAX_USER_RESERVED_PAGES * PAGE_SIZE && evalSize % PAGE_SIZE == 0);
 	// see initPageManagerPT
 	uintptr_t i;

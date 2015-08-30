@@ -293,6 +293,7 @@ static Task *createTask(
 }
 
 #define KERNEL_STACK_SIZE ((size_t)8192)
+#define MIN_BLOCK_MANAGER_PAGE_SIZE ((size_t)PAGE_SIZE)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
 static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pageManager, MemoryBlockManager *linearMemory){
@@ -325,17 +326,17 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxBlockManagerSize, PAGE_SIZE);
 	const uintptr_t targetPageTable = targetBlockManager - sizeOfPageTableSet;
 	const uintptr_t heapEnd = targetPageTable;
-	assert(minBlockManagerSize <= PAGE_SIZE);
+	assert(minBlockManagerSize <= MIN_BLOCK_MANAGER_PAGE_SIZE);
 	// 1. task PageManager
 	// IMPROVE: map to user space
 	PageManager *pageManager = createAndMapUserPageTable(
-		targetPageTable, targetBlockManager + PAGE_SIZE, targetPageTable);
+		targetPageTable, targetBlockManager + MIN_BLOCK_MANAGER_PAGE_SIZE, targetPageTable);
 	EXPECT(pageManager != NULL);
 	// 2. task MemoryBlock
-	int ok = mapPage_L(pageManager, (void*)targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
+	int ok = mapPage_L(pageManager, (void*)targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(ok);
 	MemoryBlockManager *mappedBlockManager =
-		mapExistingPagesToKernel(pageManager, targetBlockManager, PAGE_SIZE, KERNEL_PAGE);
+		mapExistingPagesToKernel(pageManager, targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(mappedBlockManager != NULL);
 	MemoryBlockManager *_mappedBlockManager = createMemoryBlockManager((uintptr_t)mappedBlockManager,
 		maxBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
@@ -346,6 +347,7 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	unmapUserPageTableSet(pageManager);
 	// 5. see startTask
 	return t;
+	// DELETE(t)
 	ON_ERROR;
 	ON_ERROR;
 	unmapKernelPages(mappedBlockManager);
@@ -391,7 +393,9 @@ static void clearTerminateQueue(TaskQueueAndLock *ql){
 			break;
 		assert(t->state == SUSPENDED);
 		//printk("clearTerminateQueue: %x\n",t);
-		DELETE(t->stackBottom);
+		if(checkAndReleaseKernelPages(t->stackBottom) == 0){
+			panic("");
+		}
 		DELETE(t);
 	}
 }
@@ -420,7 +424,10 @@ void terminateCurrentTask(void){
 	int refCnt = addReference(tmm, -1);
 	if(refCnt == 0){
 		PageManager *p = tmm->linear.page;
+		// delete linear
 		releaseAllLinearBlocks(&tmm->linear);
+		unmapPage_L(p, tmm->linear.linear, MIN_BLOCK_MANAGER_PAGE_SIZE);
+		// delete page
 		cli();
 		// temporary page manager; see deleteOldTask
 		// addReference(kernelTaskMemory);
@@ -719,7 +726,7 @@ void testMemoryTask(void){
 	int a,loop;
 	int r = 47;
 	//sleep(10);
-	for(loop=0;loop<15;loop++){//hlt();continue;
+	for(loop=0;loop<10;loop++){//hlt();continue;
 
 		LinearMemoryManager *lm = &processorLocalTask()->taskMemory->linear;
 		// size_t phyFr[4], linFr[4];
