@@ -659,6 +659,7 @@ static void allocateHeapHandler(InterruptParam *p){
 	sti();
 	uintptr_t size = SYSTEM_CALL_ARGUMENT_0(p);
 	PageAttribute attribute = SYSTEM_CALL_ARGUMENT_1(p);
+	size = CEIL(size, PAGE_SIZE);
 	void *ret = allocatePages(&processorLocalTask()->taskMemory->linear, size, attribute);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ret;
 }

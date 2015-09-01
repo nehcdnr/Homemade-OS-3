@@ -323,7 +323,7 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 	ok = stopPort(pr);
 	EXPECT(ok);
 	// reset pointer to command list and received fis
-	HBAPortMemory *pm = allocateKernelPages(sizeof(HBAPortMemory), KERNEL_NON_CACHED_PAGE);
+	HBAPortMemory *pm = allocateKernelPages(CEIL(sizeof(HBAPortMemory), PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
 	EXPECT(pm != NULL);
 	PhysicalAddress pm_physical = checkAndTranslatePage(kernelLinear, pm);
 	MEMSET0(pm);
