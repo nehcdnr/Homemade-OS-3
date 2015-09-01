@@ -106,7 +106,7 @@ static int findSlab(size_t size){
 
 void *allocateSlab(SlabManager *m, size_t size){
 	if(size >= slabUnit[NUMBER_OF_SLAB_UNIT - 1]){
-		return m->allocatePages(size, m->pageAttribute);
+		return m->allocatePages(CEIL(size, PAGE_SIZE), m->pageAttribute);
 	}
 	int i = findSlab(size);
 	void *r = NULL;
@@ -134,7 +134,7 @@ void *allocateSlab(SlabManager *m, size_t size){
 }
 
 void releaseSlab(SlabManager *m, void *address){
-	assert(getEFlags().bit.interrupt == 1);
+	//assert(getEFlags().bit.interrupt == 1);
 	uintptr_t a = (uintptr_t)address;
 	if(a % MIN_BLOCK_SIZE == 0){
 		int ok = m->releasePages(address);

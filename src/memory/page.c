@@ -512,11 +512,6 @@ static void initPageManagerPT(
 	}
 }
 
-void unmapUserPageTableSet(PageManager *p){
-	unmapKernelPages(p->page);
-	p->page = (PageTableSet*)p->pageInUserSpace;
-}
-
 PageManager *initKernelPageTable(
 	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
 	uintptr_t kernelLinearBegin, uintptr_t kernelLinearEnd
@@ -658,6 +653,11 @@ PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reserve
 	DELETE(p);
 	ON_ERROR;
 	return NULL;
+}
+
+void unmapUserPageTableSet(PageManager *p){
+	unmapKernelPages(p->page);
+	p->page = (PageTableSet*)p->pageInUserSpace;
 }
 
 // assume the page manager remains only reservedBase ~ reservedEnd

@@ -91,7 +91,7 @@ PIC *createPIC(InterruptTable *t){
 		disablePIC8259();
 		ioapic = initAPIC(t);
 		printk("number of processors = %d\n", getNumberOfLAPIC(ioapic));
-		initProcessorLocal(MAX_LAPIC_ID); //
+		initProcessorLocal(MAX_LAPIC_ID);
 	}
 	apic->ioapic = ioapic;
 	apic->this.numberOfProcessors = getNumberOfLAPIC(ioapic);

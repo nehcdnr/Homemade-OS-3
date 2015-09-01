@@ -29,7 +29,7 @@ static int addReference(TaskMemoryManager *m, int value){
 	return r;
 }
 
-static TaskMemoryManager *createTaskMemory(PageManager *p, MemoryBlockManager *b){
+static TaskMemoryManager *createTaskMemory(PageManager *p, LinearMemoryBlockManager *b){
 	TaskMemoryManager *NEW(m);
 	if(m == NULL)
 		return NULL;
@@ -296,7 +296,7 @@ static Task *createTask(
 #define MIN_BLOCK_MANAGER_PAGE_SIZE ((size_t)PAGE_SIZE)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
-static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pageManager, MemoryBlockManager *linearMemory){
+static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pageManager, LinearMemoryBlockManager *linearMemory){
 	// kernel task stack
 	void *stackBottom = allocateKernelPages(KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(stackBottom != NULL);
@@ -307,7 +307,7 @@ static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pag
 	uintptr_t initialESP0 = stackTop -
 		initTaskStack(eflags.value, (uint32_t)eip0, stackTop);
 	TaskMemoryManager *tm = createTaskMemory(
-		pageManager, (MemoryBlockManager*)linearMemory);
+		pageManager, linearMemory);
 	EXPECT(tm != NULL);
 	Task *t = createTask(initialESP0, stackTop - 4, stackBottom, tm, priority);
 	EXPECT(t != NULL);
@@ -323,10 +323,10 @@ static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pag
 }
 
 Task *createUserTask(void (*eip0)(void), int priority){
-	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxBlockManagerSize, PAGE_SIZE);
+	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxLinearBlockManagerSize, PAGE_SIZE);
 	const uintptr_t targetPageTable = targetBlockManager - sizeOfPageTableSet;
 	const uintptr_t heapEnd = targetPageTable;
-	assert(minBlockManagerSize <= MIN_BLOCK_MANAGER_PAGE_SIZE);
+	assert(minLinearBlockManagerSize <= MIN_BLOCK_MANAGER_PAGE_SIZE);
 	// 1. task PageManager
 	// IMPROVE: map to user space
 	PageManager *pageManager = createAndMapUserPageTable(
@@ -335,13 +335,13 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	// 2. task MemoryBlock
 	int ok = mapPage_L(pageManager, (void*)targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(ok);
-	MemoryBlockManager *mappedBlockManager =
+	LinearMemoryBlockManager *mappedBlockManager =
 		mapExistingPagesToKernel(pageManager, targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(mappedBlockManager != NULL);
-	MemoryBlockManager *_mappedBlockManager = createMemoryBlockManager((uintptr_t)mappedBlockManager,
-		maxBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
-	EXPECT(_mappedBlockManager == (void*)mappedBlockManager);
-	Task *t = createKernelTask(eip0, priority, pageManager, (MemoryBlockManager*)targetBlockManager);
+	LinearMemoryBlockManager *_mappedBlockManager = createLinearBlockManager(
+		(uintptr_t)mappedBlockManager, maxLinearBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
+	EXPECT(_mappedBlockManager == mappedBlockManager);
+	Task *t = createKernelTask(eip0, priority, pageManager, (LinearMemoryBlockManager*)targetBlockManager);
 	EXPECT(t != NULL);
 	unmapKernelPages(mappedBlockManager);
 	unmapUserPageTableSet(pageManager);

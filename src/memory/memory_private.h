@@ -6,9 +6,10 @@ typedef struct MemoryBlockManager MemoryBlockManager;
 // if success, return address and *size = allocated size, which is >= input value
 typedef uint8_t MemoryBlockFlags;
 uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
-extern const size_t minBlockManagerSize;
-extern const size_t maxBlockManagerSize;
-size_t getAllocatedBlockSize(MemoryBlockManager *m, uintptr_t address);
+//extern const size_t minBlockManagerSize;
+//extern const size_t maxBlockManagerSize;
+extern const size_t minLinearBlockManagerSize;
+extern const size_t maxLinearBlockManagerSize;
 
 // return whether an address is a valid argument of releaseBlock
 int isReleasableAddress(MemoryBlockManager *m, uintptr_t address);
@@ -21,15 +22,34 @@ MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,
 	uintptr_t beginAddr,
+	uintptr_t initEndAddr
+);
+typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
+
+LinearMemoryBlockManager *createLinearBlockManager(
+	uintptr_t manageBase,
+	size_t manageSize,
+	uintptr_t beginAddr,
 	uintptr_t initEndAddr,
 	uintptr_t maxEndAddr
 );
-int getMaxBlockCount(MemoryBlockManager *m);
-size_t getMaxBlockManagerSize(MemoryBlockManager *m);
+
+size_t getBlockManagerSize(MemoryBlockManager *m);
+size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m);
+int getBlockCount(MemoryBlockManager *m);
+int getMaxBlockCount(LinearMemoryBlockManager *m);
 int getFreeBlockSize(MemoryBlockManager *m);
+int getFreeLinearBlockSize(LinearMemoryBlockManager *m);
+uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m);
+
+size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
+// release linear blocks only
+void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 
 #define WITH_PHYSICAL_PAGES_FLAG ((MemoryBlockFlags)1)
+// allocate linear blocks only
 uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags);
+// release linear blocks, pages, and physical blocks
 int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, int releasePhysical);
 #define checkAndUnmapLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 0)
 #define checkAndReleaseLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 1)
@@ -79,7 +99,7 @@ PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 // linear + physical + page
 typedef struct LinearMemoryManager{
 	MemoryBlockManager *physical;
-	MemoryBlockManager *linear;
+	LinearMemoryBlockManager *linear;
 	PageManager *page;
 }LinearMemoryManager;
 
