@@ -33,6 +33,12 @@ int switchToVirtual8086Mode(void (*cs_ip)(void));
 //Task *createKernelTask(void (*eip0)(void), int priority,
 //	struct PageManager* page, struct MemoryBlockManager *linear);
 Task *createUserTask(void (*eip)(void), int priority);
-void terminateCurrentTask(void);
+
+// return UINTPTR_NULL if failed
+// return task id if succeeded
+// task id is an address in kernel space. we haven't defined the usage yet
+uintptr_t systemCall_createThread(void(*entry)(void));
+// always succeed and do not return
+void systemCall_terminate(void);
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a);

@@ -102,6 +102,7 @@ void testMemoryManager(void);
 void testMemoryManager2(void);
 void testMemoryManager3(void);
 void testMemoryTask(void);
+void testCreateThread(void);
 #endif
 
 //see kernel.ld

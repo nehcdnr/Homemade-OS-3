@@ -296,7 +296,7 @@ static Task *createTask(
 #define MIN_BLOCK_MANAGER_PAGE_SIZE ((size_t)PAGE_SIZE)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
-static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pageManager, LinearMemoryBlockManager *linearMemory){
+static Task *createKernelTask(void (*eip0)(void), int priority, TaskMemoryManager *tm){
 	// kernel task stack
 	void *stackBottom = allocateKernelPages(KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(stackBottom != NULL);
@@ -306,22 +306,17 @@ static Task *createKernelTask(void (*eip0)(void), int priority, PageManager *pag
 	eflags.bit.interrupt = 0;
 	uintptr_t initialESP0 = stackTop -
 		initTaskStack(eflags.value, (uint32_t)eip0, stackTop);
-	TaskMemoryManager *tm = createTaskMemory(
-		pageManager, linearMemory);
-	EXPECT(tm != NULL);
 	Task *t = createTask(initialESP0, stackTop - 4, stackBottom, tm, priority);
 	EXPECT(t != NULL);
 	return t;
 	//DELETE(t);
-	ON_ERROR;
-	assert(tm->referenceCount == 0);
-	deleteTaskMemory(tm);
 	ON_ERROR;
 	checkAndReleaseKernelPages(stackBottom);
 	ON_ERROR;
 	return NULL;
 }
 
+// TODO: user space stack, entry point
 Task *createUserTask(void (*eip0)(void), int priority){
 	const uintptr_t targetBlockManager = FLOOR(USER_LINEAR_END - maxLinearBlockManagerSize, PAGE_SIZE);
 	const uintptr_t targetPageTable = targetBlockManager - sizeOfPageTableSet;
@@ -340,15 +335,19 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	EXPECT(mappedBlockManager != NULL);
 	LinearMemoryBlockManager *_mappedBlockManager = createLinearBlockManager(
 		(uintptr_t)mappedBlockManager, maxLinearBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
-	EXPECT(_mappedBlockManager == mappedBlockManager);
-	Task *t = createKernelTask(eip0, priority, pageManager, (LinearMemoryBlockManager*)targetBlockManager);
+	assert(_mappedBlockManager == mappedBlockManager);
+	TaskMemoryManager *tm = createTaskMemory(pageManager, (LinearMemoryBlockManager*)targetBlockManager);
+	EXPECT(tm != NULL);
+	Task *t = createKernelTask(eip0, priority, tm);
 	EXPECT(t != NULL);
-	unmapKernelPages(mappedBlockManager);
+	unmapKernelPages(_mappedBlockManager);
 	unmapUserPageTableSet(pageManager);
 	// 5. see startTask
 	return t;
 	// DELETE(t)
 	ON_ERROR;
+	assert(tm->referenceCount == 0);
+	deleteTaskMemory(tm);
 	ON_ERROR;
 	unmapKernelPages(mappedBlockManager);
 	ON_ERROR;
@@ -357,6 +356,22 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	releasePageTable(pageManager);
 	ON_ERROR;
 	return NULL;
+}
+
+static void createThreadHandler(InterruptParam *p){
+	sti();
+	void (*entry)(void) = (void (*)(void))SYSTEM_CALL_ARGUMENT_0(p);
+	Task *current = processorLocalTask();
+	Task *newTask = createKernelTask(entry, current->priority, current->taskMemory);
+	if(newTask != NULL){
+		resume(newTask);
+	}
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)newTask;
+}
+
+uintptr_t systemCall_createThread(void(*entry)(void)){
+	uintptr_t e = (uintptr_t)entry;
+	return systemCall2(SYSCALL_CREATE_THREAD, &e);
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior);
@@ -410,7 +425,7 @@ static void pushTerminateQueue(Task *oldTask, uintptr_t arg){
 	releaseLock(&ql->lock);
 }
 
-void terminateCurrentTask(void){
+static void terminateCurrentTask(void){
 	static TaskQueueAndLock terminateQueue = {INITIAL_TASK_QUEUE, INITIAL_SPINLOCK};
 	clearTerminateQueue(&terminateQueue);
 	cancelAllIORequests();
@@ -446,6 +461,15 @@ void terminateCurrentTask(void){
 	cli();
 	taskSwitch(pushTerminateQueue, (uintptr_t)&terminateQueue);
 	assert(0); // never return
+}
+
+static void terminateHandler(__attribute__((__unused__)) InterruptParam *p){
+	sti();
+	terminateCurrentTask();
+}
+
+void systemCall_terminate(void){
+	systemCall1(SYSCALL_TERMINATE);
 }
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
@@ -717,6 +741,8 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_TRANSLATE_PAGE, translatePageHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_CREATE_THREAD, createThreadHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_TERMINATE, terminateHandler, 0);
 	//initSemaphore(systemCallTable);
 }
 
@@ -758,6 +784,24 @@ void testMemoryTask(void){
 		printk("linear Free  : %x %x %x %x\n", linFr[0], linFr[1], linFr[2], linFr[3]);
 		*/
 	}
-	terminateCurrentTask();
+	systemCall_terminate();
 }
+
+static void threadEntry(void){
+	printk("thread_created\n");
+	systemCall_terminate();
+}
+
+void testCreateThread(void){
+	static int failed=0;
+	int a;
+	for(a = 0; failed == 0; a++){
+		if(systemCall_createThread(testCreateThread) == UINTPTR_NULL){
+			failed=1;
+			printk("failed\n");
+		}
+	}
+	threadEntry();
+}
+
 #endif
