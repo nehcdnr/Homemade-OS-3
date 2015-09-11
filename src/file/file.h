@@ -1,19 +1,20 @@
 #include<std.h>
 
 // disk driver interface
-uintptr_t systemCall_rwDisk(int driver,
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	uint32_t diskCode, int isWrite
+// IMPROVE: merge to file system call
+uintptr_t systemCall_readWrite(int driver,
+	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
+	uintptr_t targetIndex, int isWrite
 );
-uintptr_t systemCall_rwDiskSync(int driver,
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	uint32_t diskCode, int isWrite
+uintptr_t systemCall_readWriteSync(int driver,
+	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
+	uintptr_t targetIndex, int isWrite
 );
 
 struct InterruptParam;
-void rwDiskArgument(struct InterruptParam *p,
-	uintptr_t *buffer, uint64_t *lba, uint32_t *sectorCount,
-	uint32_t *diskCode, int *isWrite
+void readWriteArgument(struct InterruptParam *p,
+	uintptr_t *buffer, uint64_t *location, uintptr_t *bufferSize,
+	uintptr_t *targetIndex, int *isWrite
 );
 
 enum MBR_SystemID{
@@ -34,13 +35,13 @@ typedef enum MBR_SystemID DiskPartitionType;
 
 int addDiskPartition(
 	DiskPartitionType systemID, const char *driverName, int diskDriver,
-	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
-	uint32_t diskCode
+	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
+	uintptr_t diskCode
 );
-//int removeDiskPartition(int diskDriver, uint32_t diskCode);
+//int removeDiskPartition(int diskDriver, uintptr_t diskCode);
 
-void readPartitions(const char *driverName, int diskDriver, uint32_t diskCode,
-	uint64_t lba, uint64_t sectorCount, uint32_t sectorSize);
+void readPartitions(const char *driverName, int diskDriver, uintptr_t diskCode,
+	uint64_t lba, uint64_t sectorCount, uintptr_t sectorSize);
 
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 
@@ -48,5 +49,27 @@ uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 int addFileSystem(int fileService, const char *name, size_t nameLength);
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
+typedef uintptr_t OpenFileFunction(const char *, uintptr_t);
+typedef uintptr_t ReadWriteFileFunction(uintptr_t, uintptr_t, uintptr_t);
+typedef uintptr_t SeekFileFunction(uintptr_t, uint64_t);
+typedef uintptr_t CloseFileFunction(uintptr_t);
+uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength);
+uintptr_t systemCall_readFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize);
+uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize);
+uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position);
+uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
+
+typedef struct InterruptParam InterruptParam;
+uintptr_t dispatchFileSystemCall(InterruptParam *p,
+	OpenFileFunction *open,
+	ReadWriteFileFunction *read,
+	ReadWriteFileFunction *write,
+	SeekFileFunction *seek,
+	CloseFileFunction *close
+);
+
 // FAT32
-void fatDriver(void);
+void fatService(void);
+
+//kernel file
+void kernelFileService(void);

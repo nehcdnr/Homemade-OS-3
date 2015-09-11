@@ -89,7 +89,8 @@ Semaphore *createSemaphore(){
 }
 
 void deleteSemaphore(Semaphore *s){
-	assert(s->taskQueue.head == NULL && s->quota == 0);
+	// do not check quota
+	assert(s->taskQueue.head == NULL);
 	DELETE(s);
 }
 /*

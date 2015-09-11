@@ -39,6 +39,7 @@ Task *createUserTask(void (*eip)(void), int priority);
 // task id is an address in kernel space. we haven't defined the usage yet
 uintptr_t systemCall_createThread(void(*entry)(void));
 // always succeed and do not return
+void terminateCurrentTask(void);
 void systemCall_terminate(void);
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a);

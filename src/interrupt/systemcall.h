@@ -21,8 +21,8 @@ enum SystemCall{
 	SYSCALL_CREATE_THREAD = 14,
 	SYSCALL_TERMINATE = 15,
 	// runtime registration
-	NUMBER_OF_RESERVED_SYSTEM_CALLS = 16,
-	NUMBER_OF_SYSTEM_CALLS = 32
+	NUMBER_OF_RESERVED_SYSTEM_CALLS = 32,
+	NUMBER_OF_SYSTEM_CALLS = 64
 };
 #define SYSCALL_SERVICE_BEGIN ((int)NUMBER_OF_RESERVED_SYSTEM_CALLS)
 #define SYSCALL_SERVICE_END ((int)NUMBER_OF_SYSTEM_CALLS)
@@ -31,11 +31,15 @@ typedef InterruptHandler SystemCallFunction;
 
 // see interruptdescriptor.c
 uintptr_t systemCall1(/*enum SystemCall*/int systemCallNumber);
-uintptr_t systemCall2(int systemCallNumber, uintptr_t *arg1);
-uintptr_t systemCall3(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2);
-uintptr_t systemCall4(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3);
-uintptr_t systemCall5(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4);
-uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4, uintptr_t *arg5);
+uintptr_t systemCall2(int systemCallNumber, uintptr_t arg1);
+uintptr_t systemCall3(int systemCallNumber, uintptr_t arg1, uintptr_t arg2);
+uintptr_t systemCall4(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
+uintptr_t systemCall5(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
+	uintptr_t arg4);
+uintptr_t systemCall6(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
+	uintptr_t arg4, uintptr_t arg5);
+uintptr_t systemCall6Return(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3,
+	uintptr_t *arg4, uintptr_t *arg5);
 
 #define SYSTEM_CALL_ARGUMENT_0(P) ((P)->regs.edx)
 #define SYSTEM_CALL_ARGUMENT_1(P) ((P)->regs.ecx)

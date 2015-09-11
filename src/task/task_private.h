@@ -20,4 +20,3 @@ void taskSwitch(void (*afterTaskSwitchFunc)(struct Task*, uintptr_t), uintptr_t 
 
 // semaphore.c
 typedef struct SystemCallTable SystemCallTable;
-void initSemaphore(SystemCallTable *systemCallTable);

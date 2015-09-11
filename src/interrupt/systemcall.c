@@ -5,63 +5,73 @@
 #include"multiprocessor/spinlock.h"
 #include"memory/memory.h"
 
-#define I_REG1 "a"(systemCallNumber)
-#define I_REG2 I_REG1, "d"(*arg1)
-#define I_REG3 I_REG2, "c"(*arg2)
-#define I_REG4 I_REG3, "b"(*arg3)
-#define I_REG5 I_REG4, "S"(*arg4)
-#define I_REG6 I_REG5, "D"(*arg5)
+#define I_REG1(ARG) "a"(systemCallNumber)
+#define I_REG2(ARG) I_REG1(ARG), "d"(ARG##1)
+#define I_REG3(ARG) I_REG2(ARG), "c"(ARG##2)
+#define I_REG4(ARG) I_REG3(ARG), "b"(ARG##3)
+#define I_REG5(ARG) I_REG4(ARG), "S"(ARG##4)
+#define I_REG6(ARG) I_REG5(ARG), "D"(ARG##5)
 
-#define O_REG1 "=a"(r)
-#define O_REG2 O_REG1, "=d"(*arg1)
-#define O_REG3 O_REG2, "=c"(*arg2)
-#define O_REG4 O_REG3, "=b"(*arg3)
-#define O_REG5 O_REG4, "=S"(*arg4)
-#define O_REG6 O_REG5, "=D"(*arg5)
+#define O_REG1(ARG) "=a"(r)
+#define O_REG2(ARG) O_REG1(ARG), "=d"(ARG##1)
+#define O_REG3(ARG) O_REG2(ARG), "=c"(ARG##2)
+#define O_REG4(ARG) O_REG3(ARG), "=b"(ARG##3)
+#define O_REG5(ARG) O_REG4(ARG), "=S"(ARG##4)
+#define O_REG6(ARG) O_REG5(ARG), "=D"(ARG##5)
 
-#define SYSCALL_ASM "int $"SYSTEM_CALL_VECTOR_STRING
-#define SYSCALL1_ASM SYSCALL_ASM: O_REG1: I_REG1
-#define SYSCALL2_ASM SYSCALL_ASM: O_REG2: I_REG2
-#define SYSCALL3_ASM SYSCALL_ASM: O_REG3: I_REG3
-#define SYSCALL4_ASM SYSCALL_ASM: O_REG4: I_REG4
-#define SYSCALL5_ASM SYSCALL_ASM: O_REG5: I_REG5
-#define SYSCALL6_ASM SYSCALL_ASM: O_REG6: I_REG6
+#define SYSCALL_ASM "int $"SYSTEM_CALL_VECTOR_STRING"\n"
+#define SYSCALL1_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG1(ARG)
+#define SYSCALL2_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG2(ARG)
+#define SYSCALL3_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG3(ARG)
+#define SYSCALL4_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG4(ARG)
+#define SYSCALL5_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG5(ARG)
+#define SYSCALL6_ASM(ARG) SYSCALL_ASM: O_REG1(ARG): I_REG6(ARG)
+#define SYSCALL6RETURN_ASM(ARG) SYSCALL_ASM: O_REG6(ARG): I_REG6(ARG)
 
 static_assert(sizeof(uint32_t) == sizeof(uintptr_t));
 
 uintptr_t systemCall1(int systemCallNumber){
 	uintptr_t r;
-	__asm__(SYSCALL1_ASM);
+	__asm__(SYSCALL1_ASM(arg));
 	return r;
 }
 
-uintptr_t systemCall2(int systemCallNumber, uintptr_t *arg1){
+uintptr_t systemCall2(int systemCallNumber, uintptr_t arg1){
 	uintptr_t r;
-	__asm__(SYSCALL2_ASM);
+	__asm__(SYSCALL2_ASM(arg));
 	return r;
 }
 
-uintptr_t systemCall3(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2){
+uintptr_t systemCall3(int systemCallNumber, uintptr_t arg1, uintptr_t arg2){
 	uintptr_t r;
-	__asm__(SYSCALL3_ASM);
+	__asm__(SYSCALL3_ASM(arg));
 	return r;
 }
 
-uintptr_t systemCall4(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3){
+uintptr_t systemCall4(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3){
 	uintptr_t r;
-	__asm__(SYSCALL4_ASM);
+	__asm__(SYSCALL4_ASM(arg));
 	return r;
 }
 
-uintptr_t systemCall5(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4){
+uintptr_t systemCall5(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
+	uintptr_t arg4){
 	uintptr_t r;
-	__asm__(SYSCALL5_ASM);
+	__asm__(SYSCALL5_ASM(arg));
 	return r;
 }
 
-uintptr_t systemCall6(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3, uintptr_t *arg4, uintptr_t *arg5){
+uintptr_t systemCall6(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
+	uintptr_t arg4, uintptr_t arg5){
 	uintptr_t r;
-	__asm__(SYSCALL6_ASM);
+	__asm__(SYSCALL6_ASM(arg));
+	return r;
+}
+
+uintptr_t systemCall6Return(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3,
+	uintptr_t *arg4, uintptr_t *arg5){
+	uintptr_t r;
+	__asm__(SYSCALL6RETURN_ASM(*arg));
 	return r;
 }
 
@@ -205,7 +215,8 @@ static void systemCallHandler(InterruptParam *p){
 	SystemCallTable *s = (SystemCallTable*)p->argument;
 	struct SystemCallEntry *e = s->entry + p->regs.eax;
 	if(e->call == NULL){
-		printk("unregistered system call: %d\n",p->regs.eax);
+		printk("warning: unregistered system call: %d\n",p->regs.eax);
+		defaultInterruptHandler(p);
 	}
 	else{
 		uintptr_t oldArgument = p->argument;
@@ -225,10 +236,10 @@ static void registerServiceHandler(InterruptParam *p){
 }
 */
 
-static_assert(MAX_NAME_LENGTH / 4 == 4);
+static_assert(MAX_NAME_LENGTH / sizeof(uintptr_t) == 4);
 static void queryServiceHandler(InterruptParam *p){
 	SystemCallTable *systemCallTable = (SystemCallTable*)p->argument;
-	uint32_t name[MAX_NAME_LENGTH / 4 + 1];
+	uint32_t name[MAX_NAME_LENGTH / sizeof(uintptr_t) + 1];
 	name[0] = SYSTEM_CALL_ARGUMENT_0(p);
 	name[1] = SYSTEM_CALL_ARGUMENT_1(p);
 	name[2] = SYSTEM_CALL_ARGUMENT_2(p);
@@ -241,10 +252,10 @@ enum ServiceNameError systemCall_queryService(const char *name){
 	if(strlen(name) > MAX_NAME_LENGTH){
 		return INVALID_NAME;
 	}
-	uint32_t name4[MAX_NAME_LENGTH / 4];
+	uintptr_t name4[MAX_NAME_LENGTH / sizeof(uintptr_t)];
 	MEMSET0((void*)name4);
 	strncpy((char*)name4, name, MAX_NAME_LENGTH);
-	enum ServiceNameError r = systemCall5(SYSCALL_QUERY_SERVICE ,name4 + 0, name4 + 1, name4 + 2, name4 + 3);
+	enum ServiceNameError r = systemCall5(SYSCALL_QUERY_SERVICE ,name4[0], name4[1], name4[2], name4[3]);
 	assert((r < SYSCALL_SERVICE_END && r >= SYSCALL_SERVICE_BEGIN) || r < 0);
 	return r;
 }

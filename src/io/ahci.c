@@ -355,7 +355,7 @@ typedef struct AHCIInterruptArgument{
 	volatile HBARegisters *hbaRegisters;
 
 	struct DiskDescription{
-		uint32_t sectorSize;
+		uintptr_t sectorSize;
 		uint64_t sectorCount;
 	}desc;
 
@@ -601,7 +601,7 @@ union HBAPortIndex{
 		uint8_t identifyCommand: 1;
 		uint8_t unused: 6;
 	};
-	uint32_t value;
+	uintptr_t value;
 }__attribute__((__packed__));
 
 typedef union HBAPortIndex HBAPortIndex;
@@ -643,23 +643,25 @@ static void AHCIServiceHandler(InterruptParam *p){
 	AHCIManager *am = (AHCIManager*)p->argument;
 	uintptr_t linearBuffer;
 	uint64_t lba;
-	uint32_t sectorCount;
+	uintptr_t bufferSize;
 	HBAPortIndex index;
 	int isWrite;
-	rwDiskArgument(p, &linearBuffer, &lba, &sectorCount, &index.value, &isWrite);
+	readWriteArgument(p, &linearBuffer, &lba, &bufferSize, &index.value, &isWrite);
 	PhysicalAddress physicalBuffer = checkAndTranslatePage(
 		getTaskLinearMemory(processorLocalTask()), (void*)linearBuffer
 	);
 	EXPECT(physicalBuffer.value != UINTPTR_NULL);
 	AHCIInterruptArgument *hba = searchHBAByPortIndex(am, index);
 	EXPECT(hba != NULL);
+	EXPECT(bufferSize % hba->desc.sectorSize == 0);
+assert(bufferSize <= PAGE_SIZE);
+// TODO improve: multiple physical regions
+// TODO check buffer address
 	DiskRequest *dr = createDiskRequest(
 		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
-		physicalBuffer, lba, sectorCount,
+		physicalBuffer, lba, bufferSize / hba->desc.sectorSize,
 		hba, index.portIndex, isWrite
 	);
-	// improve: multiple physical regions
-assert(sectorCount * hba->desc.sectorSize <= PAGE_SIZE);
 	EXPECT(dr != NULL);
 	putPendingIO(&dr->this);
 	acquireLock(dr->lock);
@@ -675,10 +677,11 @@ assert(sectorCount * hba->desc.sectorSize <= PAGE_SIZE);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
+	ON_ERROR;
 	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
 }
 
-uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite){
+uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t bufferSize, uint32_t index, int isWrite){
 	static int ahciService = -1;
 	while(ahciService < 0){
 		ahciService = systemCall_queryService(AHCI_SERVICE_NAME);
@@ -687,8 +690,8 @@ uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t sectorCount
 		printk("warning: AHCI service is not initialized\n");
 		sleep(20);
 	}
-	return systemCall_rwDisk(ahciService,
-		buffer, lba, sectorCount,
+	return systemCall_readWrite(ahciService,
+		buffer, lba, bufferSize,
 		index, isWrite
 	);
 }
@@ -698,7 +701,7 @@ static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *
 	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
 	i.identifyCommand = 1;
-	uintptr_t ior = systemCall_rwDiskSync(ahciDriver, (uintptr_t)buffer, 0, 0, i.value, 0);
+	uintptr_t ior = systemCall_readWriteSync(ahciDriver, (uintptr_t)buffer, 0, 0, i.value, 0);
 	EXPECT(ior != IO_REQUEST_FAILURE);
 	// the driver requires 48-bit address
 	const uint32_t buffer83 = buffer[83];
@@ -714,7 +717,7 @@ static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *
 		//printk("disk sector size = %u (default)\n", d->sectorSize);
 	}
 	else{
-		d->sectorSize = buffer[117] + (((uint32_t)buffer[118]) << 16);
+		d->sectorSize = buffer[117] + (((uintptr_t)buffer[118]) << 16);
 		//printk("disk sector size = %u\n", d->sectorSize);
 	}
 	// find number of sectors

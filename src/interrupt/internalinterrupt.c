@@ -103,16 +103,16 @@ static void v8086Monitor(InterruptParam *p){
 
 static void generalProtectionHandler(InterruptParam *p){
 	if(p->eflags.bit.virtual8086){
+		sti();
 		v8086Monitor(p);
 	}
 	else{
-		printk("general protection: %d, cs = %x, eip = %x\n",p->errorCode, p->cs, p->eip);
+		// terminate
+		defaultInterruptHandler(p);
 		assert(0);
 	}
-	// printk("cs = %x eip = %x ss = %x esp = %x eflags = %x\n",p->cs, p->eip, p->ss, p->esp, p->eflags);
-	sti();
 }
 
 void initInternalInterrupt(InterruptTable *idt){
-	registerInterrupt(idt, GENRAL_PROTECTION_FAULT, generalProtectionHandler, 0);
+	registerInterrupt(idt, GENERAL_PROTECTION_FAULT, generalProtectionHandler, 0);
 }

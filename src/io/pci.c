@@ -215,8 +215,7 @@ static int enumerateHostBridge(void){
 uintptr_t systemCall_discoverPCI(
 	uint32_t classCode, uint32_t classMask
 ){
-	uintptr_t type = RESOURCE_PCI_DEVICE;
-	return systemCall4(SYSCALL_DISCOVER_RESOURCE, &type, &classCode ,&classMask);
+	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_PCI_DEVICE, classCode ,classMask);
 }
 
 void pciDriver(void){

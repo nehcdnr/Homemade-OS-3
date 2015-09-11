@@ -370,8 +370,7 @@ static void createThreadHandler(InterruptParam *p){
 }
 
 uintptr_t systemCall_createThread(void(*entry)(void)){
-	uintptr_t e = (uintptr_t)entry;
-	return systemCall2(SYSCALL_CREATE_THREAD, &e);
+	return systemCall2(SYSCALL_CREATE_THREAD, (uintptr_t)entry);
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior);
@@ -425,13 +424,12 @@ static void pushTerminateQueue(Task *oldTask, uintptr_t arg){
 	releaseLock(&ql->lock);
 }
 
-static void terminateCurrentTask(void){
+void terminateCurrentTask(void){
 	static TaskQueueAndLock terminateQueue = {INITIAL_TASK_QUEUE, INITIAL_SPINLOCK};
 	clearTerminateQueue(&terminateQueue);
 	cancelAllIORequests();
 	Task *t = processorLocalTask();
 	// delete ioSemaphore
-	assert(getSemaphoreValue(t->ioSemaphore) == 0);
 	deleteSemaphore(t->ioSemaphore);
 	t->ioSemaphore = NULL;
 	// delete user space
@@ -598,7 +596,7 @@ static void waitIOHandler(InterruptParam *p){
 }
 
 uintptr_t systemCall_waitIO(uintptr_t ioNumber){
-	return systemCall2(SYSCALL_WAIT_IO, &ioNumber);
+	return systemCall2(SYSCALL_WAIT_IO, ioNumber);
 }
 
 uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
@@ -615,7 +613,7 @@ uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
 		returnValues[i] = &ignoredReturnValue;
 	}
 	(*returnValues[0]) = ioNumber;
-	uintptr_t rv0 = systemCall6(
+	uintptr_t rv0 = systemCall6Return(
 		SYSCALL_WAIT_IO,
 		returnValues[0],
 		returnValues[1],
@@ -652,7 +650,7 @@ static void cacnelIOHandler(InterruptParam *p){
 }
 
 int systemCall_cancelIO(uintptr_t io){
-	return (int)systemCall2(SYSCALL_CANCEL_IO, &io);
+	return (int)systemCall2(SYSCALL_CANCEL_IO, io);
 }
 
 void setCancellable(IORequest *ior, int value){
@@ -666,8 +664,8 @@ void initIORequest(
 	void *instance,
 	/*HandleIORequest h,
 	Task *t,*/
-	CancelIORequest cancelIORequest,
-	FinishIORequest finishIORequest
+	CancelIORequest *cancelIORequest,
+	FinishIORequest *finishIORequest
 ){
 	this->ioRequest = instance;
 	this->prev = NULL;
@@ -689,7 +687,7 @@ static void allocateHeapHandler(InterruptParam *p){
 }
 
 void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribute){
-	uintptr_t address = systemCall3(SYSCALL_ALLOCATE_HEAP, &size, &attribute);
+	uintptr_t address = systemCall3(SYSCALL_ALLOCATE_HEAP, size, attribute);
 //assert(address != UINTPTR_NULL);
 	return (void*)address;
 }
@@ -702,8 +700,7 @@ static void releaseHeapHandler(InterruptParam *p){
 }
 
 int systemCall_releaseHeap(void *address){
-	uintptr_t address2 = (uintptr_t)address;
-	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, &address2);
+	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, (uintptr_t)address);
 	assert(ok); // TODO: remove this when we start working on user space tasks
 	return (int)ok;
 }
@@ -716,8 +713,7 @@ static void translatePageHandler(InterruptParam *p){
 }
 
 PhysicalAddress systemCall_translatePage(void *address){
-	uintptr_t a = (uintptr_t)address;
-	PhysicalAddress p = {systemCall2(SYSCALL_TRANSLATE_PAGE, &a)};
+	PhysicalAddress p = {systemCall2(SYSCALL_TRANSLATE_PAGE, (uintptr_t)address)};
 	return p;
 }
 

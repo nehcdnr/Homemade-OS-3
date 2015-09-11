@@ -6,6 +6,7 @@
 #include"common.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
+#include"task/task.h"
 #include"systemcall.h"
 
 static_assert((SPURIOUS_INTERRUPT & 0xf) == 0xf);
@@ -63,13 +64,12 @@ static AsmIntEntry *createAsmIntEntries(void){
 	return e;
 }
 
-void defaultInterruptHandler(InterruptParam *param){
-	printk("unhandled interrupt %d; argument = %x\n", toChar(param->vector), param->argument);
-	printk("ds=%u, eax=%x, error=%u, eip=%x, cs=%u, eflags=%x\n",
-	param->regs.ds, param->regs.eax, param->errorCode, param->eip, param->cs, param->eflags.value);
-	printk("task=%x\n", processorLocalTask());
-	panic("unhandled interrupt");
+void defaultInterruptHandler(InterruptParam *p){
 	sti();
+	printk("unhandled interrupt %d; error = %d eip = %x\n", toChar(p->vector), p->errorCode, p->eip);
+	//printk("cs = %x, ss = %x esp = %x eflags = %x\n",p->cs, p->ss, p->esp, p->eflags);
+	printk("terminate task %x\n", processorLocalTask());
+	terminateCurrentTask();
 }
 
 // miss a timer interrupt if 8259 irq 0 is not mapped to vector 32

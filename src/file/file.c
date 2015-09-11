@@ -9,40 +9,40 @@
 
 // disk driver interface
 
-uintptr_t systemCall_rwDisk(int driver,
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	uint32_t diskCode, int isWrite
+void readWriteArgument(struct InterruptParam *p,
+	uintptr_t *buffer, uint64_t *location, uintptr_t *bufferSize,
+	uintptr_t *targetIndex, int *isWrite
 ){
-	uint32_t lbaLow = (lba & 0xffffffff);
-	uint32_t lbaHigh = ((lba >> 32) & 0xffffffff);
-	uint32_t rwSectorCount = (sectorCount | (isWrite? 0x80000000: 0));
+	*buffer = SYSTEM_CALL_ARGUMENT_0(p);
+	*location = SYSTEM_CALL_ARGUMENT_1(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_2(p)) << 32);
+	*bufferSize = (SYSTEM_CALL_ARGUMENT_3(p) & 0x7fffffff);
+	*isWrite = ((SYSTEM_CALL_ARGUMENT_3(p) >> 31) & 1);
+	*targetIndex = SYSTEM_CALL_ARGUMENT_4(p);
+}
+
+uintptr_t systemCall_readWrite(int driver,
+	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
+	uintptr_t targetIndex, int isWrite
+){
+	uint32_t locationLow = (location & 0xffffffff);
+	uint32_t locationHigh = ((location >> 32) & 0xffffffff);
+	uintptr_t rwBufferSize = (bufferSize | (isWrite? 0x80000000: 0));
 	return systemCall6(driver,
-		&buffer, &lbaLow, &lbaHigh,
-		&rwSectorCount, &diskCode
+		buffer, locationLow, locationHigh,
+		rwBufferSize, targetIndex
 	);
 }
 
-uintptr_t systemCall_rwDiskSync(int driver,
-	uintptr_t buffer, uint64_t lba, uint32_t sectorCount,
-	uint32_t diskCode, int isWrite
+uintptr_t systemCall_readWriteSync(int driver,
+	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
+	uintptr_t targetIndex, int isWrite
 ){
-	uintptr_t ior1 = systemCall_rwDisk(driver, buffer, lba, sectorCount, diskCode, isWrite);
+	uintptr_t ior1 = systemCall_readWrite(driver, buffer, location, bufferSize, targetIndex, isWrite);
 	if(ior1 == IO_REQUEST_FAILURE)
 		return ior1;
 	uintptr_t ior2 = systemCall_waitIO(ior1);
 	assert(ior1 == ior2);
 	return ior1;
-}
-
-void rwDiskArgument(struct InterruptParam *p,
-	uintptr_t *buffer, uint64_t *lba, uint32_t *sectorCount,
-	uint32_t *diskCode, int *isWrite
-){
-	*buffer = SYSTEM_CALL_ARGUMENT_0(p);
-	*lba = SYSTEM_CALL_ARGUMENT_1(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_2(p)) << 32);
-	*sectorCount = (SYSTEM_CALL_ARGUMENT_3(p) & 0x7fffffff);
-	*isWrite = ((SYSTEM_CALL_ARGUMENT_3(p) >> 31) & 1);
-	*diskCode = SYSTEM_CALL_ARGUMENT_4(p);
 }
 
 // MBR & EBR
@@ -76,10 +76,10 @@ struct DiskPartition{
 	DiskPartitionType type;
 	ServiceName driverName;
 	int driver;
-	uint32_t diskCode; // assigned by disk driver
+	uintptr_t diskCode; // assigned by disk driver
 	uint64_t startLBA;
 	uint64_t sectorCount;
-	uint32_t sectorSize;
+	uintptr_t sectorSize;
 };
 /*
 struct DiskPartitionManager{
@@ -90,12 +90,12 @@ struct DiskPartitionManager{
 static struct DiskPartitionManager diskManager;
 */
 void readPartitions(
-	const char *driverName, int diskDriver, uint32_t diskCode, uint64_t relativeLBA,
-	uint64_t sectorCount, uint32_t sectorSize
+	const char *driverName, int diskDriver, uintptr_t diskCode, uint64_t relativeLBA,
+	uint64_t sectorCount, uintptr_t sectorSize
 ){
 	struct MBR *buffer = systemCall_allocateHeap(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
-	uintptr_t ior1 = systemCall_rwDiskSync(diskDriver, (uintptr_t)buffer, relativeLBA, 1, diskCode, 0);
+	uintptr_t ior1 = systemCall_readWriteSync(diskDriver, (uintptr_t)buffer, relativeLBA, sectorSize, diskCode, 0);
 	EXPECT(ior1 != IO_REQUEST_FAILURE);
 
 	if(buffer->signature != MBR_SIGNATRUE){
@@ -165,15 +165,14 @@ static int matchDiskType(Resource *resource, const uintptr_t *arguments){
 }
 
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType){
-	uintptr_t resourceType = RESOURCE_DISK_PARTITION;
-	return systemCall3(SYSCALL_DISCOVER_RESOURCE, &resourceType, &diskType);
+	return systemCall3(SYSCALL_DISCOVER_RESOURCE, RESOURCE_DISK_PARTITION, diskType);
 }
 
 // assume all arguments are valid
 int addDiskPartition(
 	DiskPartitionType diskType, const char *driverName, int diskDriver,
-	uint64_t startLBA, uint64_t sectorCount, uint32_t sectorSize,
-	uint32_t diskCode
+	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
+	uintptr_t diskCode
 ){
 	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE);
 	struct DiskPartition *NEW(dp);
@@ -239,8 +238,64 @@ int addFileSystem(int fileService, const char *name, size_t nameLength){
 }
 
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
-	uintptr_t type = RESOURCE_FILE_SYSTEM;
 	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)];
 	strncpy((char*)name32, name, nameLength);
-	return systemCall4(SYSCALL_DISCOVER_RESOURCE, &type, name32 + 0, name32 + 1);
+	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
+
+enum FileCommand{
+	FILE_COMMAND_OPEN = 1,
+	FILE_COMMAND_READ = 2,
+	FILE_COMMAND_WRITE = 3,
+	FILE_COMMAND_SEEK = 4,
+	FILE_COMMAND_CLOSE = 5
+};
+
+uintptr_t dispatchFileSystemCall(InterruptParam *p,
+	OpenFileFunction *open,
+	ReadWriteFileFunction *read,
+	ReadWriteFileFunction *write,
+	SeekFileFunction *seek,
+	CloseFileFunction *close
+){
+#define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (F)
+	switch(SYSTEM_CALL_ARGUMENT_0(p)){
+	case FILE_COMMAND_OPEN:
+		return NULL_OR_CALL(open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
+	case FILE_COMMAND_READ:
+		return NULL_OR_CALL(read)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+	case FILE_COMMAND_WRITE:
+		return NULL_OR_CALL(write)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+	case FILE_COMMAND_SEEK:
+		return NULL_OR_CALL(seek)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
+	case FILE_COMMAND_CLOSE:
+		return NULL_OR_CALL(close)(SYSTEM_CALL_ARGUMENT_1(p));
+	default:
+		return IO_REQUEST_FAILURE;
+	}
+#undef NULL_OR_CALL
+}
+
+
+uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength){
+	return systemCall4(fileService, FILE_COMMAND_OPEN, (uintptr_t)fileName, nameLength);
+}
+
+uintptr_t systemCall_readFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize){
+	return systemCall5(fileService, FILE_COMMAND_READ, handle, buffer, bufferSize);
+}
+
+uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize){
+	return systemCall5(fileService, FILE_COMMAND_WRITE, handle, buffer, bufferSize);
+}
+
+uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position){
+	uintptr_t positionLow = ((position >> 0) & 0xffffffff);
+	uintptr_t positionHigh = ((position >> 32) & 0xffffffff);
+	return systemCall5(fileService, FILE_COMMAND_SEEK, handle, positionLow, positionHigh);
+}
+
+uintptr_t systemCall_closeFile(int fileService, uintptr_t handle){
+	return systemCall3(fileService, FILE_COMMAND_CLOSE, handle);
+}
+
