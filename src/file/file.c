@@ -251,25 +251,29 @@ enum FileCommand{
 	FILE_COMMAND_CLOSE = 5
 };
 
-uintptr_t dispatchFileSystemCall(InterruptParam *p,
-	OpenFileFunction *open,
-	ReadWriteFileFunction *read,
-	ReadWriteFileFunction *write,
-	SeekFileFunction *seek,
-	CloseFileFunction *close
-){
-#define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (F)
+uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
+#define CHECK_HANDLE(I, O) \
+(O) = f->checkHandle(I);\
+if((O) == NULL)\
+	return IO_REQUEST_FAILURE;
+#define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
+	void *h;
+	// TODO: checkaddress
 	switch(SYSTEM_CALL_ARGUMENT_0(p)){
 	case FILE_COMMAND_OPEN:
-		return NULL_OR_CALL(open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
+		return NULL_OR_CALL(f->open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
 	case FILE_COMMAND_READ:
-		return NULL_OR_CALL(read)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
+		return NULL_OR_CALL(f->read)(h, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
 	case FILE_COMMAND_WRITE:
-		return NULL_OR_CALL(write)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
+		return NULL_OR_CALL(f->write)(h, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
 	case FILE_COMMAND_SEEK:
-		return NULL_OR_CALL(seek)(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
+		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
+		return NULL_OR_CALL(f->seek)(h, SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
 	case FILE_COMMAND_CLOSE:
-		return NULL_OR_CALL(close)(SYSTEM_CALL_ARGUMENT_1(p));
+		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
+		return NULL_OR_CALL(f->close)(h);
 	default:
 		return IO_REQUEST_FAILURE;
 	}
@@ -281,12 +285,12 @@ uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t n
 	return systemCall4(fileService, FILE_COMMAND_OPEN, (uintptr_t)fileName, nameLength);
 }
 
-uintptr_t systemCall_readFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize){
-	return systemCall5(fileService, FILE_COMMAND_READ, handle, buffer, bufferSize);
+uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize){
+	return systemCall5(fileService, FILE_COMMAND_READ, handle, (uintptr_t)buffer, bufferSize);
 }
 
-uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize){
-	return systemCall5(fileService, FILE_COMMAND_WRITE, handle, buffer, bufferSize);
+uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize){
+	return systemCall5(fileService, FILE_COMMAND_WRITE, handle, (uintptr_t)buffer, bufferSize);
 }
 
 uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position){

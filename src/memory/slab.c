@@ -4,7 +4,6 @@
 #include"memory_private.h"
 #include"multiprocessor/spinlock.h"
 #include"assembly/assembly.h"
-// MemoryManager functions
 
 typedef union MemoryUnit{
 	union MemoryUnit *next;

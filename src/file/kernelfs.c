@@ -4,22 +4,65 @@
 #include"memory/memory.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
+#include"multiprocessor/spinlock.h"
 #include"io/io.h"
 
 typedef struct OpenFileRequest OpenFileRequest;
 struct OpenFileRequest{
 	IORequest ior;
+	int isReady;
+	int isClosing;
+	uintptr_t handle;
 	OpenFileRequest *next, **prev;
 };
 
-static void cancelOpenFileRequest(IORequest *ior){
-	DELETE(ior->ioRequest);
-	printk("deleted");
+
+static OpenFileRequest *openFileList = NULL;
+static Spinlock openFileLock = INITIAL_SPINLOCK;
+
+static void *searchReadyOpenFileList(uintptr_t handle){
+	OpenFileRequest *ofr;
+	acquireLock(&openFileLock);
+	for(ofr = openFileList; ofr != NULL; ofr = ofr->next){
+		if(ofr->handle == handle)
+			break;
+	}
+	releaseLock(&openFileLock);
+	if(ofr == NULL)
+		return NULL;
+	if(ofr->isReady == 0)
+		return NULL;
+	return ofr;
+}
+
+static void addToOpenFileList(OpenFileRequest *ofr){
+	acquireLock(&openFileLock);
+	ADD_TO_DQUEUE(ofr, &openFileList);
+	releaseLock(&openFileLock);
+}
+static void removeFromOpenFileList(OpenFileRequest *ofr){
+	acquireLock(&openFileLock);
+	REMOVE_FROM_DQUEUE(ofr);
+	releaseLock(&openFileLock);
+}
+
+static void closeFileRequest(IORequest *ior){
+	OpenFileRequest *of = ior->ioRequest;
+	removeFromOpenFileList(of);
+	DELETE(of);
 }
 
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
-	returnValues[0] = (uintptr_t)ior->ioRequest;
-	putPendingIO(ior);
+	OpenFileRequest *ofr = ior->ioRequest;
+	returnValues[0] = ofr->handle;
+	if(ofr->isClosing){
+		closeFileRequest(ior);
+	}
+	else{
+		putPendingIO(ior);
+		ofr->isReady = 1;
+		setCancellable(ior, 1);
+	}
 	return 1;
 }
 
@@ -27,32 +70,61 @@ static OpenFileRequest *createOpenFileRequest(void){
 	OpenFileRequest *NEW(ofr);
 	if(ofr == NULL)
 		return NULL;
-	initIORequest(&ofr->ior, ofr, cancelOpenFileRequest, finishOpenFileRequest);
+	initIORequest(&ofr->ior, ofr, closeFileRequest, finishOpenFileRequest);
+	ofr->isReady = 0;
+	ofr->isClosing = 0;
+	ofr->handle = (uintptr_t)&ofr->handle;
 	ofr->next = NULL;
 	ofr->prev = NULL;
 	return ofr;
 }
 
-static uintptr_t testOpenKFS(const char *fileName, uintptr_t length){
+static IORequest *testOpenKFS(const char *fileName, uintptr_t length){
 	//TODO: check fileName address
 	if((uintptr_t)strlen("null") != length || strncmp(fileName, "null", length) != 0){
 		return IO_REQUEST_FAILURE;
 	}
 	OpenFileRequest *ofr = createOpenFileRequest();
+	setCancellable(&ofr->ior, 0);
 	putPendingIO(&ofr->ior);
+	addToOpenFileList(ofr);
+
 	ofr->ior.handle(&ofr->ior);
-	return (uintptr_t)ofr;
+	return &ofr->ior;
+}
+
+static IORequest *testReadKFS(void *arg, uint8_t *buffer, uintptr_t bufferSize){
+	OpenFileRequest *ofr = arg;
+	assert(ofr->isReady = 1);
+	ofr->isReady = 0;
+	setCancellable(&ofr->ior, 0);
+	uintptr_t i;
+	for(i = 0; i < bufferSize; i++){
+		buffer[i] = i % 26 + 'a';
+	}
+
+	ofr->ior.handle(&ofr->ior);
+	return &ofr->ior;
+}
+
+static IORequest *testCloseKFS(void *arg){
+	OpenFileRequest *ofr = arg;
+	ofr->isClosing = 1;
+
+	ofr->ior.handle(&ofr->ior);
+	return &ofr->ior;
 }
 
 static void kernelFileServiceHandler(InterruptParam *p){
 	sti();
-	uintptr_t fileRequest = dispatchFileSystemCall(p,
-		testOpenKFS,
-		NULL,//readKFS,
-		NULL,//writeKFS,
-		NULL,//seekKFS,
-		NULL//closeKFS
-	);
+	FileFunctions ff;
+	ff.open = testOpenKFS;
+	ff.read = testReadKFS;
+	ff.write = NULL;
+	ff.seek = NULL;
+	ff.close = testCloseKFS;
+	ff.checkHandle = searchReadyOpenFileList;
+	uintptr_t fileRequest = dispatchFileSystemCall(p, &ff);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = fileRequest;
 }
 
@@ -68,13 +140,11 @@ void kernelFileService(void){
 	if(!ok){
 		systemCall_terminate();
 	}
-	printk("kfs ok\n");
 	while(1){
 		sleep(1000);
 	}
 }
 
-#ifndef NDEBUG
 void testKFS(void);
 void testKFS(void){
 	uintptr_t r = systemCall_discoverFileSystem(KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
@@ -84,11 +154,27 @@ void testKFS(void){
 	assert(r == r2);
 	r = systemCall_openFile(kfs, "abcdefg", strlen("abcdefg"));
 	assert(r == IO_REQUEST_FAILURE);
+	//open
 	r = systemCall_openFile(kfs, "null", strlen("null"));
 	assert(r != IO_REQUEST_FAILURE);
-	//r2 = systemCall_waitIOReturn(r, 0);
-	//assert(r2 == r);
+	uintptr_t file;
+	r2 = systemCall_waitIOReturn(r, 1, &file);
+	assert(r == r2);
+	//read
+	int i;
+	for(i = 0; i < 3; i++){
+		char x[30];
+		uintptr_t file2 = 99;
+		MEMSET0(x);
+		x[29] = '\0';
+		r2 = systemCall_readFile(kfs, file, x, 29);
+		assert(r == r2);
+		r2 = systemCall_readFile(kfs, file, x, 29);
+		assert(r2 == IO_REQUEST_FAILURE);
+		systemCall_waitIOReturn(r, 1, &file2);
+		assert(file2 == file);
+		printk("%s\n",x);
+	}
 	printk("testKFS ok\n");
 	systemCall_terminate();
 }
-#endif

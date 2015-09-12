@@ -524,7 +524,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 
 // system call
 
-void putPendingIO(IORequest *ior){
+void putPendingIO(IORequest *ior/*, int cancellable*/){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
 	ADD_TO_DQUEUE(ior, &t->pendingIOList);

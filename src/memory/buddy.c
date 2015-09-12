@@ -18,7 +18,7 @@ typedef struct MemoryBlock{
 	sizeorder_t sizeOrder;
 	enum MemoryBlockStatus status;
 	// for linear memory,
-	// this value is indicates whether the linear block is mapped to physical pages.
+	// this value indicates whether the linear block is mapped to physical pages.
 	// for physical memory, it is 0
 	uint8_t flags: 8;
 	struct MemoryBlock**prev, *next;
@@ -138,7 +138,6 @@ static size_t ceilAllocateOrder(size_t s){
 
 static MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags){
 	assert(isAcquirable(&m->lock) == 0);
-	// assert(size >= MIN_BLOCK_SIZE);
 	size_t i = ceilAllocateOrder(*size), i2;
 	if(i > MAX_BLOCK_ORDER){
 		return NULL;

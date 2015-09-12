@@ -49,24 +49,27 @@ uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 int addFileSystem(int fileService, const char *name, size_t nameLength);
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
-typedef uintptr_t OpenFileFunction(const char *, uintptr_t);
-typedef uintptr_t ReadWriteFileFunction(uintptr_t, uintptr_t, uintptr_t);
-typedef uintptr_t SeekFileFunction(uintptr_t, uint64_t);
-typedef uintptr_t CloseFileFunction(uintptr_t);
+
 uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength);
-uintptr_t systemCall_readFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize);
-uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, uintptr_t buffer, uintptr_t bufferSize);
+uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize);
+uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize);
 uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position);
 uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
 
+typedef struct IORequest IORequest;
 typedef struct InterruptParam InterruptParam;
-uintptr_t dispatchFileSystemCall(InterruptParam *p,
-	OpenFileFunction *open,
-	ReadWriteFileFunction *read,
-	ReadWriteFileFunction *write,
-	SeekFileFunction *seek,
-	CloseFileFunction *close
-);
+typedef struct{
+	IORequest *(*open)(const char *fileName, uintptr_t nameLength);
+	IORequest *(*read)(void *arg, uint8_t *buffer, uintptr_t bufferSize);
+	IORequest *(*write)(void *arg, const uint8_t *buffer, uintptr_t bufferSize);
+	IORequest *(*seek)(void *arg, uint64_t position);
+	IORequest *(*close)(void *arg);
+	// if the argument is not a valid handle, return NULL.
+	// Otherwise, the return value of checkHandle will be passed to the above functions
+	void *(*checkHandle)(uintptr_t handle);
+}FileFunctions;
+
+uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f);
 
 // FAT32
 void fatService(void);
