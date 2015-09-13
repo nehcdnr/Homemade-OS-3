@@ -32,7 +32,7 @@ static void serveNewResource(NewResourceEvent *nre){
 	}
 	REMOVE_FROM_DQUEUE(nr);
 	ADD_TO_DQUEUE(nr, &nre->servingResource);
-	nre->this.handle(&nre->this);
+	finishIO(&nre->this);
 }
 
 static void cancelNewResourceEvent(IORequest *ior){
@@ -61,7 +61,7 @@ static int finishNewResourceEvent(IORequest *ior, uintptr_t *returnValues){
 	REMOVE_FROM_DQUEUE(nr);
 	releaseLock(nre->lock);
 
-	putPendingIO(&nre->this);
+	pendIO(&nre->this);
 
 	acquireLock(nre->lock);
 	serveNewResource(nre);
@@ -122,7 +122,7 @@ static void discoverResourceHandler(InterruptParam *p){
 	ResourceManager *rm = resourceManager + t;
 	NewResourceEvent *nre = createNewResourceEvent(&rm->lock, p);
 	EXPECT(nre != NULL);
-	putPendingIO(&nre->this);
+	pendIO(&nre->this);
 	acquireLock(&rm->lock);
 	ADD_TO_DQUEUE(nre, &rm->listener);
 	for(r = rm->list; r != NULL; r = r->next){

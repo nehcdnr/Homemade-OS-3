@@ -1,7 +1,6 @@
 #include"interrupt/handler.h"
 
 typedef struct IORequest IORequest;
-typedef void HandleIORequest(IORequest*);
 typedef void CancelIORequest(IORequest*);
 typedef int FinishIORequest(IORequest*, uintptr_t*);
 typedef struct Task Task;
@@ -13,8 +12,6 @@ struct IORequest{
 	};
 	// for Task.pendingIOList; see taskmanager.c
 	IORequest **prev, *next;
-	//TODO: handle = resumeTaskByIO
-	HandleIORequest *handle;
 	Task *task;
 	// the request can be pending or finished
 	// IORequest should be deleted in this function
@@ -28,9 +25,9 @@ struct IORequest{
 	// handle() may be invoked by different task.
 	// handle() and cancel() may run concurrently.
 };
-void putPendingIO(IORequest *ior);
+void pendIO(IORequest *ior);
 IORequest *waitIO(Task *t, IORequest *ioNumber);
-void resumeTaskByIO(IORequest *ior); // IORequestHandler
+void finishIO(IORequest *ior); // IORequestHandler
 
 uintptr_t systemCall_waitIO(uintptr_t ioNumber);
 uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
@@ -41,7 +38,6 @@ void setCancellable(IORequest *ior, int value);
 void initIORequest(
 	IORequest *this,
 	void *instance,
-	//HandleIORequest handleIORequest,
 	//Task* t,
 	CancelIORequest *cancelIORequest,
 	FinishIORequest *finishIORequest

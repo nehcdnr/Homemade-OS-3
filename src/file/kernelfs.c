@@ -59,7 +59,7 @@ static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 		closeFileRequest(ior);
 	}
 	else{
-		putPendingIO(ior);
+		pendIO(ior);
 		ofr->isReady = 1;
 		setCancellable(ior, 1);
 	}
@@ -86,10 +86,10 @@ static IORequest *testOpenKFS(const char *fileName, uintptr_t length){
 	}
 	OpenFileRequest *ofr = createOpenFileRequest();
 	setCancellable(&ofr->ior, 0);
-	putPendingIO(&ofr->ior);
+	pendIO(&ofr->ior);
 	addToOpenFileList(ofr);
 
-	ofr->ior.handle(&ofr->ior);
+	finishIO(&ofr->ior);
 	return &ofr->ior;
 }
 
@@ -103,7 +103,7 @@ static IORequest *testReadKFS(void *arg, uint8_t *buffer, uintptr_t bufferSize){
 		buffer[i] = i % 26 + 'a';
 	}
 
-	ofr->ior.handle(&ofr->ior);
+	finishIO(&ofr->ior);
 	return &ofr->ior;
 }
 
@@ -111,7 +111,7 @@ static IORequest *testCloseKFS(void *arg){
 	OpenFileRequest *ofr = arg;
 	ofr->isClosing = 1;
 
-	ofr->ior.handle(&ofr->ior);
+	finishIO(&ofr->ior);
 	return &ofr->ior;
 }
 
@@ -152,29 +152,40 @@ void testKFS(void){
 	int kfs;
 	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &kfs);
 	assert(r == r2);
+	// file not exist
 	r = systemCall_openFile(kfs, "abcdefg", strlen("abcdefg"));
 	assert(r == IO_REQUEST_FAILURE);
-	//open
+	// open file
 	r = systemCall_openFile(kfs, "null", strlen("null"));
 	assert(r != IO_REQUEST_FAILURE);
-	uintptr_t file;
+	uintptr_t file, file2;
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
 	//read
 	int i;
 	for(i = 0; i < 3; i++){
 		char x[30];
-		uintptr_t file2 = 99;
+		file2 = 99;
 		MEMSET0(x);
 		x[29] = '\0';
+		// read file
 		r2 = systemCall_readFile(kfs, file, x, 29);
 		assert(r == r2);
+		// last operation is not finished
 		r2 = systemCall_readFile(kfs, file, x, 29);
 		assert(r2 == IO_REQUEST_FAILURE);
-		systemCall_waitIOReturn(r, 1, &file2);
-		assert(file2 == file);
+		r2 = systemCall_waitIOReturn(r, 1, &file2);
+		assert(r2 == r && file2 == file);
 		printk("%s\n",x);
 	}
+	// close
+	r2 = systemCall_closeFile(kfs, file);
+	assert(r2 == r);
+	r2 = systemCall_waitIOReturn(r, 1, &file2);
+	assert(r2 == r && file == file2);
+	// not opened
+	r2 = systemCall_readFile(kfs, file, &r2, 1);
+	assert(r2 == IO_REQUEST_FAILURE);
 	printk("testKFS ok\n");
 	systemCall_terminate();
 }

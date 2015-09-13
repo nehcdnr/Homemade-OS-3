@@ -64,7 +64,7 @@ typedef struct{
 	IORequest *(*write)(void *arg, const uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*seek)(void *arg, uint64_t position);
 	IORequest *(*close)(void *arg);
-	// if the argument is not a valid handle, return NULL.
+	// If the argument is not a valid handle, return NULL.
 	// Otherwise, the return value of checkHandle will be passed to the above functions
 	void *(*checkHandle)(uintptr_t handle);
 }FileFunctions;

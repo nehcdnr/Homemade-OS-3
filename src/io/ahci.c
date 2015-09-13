@@ -575,7 +575,7 @@ static void AHCIHandler(InterruptParam *param){
 		if(dr == NULL)
 			printk("warning: AHCI driver received unexpected interrupt\n");
 		else{
-			dr->this.handle(&dr->this);
+			finishIO(&dr->this);
 		}
 		if(servePortQueue(arg, p) == 0){
 			panic("servePortQueue == 0"); // TODO:
@@ -663,7 +663,7 @@ assert(bufferSize <= PAGE_SIZE);
 		hba, index.portIndex, isWrite
 	);
 	EXPECT(dr != NULL);
-	putPendingIO(&dr->this);
+	pendIO(&dr->this);
 	acquireLock(dr->lock);
 	addToPortQueue(dr, /*hba, */index.portIndex);
 	if(servePortQueue(hba, index.portIndex) == 0){

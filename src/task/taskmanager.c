@@ -524,16 +524,18 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 
 // system call
 
-void putPendingIO(IORequest *ior/*, int cancellable*/){
+void pendIO(IORequest *ior/*, int cancellable*/){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
+	assert(IS_IN_DQUEUE(ior) == 0);
 	ADD_TO_DQUEUE(ior, &t->pendingIOList);
 	releaseLock(&t->ioListLock);
 }
 
-void resumeTaskByIO(IORequest *ior){
+void finishIO(IORequest *ior){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
+	assert(IS_IN_DQUEUE(ior) != 0);
 	REMOVE_FROM_DQUEUE(ior); // t->pendingIOList
 	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
 	ior->cancellable = 1;
@@ -670,7 +672,6 @@ void initIORequest(
 	this->ioRequest = instance;
 	this->prev = NULL;
 	this->next = NULL;
-	this->handle = resumeTaskByIO;
 	this->task = processorLocalTask();
 	this->cancel = cancelIORequest;
 	this->cancellable = 1;

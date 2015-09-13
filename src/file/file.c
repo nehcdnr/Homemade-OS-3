@@ -258,7 +258,7 @@ if((O) == NULL)\
 	return IO_REQUEST_FAILURE;
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
 	void *h;
-	// TODO: checkaddress
+	// TODO: check Address, check Task
 	switch(SYSTEM_CALL_ARGUMENT_0(p)){
 	case FILE_COMMAND_OPEN:
 		return NULL_OR_CALL(f->open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));

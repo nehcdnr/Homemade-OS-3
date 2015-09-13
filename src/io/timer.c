@@ -40,7 +40,7 @@ static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_
 	}
 	else{
 		acquireLock(ior->timerEvent->lock);
-		putPendingIO(ior);
+		pendIO(ior);
 		ior->timerEvent->isSentToTask = 0;
 		releaseLock(ior->timerEvent->lock);
 	}
@@ -82,7 +82,7 @@ uintptr_t setAlarm(uint64_t millisecond, int isPeriodic){
 		return IO_REQUEST_FAILURE;
 	}
 	IORequest *ior = &te->this;
-	putPendingIO(ior);
+	pendIO(ior);
 	addTimerEvent(processorLocalTimer(), tick, te);
 	return (uintptr_t)ior;
 }
@@ -115,7 +115,7 @@ static void handleTimerEvents(TimerEventList *tel){
 		if(curr->isSentToTask == 0){
 			curr->isSentToTask = 1;
 			curr->countDownTicks = curr->tickPeriod;
-			curr->this.handle(&curr->this);
+			finishIO(&curr->this);
 		}
 #ifndef NDEBUG
 		else{
