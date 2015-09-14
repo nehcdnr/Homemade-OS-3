@@ -1,5 +1,5 @@
 [BITS 16]
-[SECTION .real]
+[SECTION .v8086]
 global _callBIOS
 _callBIOS:
 	mov eax, 1 ; SYSCALL_TASK_DEFINED

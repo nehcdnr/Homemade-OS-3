@@ -20,11 +20,12 @@ VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 MKDOSFS=./tool/mkdosfs/mkdosfs.exe
 
 # source
+CURRENT_DIR=$(shell echo %cd%)
 KERNEL_SRC=src\kernel
 ASM_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.asm)
 C_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.c)
-ASM_OBJ=$(ASM_SRC:.asm=.o)
-C_OBJ=$(C_SRC:.c=.o)
+ASM_OBJ=$(patsubst $(CURRENT_DIR)\\%.asm,%.o,$(ASM_SRC))
+C_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_SRC))
 OBJ=$(C_OBJ) $(ASM_OBJ)
 BOOTLOADER_ASM=src\bootloader\floppyloader.asm
 

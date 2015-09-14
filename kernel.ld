@@ -7,6 +7,7 @@ ASSERT(_KERNEL_LINEAR_END_SYMBOL % 4096 == 0, "kernel linear address not aligned
 SECTIONS{
 	. = 0xbe00;
 	.real 0xbe00 : {*(.real)}
+	.v8086 . : {*(.v8086)}
 	.text . + _KERNEL_LINEAR_BEGIN_SYMBOL : {*(.text)}
 	.rdata : {*(.rdata)}
 	.data : {*(.data)}
