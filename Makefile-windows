@@ -2,7 +2,7 @@
 NDEBUG=-DNDEBUG
 NASM=./tool/nasm-2.11.06/nasm.exe
 CC=gcc.exe
-CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -Isrc -O0
+CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel
 LD=ld
 LIBGCC=$(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
 BFI=./tool/bfi10/bfi.exe
@@ -20,24 +20,22 @@ VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 MKDOSFS=./tool/mkdosfs/mkdosfs.exe
 
 # source
-ASM_SRC=src\interrupt\interruptentry.asm src\assembly\assembly.asm src\main\entry.asm src\task\taskswitch.asm src\io\virtual8086.asm
-C_SRC=$(shell dir /A-D /B /S src\*.c)
-C_HEADER=$(shell dir /A-D /B /S src\*.h)
-C_OBJ=$(C_SRC:.c=.o)
+KERNEL_SRC=src\kernel
+ASM_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.asm)
+C_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.c)
 ASM_OBJ=$(ASM_SRC:.asm=.o)
+C_OBJ=$(C_SRC:.c=.o)
 OBJ=$(C_OBJ) $(ASM_OBJ)
-BOOTLOADER_SRC=.\src\bootloader\floppyloader.asm
+BOOTLOADER_ASM=src\bootloader\floppyloader.asm
 
 all: os3.img
 
 os3.img: floppyloader.bin build/kernel.bin
 	$(BFI) -t=6 -b=$< -f=$@ build
 
-floppyloader.bin: $(BOOTLOADER_SRC)
+floppyloader.bin: $(BOOTLOADER_ASM)
 	$(NASM) $< -o $@
 
-#	objcopy -O elf32-i386 --change-section-vma .text+0xf0000000 --change-section-vma .rdata+0xf0000000 --change-section-vma .data+0xf0000000 --change-section-vma .drectve+0xf0000000 --change-section-vma .bss+0xf0000000 kernel.o kernel.elf
-#
 build/kernel.bin: $(OBJ)
 	$(LD) -m i386pe -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
 	objcopy -O elf32-i386 --change-section-lma .text-0xf0000000 --change-section-lma .rdata-0xf0000000 --change-section-lma .data-0xf0000000 --change-section-lma .drectve-0xf0000000 --change-section-lma .bss-0xf0000000 kernel.o kernel.elf
@@ -46,6 +44,10 @@ build/kernel.bin: $(OBJ)
 .SUFFIXES: .o .asm
 .asm.o:
 	$(NASM) -f elf32 $< -o $@
+
+.SUFFIXES: .o .c
+.c.o:
+	$(CC) $(CFLAGS) -I$(KERNEL_SRC) -c $< -o $@
 
 clean:
 	del floppyloader.bin os3.img build\kernel.bin kernel.o kernel.elf $(OBJ)
