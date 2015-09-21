@@ -1,9 +1,11 @@
 # required
 NDEBUG=-DNDEBUG
 NASM=./tool/nasm-2.11.06/nasm.exe
-CC=gcc.exe
-CFLAGS=-m32 -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel
-LD=ld
+ASMFLAGS=-f elf32
+CC=./tool/toolchain32/bin/i686-linux-gnu-gcc.exe
+CFLAGS=-freg-struct-return -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel
+LD=./tool/toolchain32/bin/i686-linux-gnu-ld.exe
+LDFLAGS=--strip-debug
 LIBGCC=$(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
 BFI=./tool/bfi10/bfi.exe
 
@@ -24,8 +26,10 @@ CURRENT_DIR=$(shell echo %cd%)
 KERNEL_SRC=src\kernel
 ASM_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.asm)
 C_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.c)
+BIN_SRC=$(shell dir /A-D /B /S src\file\*)
 ASM_OBJ=$(patsubst $(CURRENT_DIR)\\%.asm,%.o,$(ASM_SRC))
 C_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_SRC))
+BIN_OBJ=$(patsubst $(CURRENT_DIR)\\%,%,$(BIN_SRC))
 OBJ=$(C_OBJ) $(ASM_OBJ)
 BOOTLOADER_ASM=src\bootloader\floppyloader.asm
 
@@ -38,18 +42,20 @@ floppyloader.bin: $(BOOTLOADER_ASM)
 	$(NASM) $< -o $@
 
 build/kernel.bin: $(OBJ)
-	$(LD) -m i386pe -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
-	objcopy -O elf32-i386 --change-section-lma .text-0xf0000000 --change-section-lma .rdata-0xf0000000 --change-section-lma .data-0xf0000000 --change-section-lma .drectve-0xf0000000 --change-section-lma .bss-0xf0000000 kernel.o kernel.elf
-	objcopy -O binary kernel.elf build/kernel.bin
+	$(LD) $(LDFLAGS) -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
+	objcopy -O binary kernel.o build/kernel.bin
 
 .SUFFIXES: .o .asm
 .asm.o:
-	$(NASM) -f elf32 $< -o $@
+	$(NASM) $(ASMFLAGS) $< -o $@
 
 .SUFFIXES: .o .c
 .c.o:
 	$(CC) $(CFLAGS) -I$(KERNEL_SRC) -c $< -o $@
 
+file.elf: $(BIN_OBJ)
+	objcopy -I binary $< -O elf32-i386 file.elf
+	
 clean:
 	del floppyloader.bin os3.img build\kernel.bin kernel.o kernel.elf $(OBJ)
 

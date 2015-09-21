@@ -4,29 +4,30 @@
 align 4096
 NUMBER_OF_HANDLERS EQU 128
 
-global _numberOfIntEntries
-_numberOfIntEntries:
+global numberOfIntEntries
+numberOfIntEntries:
 	dd NUMBER_OF_HANDLERS
 
-global _sizeOfIntEntries
-_sizeOfIntEntries:
-	dd intEntriesEnd - _intEntries
+global sizeOfIntEntries
+sizeOfIntEntries:
+	dd intEntriesEnd - intEntries
 
-global _intEntriesAddress
+global intEntriesAddress
 
-global _intEntries:
-_intEntries:
+global intEntries:
+intEntries:
 ; interrupt vector table
 %assign n 0
 %rep NUMBER_OF_HANDLERS
 interruptEntry%[n]:
-	dd entry%[n] - _intEntries ; entry offset
+	dd entry%[n] - intEntries ; entry offset
 	dd 0xffffffff ; handler address
 	dd 0xffffffff ; vector address
 	dd 0 ; handler parameter
 %assign n n+1
 %endrep
 
+; entry of interrupt service routine
 %assign n 0
 %rep NUMBER_OF_HANDLERS
 entry%[n]:
@@ -34,7 +35,7 @@ entry%[n]:
 	push DWORD 0 ; for interrupt without error code
 %endif
 	push eax
-	mov eax, interruptEntry%[n] - _intEntries
+	mov eax, interruptEntry%[n] - intEntries
 	jmp generalEntry
 %assign n n+1
 %endrep
@@ -61,8 +62,8 @@ generalEntry:
 	mov gs, bx
 
 	db 0xba ; opcode: mov edx,
-_intEntriesAddress:
-	dd _intEntries ; operand: _intEntries
+intEntriesAddress:
+	dd intEntries ; operand: _intEntries
 
 	add eax, edx
 	push DWORD [eax + 8] ; vector address
@@ -72,8 +73,8 @@ _intEntriesAddress:
 	call [eax + 4] ; handler
 
 ; see taskmanager.c.h
-global _returnFromInterrupt
-_returnFromInterrupt:
+global returnFromInterrupt
+returnFromInterrupt:
 	cli
 	add esp, 12
 	pop gs

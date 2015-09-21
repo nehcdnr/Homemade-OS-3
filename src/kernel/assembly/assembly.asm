@@ -1,42 +1,42 @@
 [BITS 32]
 [SECTION .text]
 
-global _xchg8
-_xchg8:
+global xchg8
+xchg8:
 	xor eax, eax
 	mov edx, [esp + 4]
 	mov al, [esp + 8]
 	xchg [edx], al
 	ret
 
-global _lock_add32
-_lock_add32:
+global lock_add32
+lock_add32:
 	mov edx, [esp + 4]
 	mov eax, [esp + 8]
 	lock add [edx], eax
 	ret
 
-global _lock_cmpxchg32
-_lock_cmpxchg32:
+global lock_cmpxchg32
+lock_cmpxchg32:
 	mov edx, [esp + 4]
 	mov eax, [esp + 8]
 	mov ecx, [esp + 12]
 	lock cmpxchg [edx], ecx
 	ret
 
-global _getEFlags
-_getEFlags:
+global getEFlags
+getEFlags:
 	pushfd
 	pop eax
 	ret
 
-global _getEBP
-_getEBP:
+global getEBP
+getEBP:
 	mov eax, ebp
 	ret
 
-global _cpuid_isSupported
-_cpuid_isSupported:
+global cpuid_isSupported
+cpuid_isSupported:
 	pushfd
 	mov eax, [esp]
 	xor eax, 0x200000
@@ -50,16 +50,16 @@ _cpuid_isSupported:
 	ret
 
 ; lldt(limit, base)
-global _lldt
-_lldt:
+global lldt
+lldt:
 	mov ax, [esp + 4]
 	mov [esp + 6], ax
 	lldt [esp + 6]
 	ret
 
 ; lgdt(limit, base, codeSegment, dataSegment)
-global _lgdt
-_lgdt:
+global lgdt
+lgdt:
 	push ebp
 	mov ebp, esp
 	sub esp, 8

@@ -1,14 +1,14 @@
 [BITS 32]
 [SECTION .text]
 
-extern _startTask
+extern startTask
 ; uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0)
-global _initTaskStack
-_initTaskStack:
+global initTaskStack
+initTaskStack:
 	mov eax, [esp + 12] ; esp0
 	mov edx, [esp + 8] ; eip
 	mov [eax - 4], edx
-	mov DWORD [eax - 8], _startTask
+	mov DWORD [eax - 8], startTask
 	mov edx, [esp + 4] ; eFlags
 	mov [eax - 12], edx
 	; return number of pushed bytes
@@ -16,8 +16,8 @@ _initTaskStack:
 	ret
 
 ; void contextSwitch(uint32_t *oldTaskESP0, uint32_t *newTaskESP0, uint32_t newCR3)
-global _contextSwitch
-_contextSwitch:
+global contextSwitch
+contextSwitch:
 	pushfd ; 4 bytes
 	pushad ; 8*4 bytes
 	mov edx, [esp + 48] ; newCR3

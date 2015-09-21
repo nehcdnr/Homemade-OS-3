@@ -2,8 +2,8 @@
 [SECTION .real]
 ; org 0xbe00
 ENTRY_BEGIN equ 0xbe00
-global _entry
-_entry:
+global entry
+entry:
 ; assume cs = ds = 0
 ; ss, esp, ebp = uninitialized
 ; --------get address range--------
@@ -15,7 +15,7 @@ _entry:
 	mov esp, 0x7000
 	mov ebp, 0x7000
 	; bios 0x13 0xe820
-	mov DWORD [_addressRangeCount], 0
+	mov DWORD [addressRangeCount], 0
 	mov ebx, 0 ; next call
 memorymaploop:
 	mov eax, 0xe820 ; function
@@ -29,21 +29,21 @@ memorymaploop:
 	jc memorymapend ; if error or after the last entry
 	cmp eax, 0x534d4150 ; "SMAP"
 	jne memorymapend ; if error
-	add DWORD [_addressRangeCount], 1
+	add DWORD [addressRangeCount], 1
 	cmp ebx, 0
 	jne memorymaploop ; if not the last entry
 	sub esp, 24
 memorymapend:
 	add esp, 24
-	mov [_addressRange], esp
+	mov [addressRange], esp
 	mov ebp, esp
 	jmp entry2
 
-	global _addressRange
-_addressRange: ; memory.c
+	global addressRange
+addressRange: ; memory.c
 	dd 0
-	global _addressRangeCount
-_addressRangeCount:
+	global addressRangeCount
+addressRangeCount:
 	dd 0
 
 ; --------set temporary GDT--------
@@ -77,18 +77,18 @@ flushpipeline:
 
 [BITS 32]
 ; --------initialze bss section--------
-extern _KERNEL_LINEAR_BEGIN_SYMBOL
-extern __bss_linear_start ; see linker script
-extern __bss_linear_end
+extern KERNEL_LINEAR_BEGIN_SYMBOL
+extern _bss_linear_start ; see linker script
+extern _bss_linear_end
 entry3:
 	cmp BYTE [init_flag], 0
 	jne entry4
-	mov eax, __bss_linear_start
+	mov eax, _bss_linear_start
 initbssloop:
-	cmp eax, __bss_linear_end
+	cmp eax, _bss_linear_end
 	je entry4
 	mov ebx, eax
-	sub ebx, _KERNEL_LINEAR_BEGIN_SYMBOL
+	sub ebx, KERNEL_LINEAR_BEGIN_SYMBOL
 	mov BYTE [ebx], 0
 	add eax, 1
 	jmp initbssloop
@@ -97,8 +97,8 @@ initbssloop:
 entry4:
 	mov esi, linear_pde_begin
 	mov edi, linear_pde_end
-	sub esi, _KERNEL_LINEAR_BEGIN_SYMBOL ; esi = physical_pde_begin
-	sub edi, _KERNEL_LINEAR_BEGIN_SYMBOL ; edi = physical_pde_end
+	sub esi, KERNEL_LINEAR_BEGIN_SYMBOL ; esi = physical_pde_begin
+	sub edi, KERNEL_LINEAR_BEGIN_SYMBOL ; edi = physical_pde_end
 	cmp BYTE [init_flag], 0
 	jne loadpage
 
@@ -107,9 +107,9 @@ entry4:
 initpdeloop:
 	mov DWORD [eax], 10001111b ; 4MB ,write-through, user-accessible, writable, present TODO
 	or [eax], edx
-	cmp edx, _KERNEL_LINEAR_BEGIN_SYMBOL
+	cmp edx, KERNEL_LINEAR_BEGIN_SYMBOL
 	jb nextpde
-	sub DWORD [eax], _KERNEL_LINEAR_BEGIN_SYMBOL
+	sub DWORD [eax], KERNEL_LINEAR_BEGIN_SYMBOL
 nextpde:
 	add eax, 4
 	add edx, (1 << 22)
@@ -129,7 +129,7 @@ loadpage:
 intigdt2:
 	mov dx, [physical_lgdtargument + 0] ; limit
 	mov eax, [physical_lgdtargument + 2] ; address
-	add eax, _KERNEL_LINEAR_BEGIN_SYMBOL
+	add eax, KERNEL_LINEAR_BEGIN_SYMBOL
 	mov [linear_lgdtargument + 0], dx
 	mov [linear_lgdtargument + 2], eax
 loadgdt2:
@@ -144,7 +144,7 @@ loadgdt2:
 	jmp DWORD 8:entry5
 
 ; --------set stack registers if this is AP--------
-extern _c_entry ; main.c
+extern c_entry ; main.c
 
 entry5:
 acquirelock:
@@ -215,18 +215,18 @@ linear_lgdtargument:
 [SECTION .text]
 
 initbspstack: ; esp += KERNEL_LINEAR_BEGIN
-	add esp, _KERNEL_LINEAR_BEGIN_SYMBOL
-	jmp _c_entry
+	add esp, KERNEL_LINEAR_BEGIN_SYMBOL
+	jmp c_entry
 
-extern _initialESP ; pic.c
-extern _kernelCR3 ; page.c
+extern initialESP ; pic.c
+extern kernelCR3 ; page.c
 initapstack: ; esp = initialESP[ecx]
-	mov eax, [_kernelCR3]
+	mov eax, [kernelCR3]
 	mov cr3, eax
-	mov ebx, [_initialESP]
+	mov ebx, [initialESP]
 	mov esp, [ebx + ecx * 4]
 	mov ebp, esp
-	jmp _c_entry
+	jmp c_entry
 
 [SECTION .bss]
 	align 4096
