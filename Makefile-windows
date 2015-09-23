@@ -21,29 +21,37 @@ VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 # disk image
 MKDOSFS=./tool/mkdosfs/mkdosfs.exe
 
-# source
+#directory
+BUILD_DIR=build
+SRC_DIR=src
+RESOURCE_DIR=src\resource
+RESOURCE_OBJ_DIR=src\resource_obj
+INCLUDE_DIR=src
 CURRENT_DIR=$(shell echo %cd%)
-KERNEL_SRC=src\kernel
-ASM_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.asm)
-C_SRC=$(shell dir /A-D /B /S $(KERNEL_SRC)\*.c)
-BIN_SRC=$(shell dir /A-D /B /S src\file\*)
+
+# source
+ASM_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.asm)
+C_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.c)
+RESOURCE_SRC=$(shell dir /A-D /B /S $(RESOURCE_DIR)\*)
+
 ASM_OBJ=$(patsubst $(CURRENT_DIR)\\%.asm,%.o,$(ASM_SRC))
 C_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_SRC))
-BIN_OBJ=$(patsubst $(CURRENT_DIR)\\%,%,$(BIN_SRC))
-OBJ=$(C_OBJ) $(ASM_OBJ)
-BOOTLOADER_ASM=src\bootloader\floppyloader.asm
+RESOURCE_OBJ=$(patsubst $(CURRENT_DIR)\$(RESOURCE_DIR)\\%,$(RESOURCE_OBJ_DIR)\\%.o,$(RESOURCE_SRC))
+OBJ=$(C_OBJ) $(ASM_OBJ) $(RESOURCE_OBJ)
+
+BOOTLOADER_ASM=$(SRC_DIR)\bootloader\floppyloader.asm
 
 all: os3.img
 
-os3.img: floppyloader.bin build/kernel.bin
-	$(BFI) -t=6 -b=$< -f=$@ build
+os3.img: floppyloader.bin $(BUILD_DIR)/kernel.bin
+	$(BFI) -t=6 -b=$< -f=$@ $(BUILD_DIR)
 
 floppyloader.bin: $(BOOTLOADER_ASM)
 	$(NASM) $< -o $@
 
-build/kernel.bin: $(OBJ)
+$(BUILD_DIR)/kernel.bin: $(OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
-	objcopy -O binary kernel.o build/kernel.bin
+	objcopy -O binary kernel.o $(BUILD_DIR)/kernel.bin
 
 .SUFFIXES: .o .asm
 .asm.o:
@@ -51,13 +59,13 @@ build/kernel.bin: $(OBJ)
 
 .SUFFIXES: .o .c
 .c.o:
-	$(CC) $(CFLAGS) -I$(KERNEL_SRC) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
 
-file.elf: $(BIN_OBJ)
-	objcopy -I binary $< -O elf32-i386 file.elf
-	
+$(RESOURCE_OBJ): $(RESOURCE_OBJ_DIR)\\%.o: $(RESOURCE_DIR)\\%
+	cd $(RESOURCE_DIR) & objcopy --binary-architecture=i386 -I binary -O elf32-i386 $* $(CURRENT_DIR)\$@
+
 clean:
-	del floppyloader.bin os3.img build\kernel.bin kernel.o kernel.elf $(OBJ)
+	del floppyloader.bin os3.img $(BUILD_DIR)\kernel.bin kernel.o kernel.elf $(OBJ)
 
 run: runqemu
 
