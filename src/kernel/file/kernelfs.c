@@ -6,6 +6,7 @@
 #include"multiprocessor/processorlocal.h"
 #include"multiprocessor/spinlock.h"
 #include"io/io.h"
+#include<blob.h>
 
 typedef struct OpenFileRequest OpenFileRequest;
 struct OpenFileRequest{
@@ -77,6 +78,19 @@ static OpenFileRequest *createOpenFileRequest(void){
 	ofr->next = NULL;
 	ofr->prev = NULL;
 	return ofr;
+}
+
+static void testListKFS(void){
+	int a;
+	printk("%d\n", blobCount);
+	for(a = 0; a < blobCount; a++){
+		printk("%s %x %x\n", blobList[a].name, blobList[a].begin, blobList[a].end);
+		uintptr_t b;
+		for(b = blobList[a].begin; b < blobList[a].end; b++){
+			printk("%c", (*(const char*)b));
+		}
+		printk("\n");
+	}
 }
 
 static IORequest *testOpenKFS(const char *fileName, uintptr_t length){
@@ -187,5 +201,6 @@ void testKFS(void){
 	r2 = systemCall_readFile(kfs, file, &r2, 1);
 	assert(r2 == IO_REQUEST_FAILURE);
 	printk("testKFS ok\n");
+	testListKFS();
 	systemCall_terminate();
 }

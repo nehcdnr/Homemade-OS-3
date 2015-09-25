@@ -23,6 +23,8 @@ static void initService(void){
 		ahciDriver,
 		//fatDriver,
 		//testMemoryTask,
+		//kernelFileService,
+		//testKFS
 	};
 	unsigned int i;
 	Task *t;

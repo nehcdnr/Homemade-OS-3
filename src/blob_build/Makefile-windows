@@ -1,0 +1,17 @@
+# usage: make PREFIX=_ OBJ="testfile.txt.o file2.txt.o"
+
+BLOBLIST_C=bloblist.c
+SYMBOL_START=$(PREFIX)_binary_$(subst .,_,$(1))_start
+SYMBOL_END=$(PREFIX)_binary_$(subst .,_,$(1))_end
+
+DECLARE_SYMBOL=extern const int $(call SYMBOL_START,$(1)), $(call SYMBOL_END,$(1));
+LIST_ELEMENT={"$(1)", (uintptr_t)^&$(call SYMBOL_START,$(1)), (uintptr_t)^&$(call SYMBOL_END,$(1))},
+
+# see kernel/blob.h
+all:
+	echo #include^<blob.h^> > $(BLOBLIST_C)
+	$(foreach X,$(OBJ),echo $(call DECLARE_SYMBOL,$(X)) >> $(BLOBLIST_C)&)
+	echo const BLOBAddress blobList[] = { >> $(BLOBLIST_C)
+	$(foreach X,$(OBJ),echo $(call LIST_ELEMENT,$(X)) >> $(BLOBLIST_C)&)
+	echo }; >> $(BLOBLIST_C)
+	echo const int blobCount = $(words $(OBJ)); >> $(BLOBLIST_C)
