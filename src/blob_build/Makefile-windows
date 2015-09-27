@@ -1,4 +1,4 @@
-# usage: make PREFIX=_ OBJ="testfile.txt.o file2.txt.o"
+# usage: make PREFIX=_ OBJ="testfile.txt file2.txt"
 
 BLOBLIST_C=bloblist.c
 SYMBOL_START=$(PREFIX)_binary_$(subst .,_,$(1))_start

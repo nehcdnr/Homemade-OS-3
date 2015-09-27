@@ -58,6 +58,7 @@ uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
 
 typedef struct IORequest IORequest;
 typedef struct InterruptParam InterruptParam;
+typedef struct Task Task;
 typedef struct{
 	IORequest *(*open)(const char *fileName, uintptr_t nameLength);
 	IORequest *(*read)(void *arg, uint8_t *buffer, uintptr_t bufferSize);
@@ -66,7 +67,7 @@ typedef struct{
 	IORequest *(*close)(void *arg);
 	// If the argument is not a valid handle, return NULL.
 	// Otherwise, the return value of checkHandle will be passed to the above functions
-	void *(*checkHandle)(uintptr_t handle);
+	void *(*checkHandle)(uintptr_t handle, Task* task);
 }FileFunctions;
 
 uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f);

@@ -42,6 +42,8 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
 #define FLOOR(A,B) (((A)/(B))*(B))
 #define CEIL(A,B) (FLOOR((A)+((B)-1),B))
+#define MAX(A,B) ((A)>(B)?(A):(B))
+#define MIN(A,B) ((A)<(B)?(A):(B))
 
 int printk(const char *format, ...);
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))

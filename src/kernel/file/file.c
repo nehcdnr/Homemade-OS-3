@@ -252,28 +252,24 @@ enum FileCommand{
 };
 
 uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
-#define CHECK_HANDLE(I, O) \
-(O) = f->checkHandle(I);\
-if((O) == NULL)\
-	return IO_REQUEST_FAILURE;
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
-	void *h;
-	// TODO: check Address, check Task
-	switch(SYSTEM_CALL_ARGUMENT_0(p)){
-	case FILE_COMMAND_OPEN:
+	// TODO: check Address
+	if(FILE_COMMAND_OPEN == SYSTEM_CALL_ARGUMENT_0(p)){
 		return NULL_OR_CALL(f->open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
+	}
+	void *arg;
+	arg = f->checkHandle(SYSTEM_CALL_ARGUMENT_1(p), processorLocalTask());
+	if(arg == NULL)
+		return IO_REQUEST_FAILURE;
+	switch(SYSTEM_CALL_ARGUMENT_0(p)){
 	case FILE_COMMAND_READ:
-		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
-		return NULL_OR_CALL(f->read)(h, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+		return NULL_OR_CALL(f->read)(arg, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
 	case FILE_COMMAND_WRITE:
-		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
-		return NULL_OR_CALL(f->write)(h, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
+		return NULL_OR_CALL(f->write)(arg, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
 	case FILE_COMMAND_SEEK:
-		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
-		return NULL_OR_CALL(f->seek)(h, SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
+		return NULL_OR_CALL(f->seek)(arg, SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
 	case FILE_COMMAND_CLOSE:
-		CHECK_HANDLE(SYSTEM_CALL_ARGUMENT_1(p),h);
-		return NULL_OR_CALL(f->close)(h);
+		return NULL_OR_CALL(f->close)(arg);
 	default:
 		return IO_REQUEST_FAILURE;
 	}
