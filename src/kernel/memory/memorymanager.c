@@ -328,16 +328,12 @@ void testMemoryManager(void){
 void testMemoryManager2(void){
 	uintptr_t p[TEST_N];
 	int a;
-	unsigned b;
 	unsigned int r=38;
 	for(a=0;a<TEST_N;a++){
 		size_t s=r*MIN_BLOCK_SIZE;
 		r=(r*31+5)%197;
 		p[a]=allocateBlock(kernelLinear->physical, &s, 0);
 		if(p[a]==UINTPTR_NULL)continue;
-		for(b=0;b<s;b+=MIN_BLOCK_SIZE){
-			assert(isReleasableAddress(kernelLinear->physical, p[a]+b)==(b==0));
-		}
 	}
 	for(a=0;a<TEST_N;a++){
 		if(p[a]==UINTPTR_NULL)continue;

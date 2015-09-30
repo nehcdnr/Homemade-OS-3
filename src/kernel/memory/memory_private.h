@@ -1,3 +1,6 @@
+#ifndef MEMORY_PRIVATE_H_INCLUDED
+#define MEMORY_PRIVATE_H_INCLUDED
+
 #include<std.h>
 
 // buddy.c (physical memory)
@@ -38,8 +41,8 @@ size_t getBlockManagerSize(MemoryBlockManager *m);
 size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m);
 int getBlockCount(MemoryBlockManager *m);
 int getMaxBlockCount(LinearMemoryBlockManager *m);
-int getFreeBlockSize(MemoryBlockManager *m);
-int getFreeLinearBlockSize(LinearMemoryBlockManager *m);
+size_t getFreeBlockSize(MemoryBlockManager *m);
+size_t getFreeLinearBlockSize(LinearMemoryBlockManager *m);
 uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m);
 
 size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
@@ -97,11 +100,13 @@ int _mapExistingPages_L(
 PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 
 // linear + physical + page
-typedef struct LinearMemoryManager{
+struct LinearMemoryManager{
 	MemoryBlockManager *physical;
 	LinearMemoryBlockManager *linear;
 	PageManager *page;
-}LinearMemoryManager;
+};
 
 // slab.c (linear memory)
 SlabManager *createKernelSlabManager(void);
+
+#endif
