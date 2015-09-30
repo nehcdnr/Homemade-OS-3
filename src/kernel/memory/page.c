@@ -85,16 +85,6 @@ static void setPDEAddress(PageDirectoryEntry *e, PhysicalAddress a){
 #undef GET_ENTRY_ADDRESS
 #undef SET_ENTRY_ADDRESS
 
-uint32_t getCR3(void){
-	uint32_t value;
-	__asm__(
-	"mov %%cr3, %0\n"
-	:"=a"(value)
-	:
-	);
-	return value;
-}
-
 static void setCR3(uint32_t value){
 	__asm__(
 	"mov  %0, %%cr3\n"

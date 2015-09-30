@@ -113,6 +113,12 @@ static void generalProtectionHandler(InterruptParam *p){
 	}
 }
 
+static void pageFaultHandler(InterruptParam *p){
+	printk("page fault: CR0 = %x CR2 = %x CR3 = %x\n", getCR0(), getCR2(), getCR3());
+	defaultInterruptHandler(p);
+}
+
 void initInternalInterrupt(InterruptTable *idt){
 	registerInterrupt(idt, GENERAL_PROTECTION_FAULT, generalProtectionHandler, 0);
+	registerInterrupt(idt, PAGE_FAULT, pageFaultHandler, 0);
 }

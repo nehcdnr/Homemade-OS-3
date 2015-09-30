@@ -1,43 +1,39 @@
 
 #include"assembly.h"
 
-uint16_t getCS(void){
-	uint16_t c;
-	__asm__(
-	"mov %%cs, %0\n"
-	:"=a"(c)
-	:
-	);
-	return c;
+#define GET_REGISTER(T,F,R) \
+T get##F(void){\
+	T value = 0;\
+	__asm__(\
+	"mov %%"#R", %0\n"\
+	:"=a"(value)\
+	:\
+	);\
+	return value;\
 }
 
-uint16_t getDS(void){
-	uint16_t d;
-	__asm__(
-	"mov %%ds, %0\n"
-	:"=a"(d)
-	:
-	);
-	return d;
+GET_REGISTER(uint16_t, CS, cs)
+GET_REGISTER(uint16_t, DS, ds)
+GET_REGISTER(uint32_t, CR0, cr0)
+GET_REGISTER(uint32_t, CR2, cr2)
+GET_REGISTER(uint32_t, CR3, cr3)
+GET_REGISTER(uint32_t, CR4, cr4)
+
+#undef GET_REGISTER
+
+#define SET_REGISTER(T,F,R)\
+void set##F(T value){\
+	__asm__(\
+	"mov %0, %%"#R"\n"\
+	:\
+	:"a"(value)\
+	);\
 }
 
-uint32_t getCR0(void){
-	uint32_t value = 0;
-	__asm__(
-	"mov %%cr0, %0\n"
-	:"=a"(value)
-	:
-	);
-	return value;
-}
+SET_REGISTER(uint32_t, CR0, cr0)
+SET_REGISTER(uint32_t, CR3, cr3)
 
-void setCR0(uint32_t value){
-	__asm__(
-	"mov %0, %%cr0\n"
-	:
-	:"a"(value)
-	);
-}
+#undef SET_REGISTER
 
 #define IN(TYPE, FUNC) \
 TYPE FUNC(uint16_t port){\
