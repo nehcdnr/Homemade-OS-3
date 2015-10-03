@@ -1,4 +1,4 @@
-#include"memory.h"
+#include"memory_private.h"
 #include"buddy.h"
 
 struct LinearMemoryBlockManager{
@@ -18,25 +18,13 @@ typedef struct LinearMemoryBlock{
 	MemoryBlock block;
 }LinearMemoryBlock;
 
-static_assert((uintptr_t)(((LinearMemoryBlockManager*)0)->b.blockArray) == sizeof(LinearMemoryBlockManager));
+static_assert(MEMBER_OFFSET(LinearMemoryBlockManager, b.blockArray) == sizeof(LinearMemoryBlockManager));
 
 static void initLinearMemoryBlock(void *voidLMB){
 	LinearMemoryBlock *lmb = voidLMB;
 	lmb->mappedSize = 0;
 	lmb->status = MEMORY_USING;
 	initMemoryBlock(&lmb->block);
-}
-
-static LinearMemoryBlock *toLinearBlock(LinearMemoryBlockManager *m, MemoryBlock *b){
-#ifndef NDEBUG
-	int i = elementToIndex(&m->b, b);
-	assert(i >= 0 && i < m->b.blockCount);
-#endif
-	return (LinearMemoryBlock*)(((uintptr_t)b) - m->b.blockStructOffset);
-}
-
-static LinearMemoryBlock *getLinearBlock(LinearMemoryBlockManager *m, uintptr_t address){
-	return toLinearBlock(m, addressToBlock(&m->b, address));
 }
 
 LinearMemoryBlockManager *createLinearBlockManager(
@@ -48,7 +36,7 @@ LinearMemoryBlockManager *createLinearBlockManager(
 ){
 	LinearMemoryBlockManager *bm = (LinearMemoryBlockManager*)manageBase;
 	initMemoryBlockManager(
-		&bm->b, sizeof(LinearMemoryBlock), ((size_t)&((LinearMemoryBlock*)0)->block),
+		&bm->b, sizeof(LinearMemoryBlock), MEMBER_OFFSET(LinearMemoryBlock, block),
 		beginAddr, initEndAddr,
 		initLinearMemoryBlock
 	);
@@ -66,8 +54,7 @@ uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m){
 }
 
 size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address){
-	int i = addressToIndex(&m->b, address);
-	LinearMemoryBlock *lmb = indexToElement(&m->b, i);
+	LinearMemoryBlock *lmb = addressToElement(&m->b, address);
 	assert(lmb->mappedSize != 0 && lmb->mappedSize % PAGE_SIZE == 0);
 	return lmb->mappedSize;
 }
@@ -117,7 +104,7 @@ static int isUsingBlock_noLock(LinearMemoryBlockManager *m, uintptr_t address){
 		assert(b2 < b1);
 		b1 = b2;
 	}
-	return (toLinearBlock(m, b1)->status == MEMORY_USING);
+	return (((LinearMemoryBlock*)blockToElement(&m->b, b1))->status == MEMORY_USING);
 }
 
 
@@ -185,8 +172,10 @@ static int extendLinearBlock_noLock(LinearMemoryManager *m, int exCount){
 uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags){
 	LinearMemoryBlockManager *bm = m->linear;
 	size_t l_size = *size;
+	LinearMemoryBlock *lmb;
+	MemoryBlock *block;
 	acquireLock(&bm->b.lock);
-	MemoryBlock *block = allocateBlock_noLock(&bm->b, &l_size, flags);
+	block = allocateBlock_noLock(&bm->b, &l_size, flags);
 	if(block != NULL){ // ok
 		goto alcOrExt_return;
 	}
@@ -205,7 +194,7 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, Memo
 	//}
 	alcOrExt_return:
 	if(block != NULL){
-		LinearMemoryBlock *lmb = toLinearBlock(bm, block);
+		lmb = blockToElement(&bm->b, block);
 		lmb->mappedSize = (*size);
 		assert(lmb->status == MEMORY_FREE_OR_COVERED);
 		lmb->status = MEMORY_USING;
@@ -216,14 +205,14 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, Memo
 	}
 
 	(*size) = l_size;
-	uintptr_t linearAddress = blockToAddress(&bm->b, block);
+	uintptr_t linearAddress = elementToAddress(&bm->b, lmb);
 
 	return linearAddress;
 }
 
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->b.lock);
-	LinearMemoryBlock *lmb = getLinearBlock(m, address);
+	LinearMemoryBlock *lmb = addressToElement(&m->b, address);
 	assert(lmb->status == MEMORY_USING || lmb->status == MEMORY_RELEASING);
 	lmb->status = MEMORY_FREE_OR_COVERED;
 	releaseBlock_noLock(&m->b, &lmb->block);
@@ -234,11 +223,11 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 	LinearMemoryBlockManager *bm = m->linear;
 	int r;
 	acquireLock(&bm->b.lock);
-	r = isBlockInRange(&bm->b, linearAddress);
+	r = isAddressInRange(&bm->b, linearAddress);
 	if(r == 0){
 		goto chkAndRls_return;
 	}
-	LinearMemoryBlock *lmb = getLinearBlock(bm, linearAddress);
+	LinearMemoryBlock *lmb = addressToElement(&bm->b, linearAddress);
 	r = isReleasableBlock_noLock(bm, lmb);
 	if(r == 0){
 		// r = 0;
@@ -293,13 +282,12 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 static PhysicalAddress checkAndTranslateBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	LinearMemoryBlockManager *bm = m->linear;
 	PhysicalAddress p = {UINTPTR_NULL};
-	if(isBlockInRange(&bm->b, linearAddress) == 0){
-		return p;
-	}
 	acquireLock(&bm->b.lock);
-	if(isUsingBlock_noLock(bm, linearAddress)){
-		p = translateExistingPage(m->page, (void*)linearAddress);
-		assert(p.value != UINTPTR_NULL);
+	if(isAddressInRange(&bm->b, linearAddress)){
+		if(isUsingBlock_noLock(bm, linearAddress)){
+			p = translateExistingPage(m->page, (void*)linearAddress);
+			assert(p.value != UINTPTR_NULL);
+		}
 	}
 	releaseLock(&bm->b.lock);
 	return p;

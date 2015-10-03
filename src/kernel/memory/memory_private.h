@@ -2,6 +2,7 @@
 #define MEMORY_PRIVATE_H_INCLUDED
 
 #include<std.h>
+#include"memory.h"
 
 // buddy.c (physical memory)
 typedef struct MemoryBlockManager MemoryBlockManager;
@@ -27,6 +28,27 @@ MemoryBlockManager *createMemoryBlockManager(
 	uintptr_t beginAddr,
 	uintptr_t initEndAddr
 );
+
+typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
+
+PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
+	uintptr_t manageBase,
+	size_t manageSize,
+	uintptr_t beginAddr,
+	uintptr_t initEndAddr
+);
+
+//TODO: change name
+size_t getBlockManagerSize2(PhysicalMemoryBlockManager *m);
+// change reference count from 0 to 1
+uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size);
+// if referenceCount == MAX_REFERENCE_COUNT, do not increase it and return 0
+// otherwise, increase and return 1
+int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address);
+// subtract referenceCount and return the new value
+// if the new value == 0, release the block
+void releaseOrUnmapPhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address);
+
 typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
 
 LinearMemoryBlockManager *createLinearBlockManager(
@@ -50,6 +72,7 @@ size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 
 #define WITH_PHYSICAL_PAGES_FLAG ((MemoryBlockFlags)1)
+
 // allocate linear blocks only
 uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags);
 // release linear blocks, pages, and physical blocks
@@ -66,8 +89,6 @@ void releaseAllLinearBlocks(LinearMemoryManager *m);
 #define MAX_BLOCK_SIZE (1<<MAX_BLOCK_ORDER)
 
 // page.c
-typedef struct PageManager PageManager;
-
 PageManager *initKernelPageTable(
 	uintptr_t manageBase,
 	uintptr_t manageBegin,

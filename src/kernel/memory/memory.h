@@ -38,7 +38,7 @@ void releasePageTable(PageManager *deletePage);
 #define USER_PAGE_FLAG (1 << 1)
 #define WRITABLE_PAGE_FLAG (1 << 2)
 #define NON_CACHED_PAGE_FLAG (1 << 4)
-typedef enum{
+typedef enum PageAttribute{
 	KERNEL_PAGE = WRITABLE_PAGE_FLAG,
 	KERNEL_NON_CACHED_PAGE = WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
 	USER_READ_ONLY_PAGE = USER_PAGE_FLAG,
