@@ -250,18 +250,17 @@ static volatile PageTableEntry *pteByLinearAddress(PageTable *p, uintptr_t linea
 
 #undef PD_INDEX_ADD_BASE
 
-PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size){
+PhysicalAddress _allocatePhysicalPages(PhysicalMemoryBlockManager *physical, size_t size){
 	size_t p_size = size;
-	PhysicalAddress p_address = {allocateBlock(physical, &p_size, 0)};
-	//assert(p_address.value != UINTPTR_NULL);
-	if(p_address.value == UINTPTR_NULL){
-		p_address.value = UINTPTR_NULL;
-	}
+	PhysicalAddress p_address = {allocatePhysicalBlock(physical, &p_size)};
+	//if(p_address.value == UINTPTR_NULL){
+	//	p_address.value = UINTPTR_NULL;
+	//}
 	return p_address;
 }
 
-void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address){
-	releaseBlock(physical, address.value);
+void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress address){
+	releaseOrUnmapPhysicalBlock(physical, address.value);
 }
 
 // assume the arguments are valid
@@ -284,7 +283,7 @@ PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress){
 // In this case, we assume PD is present.
 static int setPage(
 	PageManager *p,
-	MemoryBlockManager *physical,
+	PhysicalMemoryBlockManager *physical,
 	uintptr_t linearAddress, PhysicalAddress physicalAddress,
 	PageAttribute attribute
 ){
@@ -361,7 +360,7 @@ static void invalidatePage(
 
 static void releaseInvalidatedPage(
 	PageManager *p,
-	MemoryBlockManager *physical,
+	PhysicalMemoryBlockManager *physical,
 	uintptr_t linear,
 	int releasePhysical
 ){
@@ -581,7 +580,7 @@ void initMultiprocessorPaging(InterruptTable *t){
 }
 
 // assume the linear memory manager has checked the arguments
-void _unmapPage(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
+void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
 	if(size == 0)
 		return;
 
@@ -689,7 +688,7 @@ void releasePageTable(PageManager *deletePage){
 }
 
 int _mapPage_LP(
-	PageManager *p, MemoryBlockManager *physical,
+	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
 	PageAttribute attribute
 ){
@@ -711,7 +710,7 @@ int _mapPage_LP(
 }
 
 int _mapPage_L(
-	PageManager *p, MemoryBlockManager *physical,
+	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, size_t size,
 	PageAttribute attribute
 ){
@@ -739,7 +738,7 @@ int _mapPage_L(
 }
 
 int _mapExistingPages_L(
-	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
+		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	void *dstLinear, uintptr_t srcLinear, size_t size,
 	PageAttribute attribute
 ){

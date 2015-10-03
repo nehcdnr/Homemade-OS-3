@@ -199,11 +199,11 @@ static int isUsableInAddressRange(
 	return (isInUnusable == 0 && isInUsable == 1);
 }
 
-static MemoryBlockManager *initKernelPhysicalBlock(
+static PhysicalMemoryBlockManager *initKernelPhysicalBlock(
 	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
 	uintptr_t minAddress, uintptr_t maxAddress
 ){
-	MemoryBlockManager *m = createMemoryBlockManager(
+	PhysicalMemoryBlockManager *m = createPhysicalMemoryBlockManager(
 		manageBegin, manageEnd - manageBegin,
 		minAddress, maxAddress
 	);
@@ -212,13 +212,13 @@ static MemoryBlockManager *initKernelPhysicalBlock(
 	};
 
 	int b;
-	const int bCount = getBlockCount(m);
-	const uintptr_t firstAddress = getBeginAddress(m);
+	const int bCount = getPhysicalBlockCount(m);
+	const uintptr_t firstAddress = getPhysicalBeginAddress(m);
 	for(b = 0; b < bCount; b++){
 		uintptr_t address = firstAddress + b * MIN_BLOCK_SIZE;
 		assert(address + MIN_BLOCK_SIZE > address); // not overflow
 		if(isUsableInAddressRange(address, addressRange, addressRangeCount, extraAR, LENGTH_OF(extraAR))){
-			releaseBlock(m, address);
+			releaseOrUnmapPhysicalBlock(m, address);
 		}
 	}
 	return m;
@@ -266,7 +266,7 @@ void initKernelMemory(void){
 		reservedBase, reservedBegin, reservedDirectMapEnd,
 		0, findMaxAddress()
 	);
-	reservedBegin = ((uintptr_t)kernelLinear->physical) + getBlockManagerSize(kernelLinear->physical);
+	reservedBegin = ((uintptr_t)kernelLinear->physical) + getPhysicalBlockManagerSize(kernelLinear->physical);
 
 	kernelLinear->linear = initKernelLinearBlock(
 		reservedBase, reservedBegin, reservedEnd,
@@ -332,12 +332,12 @@ void testMemoryManager2(void){
 	for(a=0;a<TEST_N;a++){
 		size_t s=r*MIN_BLOCK_SIZE;
 		r=(r*31+5)%197;
-		p[a]=allocateBlock(kernelLinear->physical, &s, 0);
+		p[a]=allocatePhysicalBlock(kernelLinear->physical, &s);
 		if(p[a]==UINTPTR_NULL)continue;
 	}
 	for(a=0;a<TEST_N;a++){
 		if(p[a]==UINTPTR_NULL)continue;
-		releaseBlock(kernelLinear->physical, p[a]);
+		releaseOrUnmapPhysicalBlock(kernelLinear->physical, p[a]);
 	}
 }
 

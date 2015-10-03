@@ -16,11 +16,7 @@ static_assert(MEMBER_OFFSET(PhysicalMemoryBlockManager, b.blockArray) == sizeof(
 static void initPhysicalMemoryBlock(void *b){
 	PhysicalMemoryBlock *pb = b;
 	initMemoryBlock(&pb->block);
-	pb->referenceCount = 0;
-}
-
-size_t getBlockManagerSize2(PhysicalMemoryBlockManager *m){
-	return sizeof(*m) + m->b.blockCount * m->b.blockStructSize;
+	pb->referenceCount = 1;
 }
 
 PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
@@ -36,10 +32,26 @@ PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
 		beginAddr, initEndAddr,
 		initPhysicalMemoryBlock
 	);
-	if(getBlockManagerSize2(pm) >= manageSize){
+	if(getPhysicalBlockManagerSize(pm) >= manageSize){
 		panic("cannot initialize physical memory manager");
 	}
 	return pm;
+}
+
+size_t getPhysicalBlockManagerSize(PhysicalMemoryBlockManager *m){
+	return sizeof(*m) + m->b.blockCount * m->b.blockStructSize;
+}
+
+int getPhysicalBlockCount(PhysicalMemoryBlockManager *m){
+	return m->b.blockCount;
+}
+
+size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m){
+	return m->b.freeSize;
+}
+
+uintptr_t getPhysicalBeginAddress(PhysicalMemoryBlockManager *m){
+	return m->b.beginAddress;
 }
 
 uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size){

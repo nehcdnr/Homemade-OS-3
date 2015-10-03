@@ -7,7 +7,9 @@
 // return 1 if ok
 static int v8086Push(InterruptParam *p, uint16_t v){
 	if((p->esp & 0xffff) < 2){
-		panic("v8086 stack pointer underflow");
+		printk("v8086 stack pointer underflow\n");
+		 // see generalProtectionHandler()
+		defaultInterruptHandler(p);
 		return 0;
 	}
 	p->esp -= 2;
@@ -18,7 +20,9 @@ static int v8086Push(InterruptParam *p, uint16_t v){
 
 static int v8086Pop(InterruptParam *p, uint16_t *v){
 	if((p->esp & 0xffff) >= 0x10000 - 2){
-		panic("v8086 stack pointer overflow"); //TODO: terminate
+		printk("v8086 stack pointer overflow\n");
+		 // see generalProtectionHandler()
+		defaultInterruptHandler(p);
 		return 0;
 	}
 	uint16_t *s = (uint16_t*)(((p->ss & 0xffff) << 4) + (p->esp & 0xffff));

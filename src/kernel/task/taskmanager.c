@@ -744,7 +744,7 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 }
 
 #ifndef NDEBUG
-size_t getFreeBlockSize(MemoryBlockManager *m);
+// size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m);
 void releaseAllLinearBlocks(LinearMemoryManager *m);
 void testMemoryTask(void){
 	int a,loop;

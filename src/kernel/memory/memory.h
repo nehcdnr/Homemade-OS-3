@@ -8,12 +8,12 @@ typedef struct{
 	uintptr_t value;
 }PhysicalAddress;
 
-typedef struct MemoryBlockManager MemoryBlockManager;
+typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
 
 // if failure, return NULL, which is not a usable physical address
-PhysicalAddress _allocatePhysicalPages(MemoryBlockManager *physical, size_t size);
+PhysicalAddress _allocatePhysicalPages(PhysicalMemoryBlockManager *physical, size_t size);
 #define allocatePhysicalPages(SIZE) _allocatePhysicalPages(kernelLinear->physical, (SIZE))
-void _releasePhysicalPages(MemoryBlockManager *physical, PhysicalAddress address);
+void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress address);
 #define releasePhysicalPages(ADDRESS) _releasePhysicalPages(kernelLinear->physical, (ADDRESS))
 
 // return free size

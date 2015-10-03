@@ -107,7 +107,7 @@ static int isUsingBlock_noLock(LinearMemoryBlockManager *m, uintptr_t address){
 	return (((LinearMemoryBlock*)blockToElement(&m->b, b1))->status == MEMORY_USING);
 }
 
-
+// return whether a block is a valid argument of releaseBlock
 static int isReleasableBlock_noLock(LinearMemoryBlockManager *m, LinearMemoryBlock *lmb){
 #ifndef NDEBUG
 	MemoryBlock *b1 = &lmb->block, *b2 = getBuddy(&m->b, b1);

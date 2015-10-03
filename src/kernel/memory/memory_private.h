@@ -5,29 +5,16 @@
 #include"memory.h"
 
 // buddy.c (physical memory)
-typedef struct MemoryBlockManager MemoryBlockManager;
+//typedef struct MemoryBlockManager MemoryBlockManager;
 // if failure, return UINTPTR_NULL
 // if success, return address and *size = allocated size, which is >= input value
 typedef uint8_t MemoryBlockFlags;
-uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
+//uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
 //extern const size_t minBlockManagerSize;
 //extern const size_t maxBlockManagerSize;
-extern const size_t minLinearBlockManagerSize;
-extern const size_t maxLinearBlockManagerSize;
 
-// return whether an address is a valid argument of releaseBlock
-int isReleasableAddress(MemoryBlockManager *m, uintptr_t address);
 // no concern with flags
-void releaseBlock(MemoryBlockManager *m, uintptr_t address);
-
-uintptr_t getBeginAddress(MemoryBlockManager *m);
-
-MemoryBlockManager *createMemoryBlockManager(
-	uintptr_t manageBase,
-	size_t manageSize,
-	uintptr_t beginAddr,
-	uintptr_t initEndAddr
-);
+//void releaseBlock(MemoryBlockManager *m, uintptr_t address);
 
 typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
 
@@ -38,8 +25,11 @@ PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
 	uintptr_t initEndAddr
 );
 
-//TODO: change name
-size_t getBlockManagerSize2(PhysicalMemoryBlockManager *m);
+size_t getPhysicalBlockManagerSize(PhysicalMemoryBlockManager *m);
+int getPhysicalBlockCount(PhysicalMemoryBlockManager *m);
+size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m);
+uintptr_t getPhysicalBeginAddress(PhysicalMemoryBlockManager *m);
+
 // change reference count from 0 to 1
 uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size);
 // if referenceCount == MAX_REFERENCE_COUNT, do not increase it and return 0
@@ -59,11 +49,11 @@ LinearMemoryBlockManager *createLinearBlockManager(
 	uintptr_t maxEndAddr
 );
 
-size_t getBlockManagerSize(MemoryBlockManager *m);
+extern const size_t minLinearBlockManagerSize;
+extern const size_t maxLinearBlockManagerSize;
+
 size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m);
-int getBlockCount(MemoryBlockManager *m);
 int getMaxBlockCount(LinearMemoryBlockManager *m);
-size_t getFreeBlockSize(MemoryBlockManager *m);
 size_t getFreeLinearBlockSize(LinearMemoryBlockManager *m);
 uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m);
 
@@ -98,22 +88,22 @@ PageManager *initKernelPageTable(
 );
 
 int _mapPage_L(
-	PageManager *p, MemoryBlockManager *physical,
+	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, size_t size,
 	PageAttribute attribute
 );
-void _unmapPage(PageManager *p, MemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical);
+void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical);
 #define _unmapPage_L(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE, 1)
 
 int _mapPage_LP(
-	PageManager *p, MemoryBlockManager *physical,
+	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
 	PageAttribute attribute
 );
 #define _unmapPage_LP(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE, 0)
 
 int _mapExistingPages_L(
-	MemoryBlockManager *physical, PageManager *dst, PageManager *src,
+		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	void *dstLinear, uintptr_t srcLinear, size_t size,
 	PageAttribute attribute
 );
@@ -122,7 +112,7 @@ PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
 
 // linear + physical + page
 struct LinearMemoryManager{
-	MemoryBlockManager *physical;
+	PhysicalMemoryBlockManager *physical;
 	LinearMemoryBlockManager *linear;
 	PageManager *page;
 };
