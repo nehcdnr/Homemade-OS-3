@@ -12,7 +12,7 @@ static_assert(MEMBER_OFFSET(MemoryBlockManager, blockArray) == sizeof(MemoryBloc
 void initMemoryBlock(MemoryBlock *voidMB){
 	MemoryBlock *mb = voidMB;
 	mb->sizeOrder = MIN_BLOCK_ORDER;
-	mb->flags = 0;
+	mb->unused = 0;
 	mb->next = NULL;
 	mb->prev = NULL;
 }
@@ -98,7 +98,7 @@ int isAddressInRange(MemoryBlockManager *m, uintptr_t address){
 	return 1;
 }
 
-MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags){
+MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 	assert(isAcquirable(&m->lock) == 0);
 	size_t i = ceilAllocateOrder(*size), i2;
 	if(i > MAX_BLOCK_ORDER){
@@ -113,7 +113,6 @@ MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlo
 	}
 	MemoryBlock *const b = m->freeBlock[i2 - MIN_BLOCK_ORDER];
 	REMOVE_FROM_DQUEUE(b);
-	b->flags = flags;
 	while(i2 != i){
 		// split b and get buddy
 		b->sizeOrder--;
@@ -139,7 +138,6 @@ MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlo
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 	m->freeSize += (1 << b->sizeOrder);
 	assert(IS_IN_DQUEUE(b) == 0);
-	b->flags = 0;
 	while(b->sizeOrder < MAX_BLOCK_ORDER){
 		MemoryBlock *buddy = getBuddy(m, b);
 		if(buddy == NULL)

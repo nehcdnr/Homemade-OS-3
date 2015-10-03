@@ -8,7 +8,7 @@
 //typedef struct MemoryBlockManager MemoryBlockManager;
 // if failure, return UINTPTR_NULL
 // if success, return address and *size = allocated size, which is >= input value
-typedef uint8_t MemoryBlockFlags;
+
 //uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
 //extern const size_t minBlockManagerSize;
 //extern const size_t maxBlockManagerSize;
@@ -64,11 +64,11 @@ void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 #define WITH_PHYSICAL_PAGES_FLAG ((MemoryBlockFlags)1)
 
 // allocate linear blocks only
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags);
+uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size);
 // release linear blocks, pages, and physical blocks
-int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, int releasePhysical);
-#define checkAndUnmapLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 0)
-#define checkAndReleaseLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A, 1)
+int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
+#define checkAndUnmapLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A)
+#define checkAndReleaseLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A)
 void releaseAllLinearBlocks(LinearMemoryManager *m);
 
 // 4K~1G
@@ -92,16 +92,17 @@ int _mapPage_L(
 	void *linearAddress, size_t size,
 	PageAttribute attribute
 );
-void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical);
-#define _unmapPage_L(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE, 1)
+void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size);
+#define _unmapPage_L(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE)
 
 int _mapPage_LP(
 	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
 	PageAttribute attribute
 );
-#define _unmapPage_LP(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE, 0)
+#define _unmapPage_LP(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE)
 
+// assume arguments are valid
 int _mapExistingPages_L(
 		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	void *dstLinear, uintptr_t srcLinear, size_t size,

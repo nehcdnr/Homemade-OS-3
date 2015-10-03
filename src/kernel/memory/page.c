@@ -361,8 +361,7 @@ static void invalidatePage(
 static void releaseInvalidatedPage(
 	PageManager *p,
 	PhysicalMemoryBlockManager *physical,
-	uintptr_t linear,
-	int releasePhysical
+	uintptr_t linear
 ){
 	PageTable *pt_linear = ptByLinearAddress(p, linear);
 	Spinlock *pdLock = pdLockByLinearAddress(p, linear);
@@ -372,10 +371,8 @@ static void releaseInvalidatedPage(
 	assert(isPDEPresent(pdeByLinearAddress(p, linear)));
 	assert(isPTEPresent(pt_linear->entry + i2) == 0);
 #endif
-	if(releasePhysical){
-		PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
-		_releasePhysicalPages(physical, page_physical);
-	}
+	PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
+	_releasePhysicalPages(physical, page_physical);
 	acquireLock(pdLock);
 	/* release PageTable and set PD
 	if(pt_attribute->external == 0){
@@ -489,7 +486,11 @@ static void initPageManagerPT(
 	for(a = linearBegin; a < linearEnd; a += PAGE_SIZE){
 		assert(isPDEPresent(pdeByLinearAddress(p, a)));
 		PhysicalAddress kp_physical = linearToPhysical(mapping, (void*)(a - linearBegin + mappedLinearBegin));
-		setPage(p, NULL, a, kp_physical, KERNEL_PAGE);
+		// IMPROVE: change to setPTE
+		int ok = setPage(p, NULL, a, kp_physical, KERNEL_PAGE);
+		assert(ok);
+		ok = addPhysicalBlockReference(kernelLinear->physical, kp_physical.value);
+		assert(ok);
 	}
 }
 
@@ -580,7 +581,7 @@ void initMultiprocessorPaging(InterruptTable *t){
 }
 
 // assume the linear memory manager has checked the arguments
-void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size, int releasePhysical){
+void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size){
 	if(size == 0)
 		return;
 
@@ -598,7 +599,7 @@ void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *line
 	s = size;
 	do{
 		s -= PAGE_SIZE;
-		releaseInvalidatedPage(p, physical, ((uintptr_t)linearAddress) + s, releasePhysical);
+		releaseInvalidatedPage(p, physical, ((uintptr_t)linearAddress) + s);
 	}while(s != 0);
 
 }
@@ -685,27 +686,22 @@ void releaseInvalidatedPageTable(PageManager *deletePage){
 
 void releasePageTable(PageManager *deletePage){
 	invalidatePageTable(deletePage, NULL);
+	DELETE(deletePage);
 }
 
-int _mapPage_LP(
+static int map1Page_LP(
 	PageManager *p, PhysicalMemoryBlockManager *physical,
-	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
+	uintptr_t linearAddress, PhysicalAddress physicalAddress,
 	PageAttribute attribute
 ){
-	size_t s;
-	for(s = 0; s < size; s += PAGE_SIZE){
-		uintptr_t l_addr = ((uintptr_t)linearAddress) + s;
-		PhysicalAddress p_addr = {physicalAddress.value + s};
-		int result = setPage(p, physical, l_addr, p_addr, attribute);
-		if(result == 0){
-			break;
-		}
-	}
-	EXPECT(s >= size);
+	int ok = addPhysicalBlockReference(physical, physicalAddress.value);
+	EXPECT(ok);
+	ok = setPage(p, physical, linearAddress, physicalAddress, attribute);
+	EXPECT(ok);
 	return 1;
-
 	ON_ERROR;
-	_unmapPage_LP(p, physical, linearAddress, s);
+	releaseOrUnmapPhysicalBlock(physical, physicalAddress.value);
+	ON_ERROR;
 	return 0;
 }
 
@@ -737,8 +733,28 @@ int _mapPage_L(
 	return 0;
 }
 
+int _mapPage_LP(
+	PageManager *p, PhysicalMemoryBlockManager *physical,
+	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
+	PageAttribute attribute
+){
+	size_t s;
+	for(s = 0; s < size; s += PAGE_SIZE){
+		PhysicalAddress p_addr = {physicalAddress.value + s};
+		if(map1Page_LP(p, physical, ((uintptr_t)linearAddress) + s, p_addr, attribute) == 0){
+			break;
+		}
+	}
+	EXPECT(s >= size);
+	return 1;
+
+	ON_ERROR;
+	_unmapPage_LP(p, physical, linearAddress, s);
+	return 0;
+}
+
 int _mapExistingPages_L(
-		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
+	PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	void *dstLinear, uintptr_t srcLinear, size_t size,
 	PageAttribute attribute
 ){
@@ -746,7 +762,7 @@ int _mapExistingPages_L(
 	uintptr_t s;
 	for(s = 0; s < size; s += PAGE_SIZE){
 		PhysicalAddress p = translatePage(src, srcLinear + s, 1);
-		if(setPage(dst, physical, ((uintptr_t)dstLinear) + s, p, attribute) == 0){
+		if(map1Page_LP(dst, physical, ((uintptr_t)dstLinear) + s, p, attribute) == 0){
 			break;
 		}
 	}

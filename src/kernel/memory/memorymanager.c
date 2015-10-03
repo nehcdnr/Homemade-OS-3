@@ -75,7 +75,7 @@ void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t s
 	assert(m->page != NULL && m->linear != NULL);
 	// linear
 	size_t l_size = size;
-	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size, 0);
+	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size);
 	EXPECT(linearAddress != UINTPTR_NULL);
 	assert(linearAddress % PAGE_SIZE == 0);
 	// assume linear memory manager and page table are consistent
@@ -97,7 +97,7 @@ void *mapExistingPages(
 	uintptr_t srcLinear, size_t size, PageAttribute attribute
 ){
 	size_t l_size = size;
-	uintptr_t dstLinear = allocateOrExtendLinearBlock(dst, &l_size, 0);
+	uintptr_t dstLinear = allocateOrExtendLinearBlock(dst, &l_size);
 	EXPECT(dstLinear != UINTPTR_NULL);
 	int ok = _mapExistingPages_L(dst->physical, dst->page, src, (void*)dstLinear, srcLinear, size, attribute);
 	EXPECT(ok);
@@ -124,7 +124,7 @@ int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress){
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
 	// linear
 	size_t l_size = size;
-	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size, 1);
+	uintptr_t linearAddress = allocateOrExtendLinearBlock(m, &l_size);
 	EXPECT(linearAddress != UINTPTR_NULL);
 	// physical
 	int ok = _mapPage_L(m->page, m->physical, (void*)linearAddress, size, attribute);
@@ -260,10 +260,11 @@ void initKernelMemory(void){
 	// reserved... are linear address
 	const uintptr_t reservedBase = KERNEL_LINEAR_BEGIN;
 	uintptr_t reservedBegin = reservedBase + (1 << 20);
-	uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
+	//uintptr_t reservedDirectMapEnd = reservedBase + (14 << 20);
 	uintptr_t reservedEnd = reservedBase + (16 << 20);
+	//IMPROVE: how to reduce reserved memory
 	kernelLinear->physical = initKernelPhysicalBlock(
-		reservedBase, reservedBegin, reservedDirectMapEnd,
+		reservedBase, reservedBegin, reservedEnd,
 		0, findMaxAddress()
 	);
 	reservedBegin = ((uintptr_t)kernelLinear->physical) + getPhysicalBlockManagerSize(kernelLinear->physical);

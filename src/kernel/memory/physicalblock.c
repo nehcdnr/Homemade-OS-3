@@ -58,24 +58,30 @@ uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size){
 	MemoryBlock *b;
 	PhysicalMemoryBlock *pmb;
 	acquireLock(&m->b.lock);
-	b = allocateBlock_noLock(&m->b, size, 0);
+	b = allocateBlock_noLock(&m->b, size);
 	if(b != NULL){
 		pmb = blockToElement(&m->b, b);
 		assert(pmb->referenceCount == 0);
 		pmb->referenceCount = 1;
 	}
 	releaseLock(&m->b.lock);
-	return (b== NULL? UINTPTR_NULL: elementToAddress(&m->b, pmb));
+	return (b == NULL? UINTPTR_NULL: elementToAddress(&m->b, pmb));
 }
 
 int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){
 	int ok;
 	acquireLock(&m->b.lock);
-	PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);
-	assert(pmb->referenceCount > 0);
-	ok = (pmb->referenceCount < MAX_REFERENCE_COUNT);
-	if(ok){
-		pmb->referenceCount++;
+	// allow out of range
+	if(isAddressInRange(&m->b, address)){
+		PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);
+		assert(pmb->referenceCount > 0);
+		ok = (pmb->referenceCount < MAX_REFERENCE_COUNT);
+		if(ok){
+			pmb->referenceCount++;
+		}
+	}
+	else{
+		ok = 1;
 	}
 	releaseLock(&m->b.lock);
 	return ok;
@@ -83,11 +89,13 @@ int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){
 
 void releaseOrUnmapPhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->b.lock);
-	PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);
-	assert(pmb->referenceCount > 0);
-	pmb->referenceCount--;
-	if(pmb->referenceCount == 0){
-		releaseBlock_noLock(&m->b, &pmb->block);
+	if(isAddressInRange(&m->b, address)){
+		PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);
+		assert(pmb->referenceCount > 0);
+		pmb->referenceCount--;
+		if(pmb->referenceCount == 0){
+			releaseBlock_noLock(&m->b, &pmb->block);
+		}
 	}
 	releaseLock(&m->b.lock);
 }

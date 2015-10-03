@@ -9,7 +9,7 @@ typedef struct MemoryBlock{
 	// for linear memory,
 	// this value indicates whether the linear block is mapped to physical pages.
 	// for physical memory, it is 0
-	uint16_t flags: 16;
+	uint16_t unused;
 	struct MemoryBlock**prev, *next;
 }MemoryBlock;
 
@@ -43,7 +43,7 @@ size_t getBeginAddress(MemoryBlockManager *m);
 size_t getFreeBlockSize(MemoryBlockManager *m);
 int isAddressInRange(MemoryBlockManager *m, uintptr_t address);
 
-MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
+MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size);
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b);
 
 typedef void(*InitMemoryBlockFunction)(void*);

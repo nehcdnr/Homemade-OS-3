@@ -169,13 +169,13 @@ static int extendLinearBlock_noLock(LinearMemoryManager *m, int exCount){
 	return bm->b.blockCount >= newBlockCount;
 }
 
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, MemoryBlockFlags flags){
+uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	LinearMemoryBlockManager *bm = m->linear;
 	size_t l_size = *size;
 	LinearMemoryBlock *lmb;
 	MemoryBlock *block;
 	acquireLock(&bm->b.lock);
-	block = allocateBlock_noLock(&bm->b, &l_size, flags);
+	block = allocateBlock_noLock(&bm->b, &l_size);
 	if(block != NULL){ // ok
 		goto alcOrExt_return;
 	}
@@ -188,7 +188,7 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size, Memo
 		// goto alcOrExt_return;
 	}
 	l_size = *size;
-	block = allocateBlock_noLock(&bm->b, &l_size, flags);
+	block = allocateBlock_noLock(&bm->b, &l_size);
 	//if(block != NULL){
 	//	goto alcOrExt_return;
 	//}
@@ -219,7 +219,7 @@ void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address){
 	releaseLock(&m->b.lock);
 }
 
-int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, int releasePhysical){
+int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	LinearMemoryBlockManager *bm = m->linear;
 	int r;
 	acquireLock(&bm->b.lock);
@@ -242,11 +242,9 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress, i
 		goto chkAndRls_return;
 	}
 	prepareReleaseBlock(lmb);
-	// TODO: remove releasePhysical¡@parameter
-	assert(lmb->block.flags == (unsigned)releasePhysical);
 	releaseLock(&bm->b.lock);
 
-	_unmapPage(m->page, m->physical, (void*)linearAddress, s, lmb->block.flags & WITH_PHYSICAL_PAGES_FLAG);
+	_unmapPage(m->page, m->physical, (void*)linearAddress, s);
 
 	acquireLock(&bm->b.lock);
 	assert(lmb->status == MEMORY_USING || lmb->status == MEMORY_RELEASING);
@@ -266,7 +264,7 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	while(i < bm->b.blockCount){
 		LinearMemoryBlock *lmb =(LinearMemoryBlock*)indexToElement(&bm->b, i);
 		assert(lmb->status != MEMORY_RELEASING);
-		_checkAndUnmapLinearBlock(m, blockToAddress(&bm->b, &lmb->block), lmb->block.flags);
+		_checkAndUnmapLinearBlock(m, blockToAddress(&bm->b, &lmb->block));
 		// no lock
 		// no matter the block is free, using, or covered, adding the block size does not skip any using block
 		i += (1 << lmb->block.sizeOrder) / MIN_BLOCK_SIZE;
