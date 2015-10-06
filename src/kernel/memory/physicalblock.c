@@ -87,7 +87,7 @@ int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){
 	return ok;
 }
 
-void releaseOrUnmapPhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address){
+void releasePhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->b.lock);
 	if(isAddressInRange(&m->b, address)){
 		PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);

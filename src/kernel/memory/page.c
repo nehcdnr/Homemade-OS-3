@@ -260,7 +260,7 @@ PhysicalAddress _allocatePhysicalPages(PhysicalMemoryBlockManager *physical, siz
 }
 
 void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress address){
-	releaseOrUnmapPhysicalBlock(physical, address.value);
+	releasePhysicalBlock(physical, address.value);
 }
 
 // assume the arguments are valid
@@ -364,7 +364,7 @@ static void releaseInvalidatedPage(
 	uintptr_t linear
 ){
 	PageTable *pt_linear = ptByLinearAddress(p, linear);
-	Spinlock *pdLock = pdLockByLinearAddress(p, linear);
+	//Spinlock *pdLock = pdLockByLinearAddress(p, linear);
 	//PageTableAttribute *pt_attribute = linearAddressOfPageTableAttribute(p ,linear);
 #ifndef NDEBUG
 	int i2 = PT_INDEX(linear);
@@ -373,8 +373,8 @@ static void releaseInvalidatedPage(
 #endif
 	PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
 	_releasePhysicalPages(physical, page_physical);
-	acquireLock(pdLock);
 	/* release PageTable and set PD
+	acquireLock(pdLock);
 	if(pt_attribute->external == 0){
 		pt_attribute->presentCount--;
 		if(pt_attribute->presentCount == 0 && pt_attribute->deleteWhenEmpty != 0){
@@ -382,8 +382,9 @@ static void releaseInvalidatedPage(
 			invalidatePDE(p->page->pd.entry + i1);
 			_releasePhysicalPages(physical , pt_physical);
 		}
-	}*/
+	}
 	releaseLock(pdLock);
+	*/
 }
 
 static size_t evaluateSizeOfPageTableSet(uintptr_t reservedBase, uintptr_t reservedEnd){
@@ -489,6 +490,7 @@ static void initPageManagerPT(
 		// IMPROVE: change to setPTE
 		int ok = setPage(p, NULL, a, kp_physical, KERNEL_PAGE);
 		assert(ok);
+		// reference count should be 2
 		ok = addPhysicalBlockReference(kernelLinear->physical, kp_physical.value);
 		assert(ok);
 	}
@@ -700,7 +702,7 @@ static int map1Page_LP(
 	EXPECT(ok);
 	return 1;
 	ON_ERROR;
-	releaseOrUnmapPhysicalBlock(physical, physicalAddress.value);
+	releasePhysicalBlock(physical, physicalAddress.value);
 	ON_ERROR;
 	return 0;
 }

@@ -33,6 +33,7 @@ void unmapUserPageTableSet(PageManager *p);
 void invalidatePageTable(PageManager *deletePage, PageManager *loadPage);
 // must sti
 void releaseInvalidatedPageTable(PageManager *deletePage);
+// called when initialization failure
 void releasePageTable(PageManager *deletePage);
 
 #define USER_PAGE_FLAG (1 << 1)
@@ -53,13 +54,7 @@ void unmapPage_L(PageManager *p, void *linearAddress, size_t size);
 
 int mapPage_LP(PageManager *p, void *linearAddress, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute);
 void unmapPage_LP(PageManager *p, void *linearAddress, size_t size);
-/*
-int mapExistingPages_L(
-	PageManager *dst, PageManager *src,
-	uintptr_t dstLinear, uintptr_t srcLinear, size_t size,
-	PageAttribute attribute
-);
-*/
+
 // kernel linear memory
 void initKernelMemory(void);
 typedef struct LinearMemoryManager LinearMemoryManager;
@@ -71,27 +66,36 @@ void *allocateKernelMemory(size_t size);
 void releaseKernelMemory(void *address);
 
 // kernel/user page
+// allocate new linear memory; map to specified physical address
 void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
 #define mapKernelPages(ADDRESS, SIZE, ATTRIBUTE) mapPages(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
+// TODO: thread safe
 void *mapExistingPages(
 	LinearMemoryManager *dst, PageManager *src,
 	uintptr_t srcLinear, size_t size, PageAttribute Attribute
 );
 #define mapExistingPagesToKernel(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
 	mapExistingPages(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
-//PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
-//#define translateKernelPage(ADDRESS) translateExistingPage(kernelPageManager, ADDRESS)
+// translate linear address to physical memory
+PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
+// allocate new linear memory;
+// map to the physical address translated from srcLinear by using the src page table
+void *checkAndMapExistingPage(
+	LinearMemoryManager *dst, LinearMemoryManager *src,
+	void *srcLinear, size_t size, PageAttribute attribute
+);
+
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
 
+// allocate new linear memory and new physical memory
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
 void *allocateKernelPages(size_t size, PageAttribute attribute);
 //void releasePages(LinearMemoryManager *m, void *linearAddress);
 //void releaseKernelPages(void *linearAddress);
 int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress);
 int checkAndReleaseKernelPages(void *linearAddress);
-PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
 
 #define NEW_ARRAY(V, L) (V) = (typeof(V))allocateKernelMemory((L) * sizeof(*(V)))
 #define NEW(V) NEW_ARRAY(V, 1)

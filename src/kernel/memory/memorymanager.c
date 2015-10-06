@@ -99,6 +99,7 @@ void *mapExistingPages(
 	size_t l_size = size;
 	uintptr_t dstLinear = allocateOrExtendLinearBlock(dst, &l_size);
 	EXPECT(dstLinear != UINTPTR_NULL);
+	// TODO:
 	int ok = _mapExistingPages_L(dst->physical, dst->page, src, (void*)dstLinear, srcLinear, size, attribute);
 	EXPECT(ok);
 
@@ -150,7 +151,7 @@ void releasePages(LinearMemoryManager *m, void *linearAddress){
 }
 */
 int checkAndReleasePages(LinearMemoryManager *m, void *linearAddress){
-	return checkAndReleaseLinearBlock(m, (uintptr_t)linearAddress);
+	return checkAndUnmapLinearBlock(m, (uintptr_t)linearAddress);
 }
 
 /*
@@ -218,7 +219,7 @@ static PhysicalMemoryBlockManager *initKernelPhysicalBlock(
 		uintptr_t address = firstAddress + b * MIN_BLOCK_SIZE;
 		assert(address + MIN_BLOCK_SIZE > address); // not overflow
 		if(isUsableInAddressRange(address, addressRange, addressRangeCount, extraAR, LENGTH_OF(extraAR))){
-			releaseOrUnmapPhysicalBlock(m, address);
+			releasePhysicalBlock(m, address);
 		}
 	}
 	return m;
@@ -338,7 +339,7 @@ void testMemoryManager2(void){
 	}
 	for(a=0;a<TEST_N;a++){
 		if(p[a]==UINTPTR_NULL)continue;
-		releaseOrUnmapPhysicalBlock(kernelLinear->physical, p[a]);
+		releasePhysicalBlock(kernelLinear->physical, p[a]);
 	}
 }
 

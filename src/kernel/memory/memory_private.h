@@ -4,18 +4,7 @@
 #include<std.h>
 #include"memory.h"
 
-// buddy.c (physical memory)
-//typedef struct MemoryBlockManager MemoryBlockManager;
-// if failure, return UINTPTR_NULL
-// if success, return address and *size = allocated size, which is >= input value
-
-//uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags);
-//extern const size_t minBlockManagerSize;
-//extern const size_t maxBlockManagerSize;
-
-// no concern with flags
-//void releaseBlock(MemoryBlockManager *m, uintptr_t address);
-
+// physicalblock.c
 typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
 
 PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
@@ -37,8 +26,9 @@ uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size);
 int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address);
 // subtract referenceCount and return the new value
 // if the new value == 0, release the block
-void releaseOrUnmapPhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address);
+void releasePhysicalBlock(PhysicalMemoryBlockManager *m, uintptr_t address);
 
+//linearblock.c
 typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
 
 LinearMemoryBlockManager *createLinearBlockManager(
@@ -61,14 +51,10 @@ size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
 // release linear blocks only
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 
-#define WITH_PHYSICAL_PAGES_FLAG ((MemoryBlockFlags)1)
-
 // allocate linear blocks only
 uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size);
 // release linear blocks, pages, and physical blocks
-int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
-#define checkAndUnmapLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A)
-#define checkAndReleaseLinearBlock(M, A) _checkAndUnmapLinearBlock(M, A)
+int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
 void releaseAllLinearBlocks(LinearMemoryManager *m);
 
 // 4K~1G

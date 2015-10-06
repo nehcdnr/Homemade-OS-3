@@ -219,7 +219,7 @@ void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address){
 	releaseLock(&m->b.lock);
 }
 
-int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
+int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	LinearMemoryBlockManager *bm = m->linear;
 	int r;
 	acquireLock(&bm->b.lock);
@@ -233,7 +233,6 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 		// r = 0;
 		goto chkAndRls_return;
 	}
-	// IMPROVE: reduce getBlock
 
 	size_t s = getAllocatedBlockSize(bm, linearAddress);
 	if(s % PAGE_SIZE != 0){
@@ -260,11 +259,11 @@ int _checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 // assume single thread
 void releaseAllLinearBlocks(LinearMemoryManager *m){
 	LinearMemoryBlockManager *bm = m->linear;
-	int i = 0;//bm->initialBlockCount;
+	int i = 0;
 	while(i < bm->b.blockCount){
 		LinearMemoryBlock *lmb =(LinearMemoryBlock*)indexToElement(&bm->b, i);
 		assert(lmb->status != MEMORY_RELEASING);
-		_checkAndUnmapLinearBlock(m, blockToAddress(&bm->b, &lmb->block));
+		checkAndUnmapLinearBlock(m, blockToAddress(&bm->b, &lmb->block));
 		// no lock
 		// no matter the block is free, using, or covered, adding the block size does not skip any using block
 		i += (1 << lmb->block.sizeOrder) / MIN_BLOCK_SIZE;

@@ -127,14 +127,6 @@ MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
 	return b;
 }
 
-//uintptr_t allocateBlock(MemoryBlockManager *m, size_t *size, MemoryBlockFlags flags){
-//	acquireLock(&m->lock);
-//	MemoryBlock *b = allocateBlock_noLock(m, size, flags);
-//	releaseLock(&m->lock);
-//	uintptr_t r = (b == NULL? UINTPTR_NULL: blockToAddress(m, b));
-//	return r;
-//}
-
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 	m->freeSize += (1 << b->sizeOrder);
 	assert(IS_IN_DQUEUE(b) == 0);
@@ -158,16 +150,6 @@ void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){
 	}
 	ADD_TO_DQUEUE(b, &m->freeBlock[b->sizeOrder - MIN_BLOCK_ORDER]);
 }
-
-//void releaseBlock(MemoryBlockManager *m, uintptr_t address){
-//	acquireLock(&m->lock);
-//	releaseBlock_noLock(m, addressToBlock(m, address));
-//	releaseLock(&m->lock);
-//}
-
-//const size_t minBlockManagerSize = sizeof(MemoryBlockManager);
-//const size_t maxBlockManagerSize = sizeof(MemoryBlockManager) +
-//	((0xffffffff / MIN_BLOCK_SIZE) + 1) * sizeof(MemoryBlock);
 
 size_t getFreeBlockSize(MemoryBlockManager *m){
 	return m->freeSize;
@@ -201,20 +183,3 @@ void initMemoryBlockManager(
 	bm->beginAddress = beginAddr;
 	resetBlockArray(bm, (endAddr - bm->beginAddress) / MIN_BLOCK_SIZE, initBlockFunc);
 }
-
-//MemoryBlockManager *createMemoryBlockManager(
-//	uintptr_t manageBase, size_t manageSize,
-//	uintptr_t beginAddr, uintptr_t initEndAddr
-//){
-//	assert(manageBase % sizeof(uintptr_t) == 0);
-//	MemoryBlockManager *bm = (MemoryBlockManager*)manageBase;
-//	initMemoryBlockManager(
-//		bm, sizeof(MemoryBlock), 0,
-//		beginAddr, initEndAddr,
-//		(InitMemoryBlockFunction)initMemoryBlock
-//	);
-//	if(getBlockManagerSize(bm) > manageSize){
-//		panic("buddy memory manager initialization error");
-//	}
-//	return bm;
-//}

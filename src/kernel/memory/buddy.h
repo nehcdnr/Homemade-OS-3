@@ -6,9 +6,6 @@ typedef uint16_t sizeorder_t;
 
 typedef struct MemoryBlock{
 	sizeorder_t sizeOrder;
-	// for linear memory,
-	// this value indicates whether the linear block is mapped to physical pages.
-	// for physical memory, it is 0
 	uint16_t unused;
 	struct MemoryBlock**prev, *next;
 }MemoryBlock;
