@@ -356,6 +356,9 @@ static RSDT *mapRSDT(const uintptr_t rsdtPhysical){
 
 IOAPIC *initAPIC(InterruptTable *t){
 	uintptr_t rsdtPhysical = findRSDT();
+	if(rsdtPhysical == UINTPTR_NULL){
+		panic("findRSDT failed");
+	}
 	const RSDT *rsdt = mapRSDT(rsdtPhysical);
 	if(rsdt == NULL){
 		panic("mapRSDT failed");

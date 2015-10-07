@@ -73,29 +73,14 @@ PageManager *initKernelPageTable(
 	uintptr_t kernelLinearEnd
 );
 
-int _mapPage_L(
-	PageManager *p, PhysicalMemoryBlockManager *physical,
-	void *linearAddress, size_t size,
-	PageAttribute attribute
-);
-void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size);
-#define _unmapPage_L(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE)
-
-int _mapPage_LP(
-	PageManager *p, PhysicalMemoryBlockManager *physical,
-	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
-	PageAttribute attribute
-);
-#define _unmapPage_LP(PAGE, PHYSICAL, ADDRESS, SIZE) _unmapPage(PAGE, PHYSICAL, ADDRESS, SIZE)
-
 // assume arguments are valid
 int _mapExistingPages_L(
 		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
 	void *dstLinear, uintptr_t srcLinear, size_t size,
-	PageAttribute attribute
+	PageAttribute attribute, PageAttribute srcHasAttribute
 );
 
-PhysicalAddress translateExistingPage(PageManager *p, void *linearAddress);
+PhysicalAddress _translatePage(PageManager *p, uintptr_t linearAddress, PageAttribute hasAtribute);
 
 // linear + physical + page
 struct LinearMemoryManager{

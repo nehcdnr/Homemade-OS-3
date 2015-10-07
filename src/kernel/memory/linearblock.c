@@ -1,10 +1,7 @@
 #include"memory_private.h"
 #include"buddy.h"
 
-struct LinearMemoryBlockManager{
-	int initialBlockCount, maxBlockCount;
-	MemoryBlockManager b;
-};
+
 
 enum MemoryBlockStatus{
 	MEMORY_FREE_OR_COVERED = 1, // may be free
@@ -18,6 +15,12 @@ typedef struct LinearMemoryBlock{
 	MemoryBlock block;
 }LinearMemoryBlock;
 
+static_assert(sizeof(LinearMemoryBlock) == 20);
+
+struct LinearMemoryBlockManager{
+	int initialBlockCount, maxBlockCount;
+	MemoryBlockManager b;
+};
 static_assert(MEMBER_OFFSET(LinearMemoryBlockManager, b.blockArray) == sizeof(LinearMemoryBlockManager));
 
 static void initLinearMemoryBlock(void *voidLMB){
@@ -177,11 +180,11 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	acquireLock(&bm->b.lock);
 	block = allocateBlock_noLock(&bm->b, &l_size);
 	if(block != NULL){ // ok
-		goto alcOrExt_return;
+		goto allocate_return;
 	}
 	int exCount = getExtendBlockCount(bm, *size);
 	if(exCount == 0){ // error
-		goto alcOrExt_return;
+		goto allocate_return;
 	}
 	if(extendLinearBlock_noLock(m, exCount) == 0){ // error
 		// printk("warning: extendLinearBlock failed");
@@ -192,7 +195,7 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	//if(block != NULL){
 	//	goto alcOrExt_return;
 	//}
-	alcOrExt_return:
+	allocate_return:
 	if(block != NULL){
 		lmb = blockToElement(&bm->b, block);
 		lmb->mappedSize = (*size);
@@ -201,7 +204,7 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	}
 	releaseLock(&bm->b.lock);
 	if(block == NULL){
-		return UINTPTR_NULL;
+		return INVALID_PAGE_ADDRESS;
 	}
 
 	(*size) = l_size;
@@ -225,38 +228,31 @@ int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	acquireLock(&bm->b.lock);
 	r = isAddressInRange(&bm->b, linearAddress);
 	if(r == 0){
-		goto chkAndRls_return;
+		goto release_return;
 	}
 	LinearMemoryBlock *lmb = addressToElement(&bm->b, linearAddress);
 	r = isReleasableBlock_noLock(bm, lmb);
 	if(r == 0){
-		// r = 0;
-		goto chkAndRls_return;
+		goto release_return;
 	}
-
 	size_t s = getAllocatedBlockSize(bm, linearAddress);
-	if(s % PAGE_SIZE != 0){
-		r = 0;
-		panic("linear block must align to PAGE_SIZE");
-		goto chkAndRls_return;
-	}
 	prepareReleaseBlock(lmb);
 	releaseLock(&bm->b.lock);
 
 	_unmapPage(m->page, m->physical, (void*)linearAddress, s);
 
 	acquireLock(&bm->b.lock);
-	assert(lmb->status == MEMORY_USING || lmb->status == MEMORY_RELEASING);
+	assert(lmb->status == MEMORY_RELEASING);
 	lmb->status = MEMORY_FREE_OR_COVERED;
 	releaseBlock_noLock(&bm->b, &lmb->block);
 	r = 1;
-	chkAndRls_return:
+	release_return:
 	releaseLock(&bm->b.lock);
 	return r;
 }
 
 // release every m->linear->block and reset m->linear->blockCount to initialBlockCount
-// assume single thread
+// not thread-safe
 void releaseAllLinearBlocks(LinearMemoryManager *m){
 	LinearMemoryBlockManager *bm = m->linear;
 	int i = 0;
@@ -276,20 +272,33 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	resetBlockArray(&bm->b, bm->initialBlockCount, initLinearMemoryBlock);
 }
 
-static PhysicalAddress checkAndTranslateBlock(LinearMemoryManager *m, uintptr_t linearAddress){
+static PhysicalAddress checkAndTranslateBlock(
+	LinearMemoryManager *m, uintptr_t linearAddress,
+	PageAttribute hasAttribute, int doReserve
+){
 	LinearMemoryBlockManager *bm = m->linear;
-	PhysicalAddress p = {UINTPTR_NULL};
+	PhysicalAddress p = {INVALID_PAGE_ADDRESS};
 	acquireLock(&bm->b.lock);
-	if(isAddressInRange(&bm->b, linearAddress)){
-		if(isUsingBlock_noLock(bm, linearAddress)){
-			p = translateExistingPage(m->page, (void*)linearAddress);
-			assert(p.value != UINTPTR_NULL);
-		}
+	if(isAddressInRange(&bm->b, linearAddress) == 0)
+		goto translate_return;
+	if(isUsingBlock_noLock(bm, linearAddress) == 0){
+		goto translate_return;
 	}
+	p = _translatePage(m->page, linearAddress, hasAttribute);
+	assert(p.value != INVALID_PAGE_ADDRESS);
+	if(doReserve){
+		int ok = addPhysicalBlockReference(m->physical, p.value);
+		assert(ok);
+	}
+	translate_return:
 	releaseLock(&bm->b.lock);
 	return p;
 }
 
 PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress){
-	return checkAndTranslateBlock(m, (uintptr_t)linearAddress);
+	return checkAndTranslateBlock(m, (uintptr_t)linearAddress, 0, 0);
+}
+
+PhysicalAddress checkAndReservePage(LinearMemoryManager *m, void *linearAddress, PageAttribute hasAttribute){
+	return checkAndTranslateBlock(m, (uintptr_t)linearAddress, hasAttribute, 1);
 }

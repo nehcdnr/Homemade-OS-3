@@ -22,6 +22,7 @@ void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress
 
 // page
 #define PAGE_SIZE (4096)
+#define INVALID_PAGE_ADDRESS ((uintptr_t)0xffffffff)
 typedef struct PageManager PageManager;
 extern PageManager *kernelPageManager;
 
@@ -36,24 +37,43 @@ void releaseInvalidatedPageTable(PageManager *deletePage);
 // called when initialization failure
 void releasePageTable(PageManager *deletePage);
 
-#define USER_PAGE_FLAG (1 << 1)
-#define WRITABLE_PAGE_FLAG (1 << 2)
+#define PRESENT_PAGE_FLAG (1 << 0)
+#define WRITABLE_PAGE_FLAG (1 << 1)
+#define USER_PAGE_FLAG (1 << 2)
 #define NON_CACHED_PAGE_FLAG (1 << 4)
 typedef enum PageAttribute{
-	KERNEL_PAGE = WRITABLE_PAGE_FLAG,
-	KERNEL_NON_CACHED_PAGE = WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
-	USER_READ_ONLY_PAGE = USER_PAGE_FLAG,
-	USER_WRITABLE_PAGE = USER_PAGE_FLAG + WRITABLE_PAGE_FLAG
+	KERNEL_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG,
+	KERNEL_NON_CACHED_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
+	USER_READ_ONLY_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG,
+	USER_WRITABLE_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG + WRITABLE_PAGE_FLAG
 }PageAttribute;
 
-
 uint32_t toCR3(PageManager *p);
+int _mapPage_L(
+	PageManager *p, PhysicalMemoryBlockManager *physical,
+	void *linearAddress, size_t size,
+	PageAttribute attribute
+);
+#define mapPage_L(PAGE, LINEAR, SIZE, ATTRIBUTE) \
+	_mapPage_L(PAGE, kernelLinear->physical, LINEAR, SIZE, ATTRIBUTE)
 
-int mapPage_L(PageManager *p, void *linearAddress, size_t size, PageAttribute attribute);
-void unmapPage_L(PageManager *p, void *linearAddress, size_t size);
+int _mapPage_LP(
+	PageManager *p, PhysicalMemoryBlockManager *physical,
+	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
+	PageAttribute attribute
+);
+#define mapPage_LP(PAGE, LINEAR, PHYSICAL, SIZE, ATTRIBUTE) \
+	_mapPage_LP(PAGE, kernelLinear->physical, LINEAR, PHYSICAL, SIZE, ATTRIBUTE)
 
-int mapPage_LP(PageManager *p, void *linearAddress, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute);
-void unmapPage_LP(PageManager *p, void *linearAddress, size_t size);
+void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size);
+
+#define _unmapPage_L _unmapPage
+#define unmapPage_L(PAGE, LINEAR, SIZE) \
+	_unmapPage_L(PAGE, kernelLinear->physical, LINEAR, SIZE)
+
+#define _unmapPage_LP _unmapPage
+#define unmapPage_LP(PAGE, LINEAR, SIZE) \
+	_unmapPage_LP(PAGE, kernelLinear->physical, LINEAR, SIZE)
 
 // kernel linear memory
 void initKernelMemory(void);
@@ -69,20 +89,18 @@ void releaseKernelMemory(void *address);
 // allocate new linear memory; map to specified physical address
 void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, PageAttribute attribute);
 #define mapKernelPages(ADDRESS, SIZE, ATTRIBUTE) mapPages(kernelLinear, ADDRESS, SIZE, ATTRIBUTE)
-// TODO: thread safe
-void *mapExistingPages(
-	LinearMemoryManager *dst, PageManager *src,
-	uintptr_t srcLinear, size_t size, PageAttribute Attribute
-);
-#define mapExistingPagesToKernel(SRC, SRC_LINEAR, SIZE, ATTRIBUTE) \
-	mapExistingPages(kernelLinear, SRC, SRC_LINEAR, SIZE, ATTRIBUTE)
 // translate linear address to physical memory
 PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
+// same as above; add physical page's reference count
+// use _releasePhysicalPages to decrease reference count
+PhysicalAddress checkAndReservePage(LinearMemoryManager *m, void *linearAddress, PageAttribute hasAttribute);
 // allocate new linear memory;
 // map to the physical address translated from srcLinear by using the src page table
-void *checkAndMapExistingPage(
-	LinearMemoryManager *dst, LinearMemoryManager *src,
-	void *srcLinear, size_t size, PageAttribute attribute
+// this function is not thread-safe because it does not lock src linear manager
+void *mapExistingPages(
+	LinearMemoryManager *dst, PageManager *src,
+	uintptr_t srcLinear, size_t size,
+	PageAttribute attribute, PageAttribute srcHasAttribute
 );
 
 void unmapPages(LinearMemoryManager *m, void *linearAddress);

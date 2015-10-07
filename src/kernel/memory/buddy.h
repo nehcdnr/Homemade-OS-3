@@ -32,6 +32,7 @@ uintptr_t elementToAddress(MemoryBlockManager *m, void *element);
 uintptr_t blockToAddress(MemoryBlockManager *m, MemoryBlock *mb);
 MemoryBlock *addressToBlock(MemoryBlockManager *m, uintptr_t address);
 
+// return NULL if the block has no buddy (is the last block in the array)
 MemoryBlock *getBuddy(MemoryBlockManager *m, const MemoryBlock *b);
 
 size_t ceilAllocateOrder(size_t s);
@@ -40,6 +41,7 @@ size_t getBeginAddress(MemoryBlockManager *m);
 size_t getFreeBlockSize(MemoryBlockManager *m);
 int isAddressInRange(MemoryBlockManager *m, uintptr_t address);
 
+// return NULL if fail
 MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size);
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b);
 

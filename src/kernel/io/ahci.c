@@ -650,7 +650,7 @@ static void AHCIServiceHandler(InterruptParam *p){
 	PhysicalAddress physicalBuffer = checkAndTranslatePage(
 		getTaskLinearMemory(processorLocalTask()), (void*)linearBuffer
 	);
-	EXPECT(physicalBuffer.value != UINTPTR_NULL);
+	EXPECT(physicalBuffer.value != INVALID_PAGE_ADDRESS);
 	AHCIInterruptArgument *hba = searchHBAByPortIndex(am, index);
 	EXPECT(hba != NULL);
 	EXPECT(bufferSize % hba->desc.sectorSize == 0);

@@ -1,6 +1,7 @@
 #include<std.h>
 
 // non-standard NULL
+//#define UINTPTR_NULL ((uintptr_t)NULL)
 #define UINTPTR_NULL ((uintptr_t)NULL)
 
 // memory.h

@@ -5,6 +5,8 @@ typedef struct PhysicalMemoryBlock{
 	MemoryBlock block;
 }PhysicalMemoryBlock;
 
+static_assert(sizeof(PhysicalMemoryBlock) == 16);
+
 #define MAX_REFERENCE_COUNT ((uint32_t)0xffffffff)
 
 struct PhysicalMemoryBlockManager{
@@ -65,7 +67,7 @@ uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size){
 		pmb->referenceCount = 1;
 	}
 	releaseLock(&m->b.lock);
-	return (b == NULL? UINTPTR_NULL: elementToAddress(&m->b, pmb));
+	return (b == NULL? INVALID_PAGE_ADDRESS: elementToAddress(&m->b, pmb));
 }
 
 int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){

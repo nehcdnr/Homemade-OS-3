@@ -330,8 +330,8 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	// 2. task MemoryBlock
 	int ok = mapPage_L(pageManager, (void*)targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
 	EXPECT(ok);
-	LinearMemoryBlockManager *mappedBlockManager =
-		mapExistingPagesToKernel(pageManager, targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
+	LinearMemoryBlockManager *mappedBlockManager = mapExistingPages(
+		kernelLinear, pageManager, targetBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE, KERNEL_PAGE);
 	EXPECT(mappedBlockManager != NULL);
 	LinearMemoryBlockManager *_mappedBlockManager = createLinearBlockManager(
 		(uintptr_t)mappedBlockManager, maxLinearBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
@@ -340,7 +340,7 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	EXPECT(tm != NULL);
 	Task *t = createKernelTask(eip0, priority, tm);
 	EXPECT(t != NULL);
-	unmapKernelPages(_mappedBlockManager);
+	unmapKernelPages(mappedBlockManager);
 	unmapUserPageTableSet(pageManager);
 	// 5. see startTask
 	return t;

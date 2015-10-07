@@ -176,7 +176,7 @@ void initMemoryBlockManager(
 	InitMemoryBlockFunction initBlockFunc
 ){
 	assert(beginAddr % MIN_BLOCK_SIZE == 0);
-	//assert(UINTPTR_NULL < beginAddr || UINTPTR_NULL >= maxEndAddr);
+	//assert(INVALID_PAGE_ADDRESS < beginAddr || INVALID_PAGE_ADDRESS >= maxEndAddr);
 	bm->lock = initialSpinlock;
 	bm->blockStructSize = blockStructSize;
 	bm->blockStructOffset = blockStructOffset;
