@@ -52,9 +52,10 @@ size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 
 // allocate linear blocks only
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size);
+uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size);
+void commitAllocatingLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
 // release linear blocks, pages, and physical blocks
-int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
+int checkAndReleaseLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
 void releaseAllLinearBlocks(LinearMemoryManager *m);
 
 // 4K~1G

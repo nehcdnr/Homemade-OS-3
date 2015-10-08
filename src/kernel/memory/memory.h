@@ -92,11 +92,18 @@ void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, Pag
 // translate linear address to physical memory
 PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
 // same as above; add physical page's reference count
-// use _releasePhysicalPages to decrease reference count
+// call releaseReservedPages to decrease reference count
+// IMPROVE: currently this function cannot reserve physical blocks > MIN_BLOCK_SIZE ( = PAGE_SIZE)
 PhysicalAddress checkAndReservePage(LinearMemoryManager *m, void *linearAddress, PageAttribute hasAttribute);
 // allocate new linear memory;
-// map to the physical address translated from srcLinear by using the src page table
+// map to the physical address translated from srcLinear
+void *checkAndMapExistingPages(
+	LinearMemoryManager *dst, LinearMemoryManager *src,
+	uintptr_t srcLinear, size_t size,
+	PageAttribute attribute, PageAttribute srcHasAttribute
+);
 // this function is not thread-safe because it does not lock src linear manager
+// IMPROVE: move to memory_private.h
 void *mapExistingPages(
 	LinearMemoryManager *dst, PageManager *src,
 	uintptr_t srcLinear, size_t size,
@@ -106,6 +113,7 @@ void *mapExistingPages(
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
+#define releaseReservedPage _releasePhysicalPages
 
 // allocate new linear memory and new physical memory
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);

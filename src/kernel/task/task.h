@@ -12,7 +12,6 @@ typedef struct LinearMemoryManager LinearMemoryManager;
 // assume interrupt disabled
 void schedule(void);
 
-// put Task t into queue if it is suspended (by systemCall(SYSCALL_SUSPEND))
 Task *currentTask(TaskManager *tm);
 LinearMemoryManager *getTaskLinearMemory(Task *t);
 
@@ -20,8 +19,6 @@ void resume(/*TaskManager *tm, */Task *t);
 
 TaskManager *createTaskManager(SegmentTable *gdt);
 void initTaskManagement(SystemCallTable *systemCallTable);
-
-// void defaultExitTask(void);
 
 #define V8086_STACK_TOP (0x7000)
 #define V8086_STACK_BOTTOM (0x1000)

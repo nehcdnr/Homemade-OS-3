@@ -1,12 +1,10 @@
 #include"memory_private.h"
 #include"buddy.h"
 
-
-
 enum MemoryBlockStatus{
-	MEMORY_FREE_OR_COVERED = 1, // may be free
-	MEMORY_USING = 2, // must be using
-	MEMORY_RELEASING = 3 // must be releasing
+	MEMORY_FREE_OR_COVERED = 1, // maybe free
+	MEMORY_USING = 2, // using
+	MEMORY_LOCKED = 3, // releasing or allocating
 }__attribute__((__packed__));
 
 typedef struct LinearMemoryBlock{
@@ -133,17 +131,12 @@ static int isReleasableBlock_noLock(LinearMemoryBlockManager *m, LinearMemoryBlo
 			assert(IS_IN_DQUEUE(b1));
 		}
 #endif
-	case MEMORY_RELEASING:
+	case MEMORY_LOCKED:
 		return 0;
 	default:
 		assert(0);
 		return 0;
 	}
-}
-
-static void prepareReleaseBlock(LinearMemoryBlock *b){
-	assert(b->status == MEMORY_USING);
-	b->status = MEMORY_RELEASING;
 }
 
 // LinearMemoryManager
@@ -172,7 +165,7 @@ static int extendLinearBlock_noLock(LinearMemoryManager *m, int exCount){
 	return bm->b.blockCount >= newBlockCount;
 }
 
-uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
+uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size){
 	LinearMemoryBlockManager *bm = m->linear;
 	size_t l_size = *size;
 	LinearMemoryBlock *lmb;
@@ -188,19 +181,19 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	}
 	if(extendLinearBlock_noLock(m, exCount) == 0){ // error
 		// printk("warning: extendLinearBlock failed");
-		// goto alcOrExt_return;
+		goto allocate_return;
 	}
 	l_size = *size;
 	block = allocateBlock_noLock(&bm->b, &l_size);
 	//if(block != NULL){
-	//	goto alcOrExt_return;
+	//	goto allocate_return;
 	//}
 	allocate_return:
 	if(block != NULL){
 		lmb = blockToElement(&bm->b, block);
 		lmb->mappedSize = (*size);
 		assert(lmb->status == MEMORY_FREE_OR_COVERED);
-		lmb->status = MEMORY_USING;
+		lmb->status = MEMORY_LOCKED;
 	}
 	releaseLock(&bm->b.lock);
 	if(block == NULL){
@@ -213,16 +206,25 @@ uintptr_t allocateOrExtendLinearBlock(LinearMemoryManager *m, size_t *size){
 	return linearAddress;
 }
 
+void commitAllocatingLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
+	LinearMemoryBlockManager *bm = m->linear;
+	acquireLock(&bm->b.lock);
+	LinearMemoryBlock *lmb = addressToElement(&bm->b, linearAddress);
+	assert(lmb->status == MEMORY_LOCKED);
+	lmb->status = MEMORY_USING;
+	releaseLock(&bm->b.lock);
+}
+
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address){
 	acquireLock(&m->b.lock);
 	LinearMemoryBlock *lmb = addressToElement(&m->b, address);
-	assert(lmb->status == MEMORY_USING || lmb->status == MEMORY_RELEASING);
+	assert(lmb->status == MEMORY_USING || lmb->status == MEMORY_LOCKED);
 	lmb->status = MEMORY_FREE_OR_COVERED;
 	releaseBlock_noLock(&m->b, &lmb->block);
 	releaseLock(&m->b.lock);
 }
 
-int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
+int checkAndReleaseLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 	LinearMemoryBlockManager *bm = m->linear;
 	int r;
 	acquireLock(&bm->b.lock);
@@ -236,13 +238,14 @@ int checkAndUnmapLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress){
 		goto release_return;
 	}
 	size_t s = getAllocatedBlockSize(bm, linearAddress);
-	prepareReleaseBlock(lmb);
+	assert(lmb->status == MEMORY_USING);
+	lmb->status = MEMORY_LOCKED;
 	releaseLock(&bm->b.lock);
 
 	_unmapPage(m->page, m->physical, (void*)linearAddress, s);
 
 	acquireLock(&bm->b.lock);
-	assert(lmb->status == MEMORY_RELEASING);
+	assert(lmb->status == MEMORY_LOCKED);
 	lmb->status = MEMORY_FREE_OR_COVERED;
 	releaseBlock_noLock(&bm->b, &lmb->block);
 	r = 1;
@@ -258,14 +261,14 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	int i = 0;
 	while(i < bm->b.blockCount){
 		LinearMemoryBlock *lmb =(LinearMemoryBlock*)indexToElement(&bm->b, i);
-		assert(lmb->status != MEMORY_RELEASING);
-		checkAndUnmapLinearBlock(m, blockToAddress(&bm->b, &lmb->block));
+		assert(lmb->status != MEMORY_LOCKED);
+		checkAndReleaseLinearBlock(m, blockToAddress(&bm->b, &lmb->block));
 		// no lock
 		// no matter the block is free, using, or covered, adding the block size does not skip any using block
 		i += (1 << lmb->block.sizeOrder) / MIN_BLOCK_SIZE;
 	}
 	assert(i == bm->b.blockCount);
-	// see allocateOrExtendLinearBlock
+	// see allocateLinearBlock
 	uintptr_t rlsPageBegin = CEIL((uintptr_t)indexToElement(&bm->b, bm->initialBlockCount), PAGE_SIZE);
 	uintptr_t rlsPageEnd = CEIL((uintptr_t)indexToElement(&bm->b, bm->b.blockCount), PAGE_SIZE);
 	unmapPage_L(m->page, (void*)rlsPageBegin, rlsPageEnd - rlsPageBegin);
@@ -281,9 +284,8 @@ static PhysicalAddress checkAndTranslateBlock(
 	acquireLock(&bm->b.lock);
 	if(isAddressInRange(&bm->b, linearAddress) == 0)
 		goto translate_return;
-	if(isUsingBlock_noLock(bm, linearAddress) == 0){
+	if(isUsingBlock_noLock(bm, linearAddress) == 0)
 		goto translate_return;
-	}
 	p = _translatePage(m->page, linearAddress, hasAttribute);
 	assert(p.value != INVALID_PAGE_ADDRESS);
 	if(doReserve){
