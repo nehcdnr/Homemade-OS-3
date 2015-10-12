@@ -17,7 +17,6 @@ PhysicalMemoryBlockManager *createPhysicalMemoryBlockManager(
 size_t getPhysicalBlockManagerSize(PhysicalMemoryBlockManager *m);
 int getPhysicalBlockCount(PhysicalMemoryBlockManager *m);
 size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m);
-uintptr_t getPhysicalBeginAddress(PhysicalMemoryBlockManager *m);
 
 // change reference count from 0 to 1
 uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size);
@@ -45,7 +44,6 @@ extern const size_t maxLinearBlockManagerSize;
 size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m);
 int getMaxBlockCount(LinearMemoryBlockManager *m);
 size_t getFreeLinearBlockSize(LinearMemoryBlockManager *m);
-uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m);
 
 size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
 // release linear blocks only

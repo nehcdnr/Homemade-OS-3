@@ -7,12 +7,12 @@ global initTaskStack
 initTaskStack:
 	mov eax, [esp + 12] ; esp0
 	mov edx, [esp + 8] ; eip
+	mov ecx, [esp + 4] ; eFlags
 	mov [eax - 4], edx
 	mov DWORD [eax - 8], startTask
-	mov edx, [esp + 4] ; eFlags
-	mov [eax - 12], edx
-	; return number of pushed bytes
-	mov eax, 12 + 32 ; eip, startTask, pushfd, pushad
+	mov [eax - 12], ecx
+	; return new esp
+	sub eax, 12 + 32 ; eip, startTask, pushfd, pushad
 	ret
 
 ; void contextSwitch(uint32_t *oldTaskESP0, uint32_t *newTaskESP0, uint32_t newCR3)

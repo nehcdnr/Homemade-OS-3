@@ -21,7 +21,7 @@ typedef struct TaskMemoryManager{
 
 static TaskMemoryManager *kernelTaskMemory = NULL;
 
-static int addReference(TaskMemoryManager *m, int value){
+static int addTaskMemoryReference(TaskMemoryManager *m, int value){
 	acquireLock(&m->lock);
 	m->referenceCount += value;
 	int r = m->referenceCount;
@@ -29,14 +29,18 @@ static int addReference(TaskMemoryManager *m, int value){
 	return r;
 }
 
-static TaskMemoryManager *createTaskMemory(PageManager *p, LinearMemoryBlockManager *b){
+static TaskMemoryManager *createTaskMemory(
+	PhysicalMemoryBlockManager *physical,
+	PageManager *page,
+	LinearMemoryBlockManager *linear
+){
 	TaskMemoryManager *NEW(m);
 	if(m == NULL)
 		return NULL;
-	assert(p != NULL);
-	m->linear.page = p;
-	m->linear.linear = b;
-	m->linear.physical = kernelLinear->physical;
+	assert(page != NULL);
+	m->linear.page = page;
+	m->linear.linear = linear;
+	m->linear.physical = physical;
 	m->lock = initialSpinlock;
 	m->referenceCount = 0;
 	return m;
@@ -276,7 +280,7 @@ static Task *createTask(
 	t->pendingIOList = NULL;
 	t->finishedIOList = NULL;
 	t->taskMemory = taskMemory;
-	addReference(taskMemory, 1);
+	addTaskMemoryReference(taskMemory, 1);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
@@ -293,25 +297,33 @@ static Task *createTask(
 }
 
 #define KERNEL_STACK_SIZE ((size_t)8192)
+#define STACK_ALIGN_SIZE ((size_t)4)
 #define MIN_BLOCK_MANAGER_PAGE_SIZE ((size_t)PAGE_SIZE)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
-static Task *createKernelTask(void (*eip0)(void), int priority, TaskMemoryManager *tm){
+static Task *createKernelTask(void (*eip0)(void), const void *arg, size_t argSize, int priority, TaskMemoryManager *tm){
 	// kernel task stack
+	EXPECT(argSize <= KERNEL_STACK_SIZE / 2);
 	void *stackBottom = allocateKernelPages(KERNEL_STACK_SIZE, KERNEL_PAGE);
 	EXPECT(stackBottom != NULL);
 	uintptr_t stackTop = ((uintptr_t)stackBottom) + KERNEL_STACK_SIZE;
-	// create task
+	// set arguments
+	uintptr_t esp0 = stackTop - CEIL(argSize, STACK_ALIGN_SIZE);
+	memcpy((void*)stackTop, arg, argSize);
+	// dummy return address of eip0
+	esp0 -= sizeof(uintptr_t);
+	(*(uintptr_t*)esp0) = 0xffffffff;
+	// set context switch values
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
-	uintptr_t initialESP0 = stackTop -
-		initTaskStack(eflags.value, (uint32_t)eip0, stackTop);
-	Task *t = createTask(initialESP0, stackTop - 4, stackBottom, tm, priority);
+	esp0 = initTaskStack(eflags.value, (uint32_t)eip0, esp0);
+	Task *t = createTask(esp0, stackTop - 4, stackBottom, tm, priority);
 	EXPECT(t != NULL);
 	return t;
 	//DELETE(t);
 	ON_ERROR;
 	checkAndReleaseKernelPages(stackBottom);
+	ON_ERROR;
 	ON_ERROR;
 	return NULL;
 }
@@ -336,9 +348,9 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	LinearMemoryBlockManager *_mappedBlockManager = createLinearBlockManager(
 		(uintptr_t)mappedBlockManager, maxLinearBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, heapEnd);
 	assert(_mappedBlockManager == mappedBlockManager);
-	TaskMemoryManager *tm = createTaskMemory(pageManager, (LinearMemoryBlockManager*)targetBlockManager);
+	TaskMemoryManager *tm = createTaskMemory(kernelLinear->physical, pageManager, (LinearMemoryBlockManager*)targetBlockManager);
 	EXPECT(tm != NULL);
-	Task *t = createKernelTask(eip0, priority, tm);
+	Task *t = createKernelTask(eip0, NULL, 0, priority, tm);
 	EXPECT(t != NULL);
 	unmapKernelPages(mappedBlockManager);
 	unmapUserPageTableSet(pageManager);
@@ -362,7 +374,7 @@ static void createThreadHandler(InterruptParam *p){
 	sti();
 	void (*entry)(void) = (void (*)(void))SYSTEM_CALL_ARGUMENT_0(p);
 	Task *current = processorLocalTask();
-	Task *newTask = createKernelTask(entry, current->priority, current->taskMemory);
+	Task *newTask = createKernelTask(entry, NULL, 0, current->priority, current->taskMemory);
 	if(newTask != NULL){
 		resume(newTask);
 	}
@@ -434,7 +446,7 @@ void terminateCurrentTask(void){
 	t->ioSemaphore = NULL;
 	// delete user space
 	TaskMemoryManager *tmm = t->taskMemory;
-	int refCnt = addReference(tmm, -1);
+	int refCnt = addTaskMemoryReference(tmm, -1);
 	if(refCnt == 0){
 		PageManager *p = tmm->linear.page;
 		// delete linear
@@ -728,7 +740,7 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	for(p = 0; p < NUMBER_OF_PRIORITIES; p++){
 		globalQueue->taskQueue[p] = initialTaskQueue;
 	}
-	kernelTaskMemory = createTaskMemory(kernelLinear->page, kernelLinear->linear/*NULL*/);
+	kernelTaskMemory = createTaskMemory(kernelLinear->physical, kernelLinear->page, kernelLinear->linear/*NULL*/);
 	if(kernelTaskMemory == NULL){
 		panic("cannot create kernel task memory");
 	}

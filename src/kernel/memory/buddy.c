@@ -76,10 +76,6 @@ MemoryBlock *getBuddy(MemoryBlockManager *m, const MemoryBlock *b){
 	return (MemoryBlock*)(((uintptr_t)indexToElement(m, buddy)) + m->blockStructOffset);
 }
 
-uintptr_t getBeginAddress(MemoryBlockManager *m){
-	return m->beginAddress;
-}
-
 size_t ceilAllocateOrder(size_t s){
 	if(s > MAX_BLOCK_SIZE)
 		return MAX_BLOCK_ORDER + 1;

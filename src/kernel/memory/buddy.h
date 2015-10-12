@@ -37,7 +37,6 @@ MemoryBlock *getBuddy(MemoryBlockManager *m, const MemoryBlock *b);
 
 size_t ceilAllocateOrder(size_t s);
 
-size_t getBeginAddress(MemoryBlockManager *m);
 size_t getFreeBlockSize(MemoryBlockManager *m);
 int isAddressInRange(MemoryBlockManager *m, uintptr_t address);
 

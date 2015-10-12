@@ -250,9 +250,8 @@ static PhysicalMemoryBlockManager *initKernelPhysicalBlock(
 
 	int b;
 	const int bCount = getPhysicalBlockCount(m);
-	const uintptr_t firstAddress = getPhysicalBeginAddress(m);
 	for(b = 0; b < bCount; b++){
-		uintptr_t address = firstAddress + b * MIN_BLOCK_SIZE;
+		uintptr_t address = minAddress + b * MIN_BLOCK_SIZE;
 		assert(address + MIN_BLOCK_SIZE > address); // not overflow
 		if(isUsableInAddressRange(address, addressRange, addressRangeCount, extraAR, LENGTH_OF(extraAR))){
 			releasePhysicalBlock(m, address);
@@ -277,9 +276,8 @@ static LinearMemoryBlockManager *initKernelLinearBlock(
 
 	int b;
 	const int bCount = getMaxBlockCount(m);
-	const uintptr_t firstAddress = getLinearBeginAddress(m);
 	for(b = 0; b < bCount; b++){
-		uintptr_t address = firstAddress + b * MIN_BLOCK_SIZE;
+		uintptr_t address = minAddress + b * MIN_BLOCK_SIZE;
 		assert(address + MIN_BLOCK_SIZE > address);
 		if(isUsableInAddressRange(address, NULL, 0, extraAR, LENGTH_OF(extraAR))){
 			releaseLinearBlock(m, address);

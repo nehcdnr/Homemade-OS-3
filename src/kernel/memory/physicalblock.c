@@ -52,10 +52,6 @@ size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m){
 	return m->b.freeSize;
 }
 
-uintptr_t getPhysicalBeginAddress(PhysicalMemoryBlockManager *m){
-	return m->b.beginAddress;
-}
-
 uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size){
 	MemoryBlock *b;
 	PhysicalMemoryBlock *pmb;

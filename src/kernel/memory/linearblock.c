@@ -50,10 +50,6 @@ LinearMemoryBlockManager *createLinearBlockManager(
 	return bm;
 }
 
-uintptr_t getLinearBeginAddress(LinearMemoryBlockManager *m){
-	return getBeginAddress(&m->b);
-}
-
 size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address){
 	LinearMemoryBlock *lmb = addressToElement(&m->b, address);
 	assert(lmb->mappedSize != 0 && lmb->mappedSize % PAGE_SIZE == 0);
