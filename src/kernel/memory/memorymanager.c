@@ -105,7 +105,7 @@ void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t s
 	ON_ERROR;
 	return NULL;
 }
-
+/*
 void *mapExistingPages(
 	LinearMemoryManager *dst, PageManager *src,
 	uintptr_t srcLinear, size_t size,
@@ -128,7 +128,7 @@ void *mapExistingPages(
 	ON_ERROR;
 	return NULL;
 }
-
+*/
 void *checkAndMapExistingPages(
 	LinearMemoryManager *dst, LinearMemoryManager *src,
 	uintptr_t srcLinear, size_t size,

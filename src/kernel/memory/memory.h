@@ -104,12 +104,13 @@ void *checkAndMapExistingPages(
 );
 // this function is not thread-safe because it does not lock src linear manager
 // IMPROVE: move to memory_private.h
+/*
 void *mapExistingPages(
 	LinearMemoryManager *dst, PageManager *src,
 	uintptr_t srcLinear, size_t size,
 	PageAttribute attribute, PageAttribute srcHasAttribute
 );
-
+*/
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
