@@ -54,6 +54,7 @@ uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t n
 uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize);
 uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position);
+uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle);
 uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
 
 typedef struct IORequest IORequest;
@@ -63,7 +64,8 @@ typedef struct{
 	IORequest *(*open)(const char *fileName, uintptr_t nameLength);
 	IORequest *(*read)(void *arg, uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*write)(void *arg, const uint8_t *buffer, uintptr_t bufferSize);
-	IORequest *(*seek)(void *arg, uint64_t position);
+	IORequest *(*seek)(void *arg, uint64_t position/*, whence*/);
+	IORequest *(*sizeOf)(void *arg);
 	IORequest *(*close)(void *arg);
 	// If the argument is not a valid handle, return NULL.
 	// Otherwise, the return value of checkHandle will be passed to the above functions

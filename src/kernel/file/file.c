@@ -248,7 +248,8 @@ enum FileCommand{
 	FILE_COMMAND_READ = 2,
 	FILE_COMMAND_WRITE = 3,
 	FILE_COMMAND_SEEK = 4,
-	FILE_COMMAND_CLOSE = 5
+	FILE_COMMAND_SIZE_OF = 5,
+	FILE_COMMAND_CLOSE = 99
 };
 
 uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
@@ -268,6 +269,8 @@ uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
 		return NULL_OR_CALL(f->write)(arg, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));
 	case FILE_COMMAND_SEEK:
 		return NULL_OR_CALL(f->seek)(arg, SYSTEM_CALL_ARGUMENT_2(p) + (((uint64_t)SYSTEM_CALL_ARGUMENT_3(p))<<32));
+	case FILE_COMMAND_SIZE_OF:
+		return NULL_OR_CALL(f->sizeOf)(arg);
 	case FILE_COMMAND_CLOSE:
 		return NULL_OR_CALL(f->close)(arg);
 	default:
@@ -293,6 +296,10 @@ uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t positi
 	uintptr_t positionLow = ((position >> 0) & 0xffffffff);
 	uintptr_t positionHigh = ((position >> 32) & 0xffffffff);
 	return systemCall5(fileService, FILE_COMMAND_SEEK, handle, positionLow, positionHigh);
+}
+
+uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle){
+	return systemCall3(fileService, FILE_COMMAND_SIZE_OF, handle);
 }
 
 uintptr_t systemCall_closeFile(int fileService, uintptr_t handle){

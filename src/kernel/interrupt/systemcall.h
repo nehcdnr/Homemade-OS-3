@@ -96,5 +96,6 @@ SystemCallTable *initSystemCall(InterruptTable *t);
 #define VIDEO_SERVICE_NAME ("video")
 #define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
 #define AHCI_SERVICE_NAME ("ahci")
+#define KERNEL_FILE_SERVICE_NAME ("kernelfs")
 
 #endif

@@ -13,7 +13,8 @@ struct OpenFileRequest{
 	IORequest ior;
 	int isReady;
 	int isClosing;
-	uintptr_t lastReturnValue;
+	int lastReturnCount;
+	uintptr_t lastReturnValues[SYSTEM_CALL_MAX_RETURN_COUNT];
 
 	const BLOBAddress *file;
 	uintptr_t offset;
@@ -54,12 +55,23 @@ static void removeFromOpenFileList(OpenFileRequest *ofr){
 	releaseLock(&openFileLock);
 }
 
-static void finishFileIO(OpenFileRequest *ofr, uintptr_t returnValue){
+static void _finishFileIO(OpenFileRequest *ofr, int returnCount, ...){
 	assert(ofr->isReady = 1);
 	ofr->isReady = 0;
-	ofr->lastReturnValue = returnValue;
+	ofr->lastReturnCount = returnCount;
+	va_list va;
+	va_start(va, returnCount);
+	int i;
+	for(i = 0; i < returnCount; i++){
+		ofr->lastReturnValues[i] = va_arg(va, uintptr_t);
+	}
+	va_end(va);
+
 	finishIO(&ofr->ior);
 }
+#define FINISH_FILE_IO_1(OFR) _finishFileIO(OFR, 1, (OFR)->handle)
+#define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 2, (OFR)->handle, (V0))
+#define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 3, (OFR)->handle, (V0), (V1))
 
 static void closeFileRequest(IORequest *ior){
 	OpenFileRequest *of = ior->ioRequest;
@@ -69,18 +81,18 @@ static void closeFileRequest(IORequest *ior){
 
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 	OpenFileRequest *ofr = ior->ioRequest;
-	returnValues[0] = ofr->handle;
+
+	int returnCount = ofr->lastReturnCount;
+	memcpy(returnValues, ofr->lastReturnValues, ofr->lastReturnCount * sizeof(returnValues[0]));
 	if(ofr->isClosing){
 		closeFileRequest(ior);
-		return 1;
 	}
 	else{
 		pendIO(ior);
 		ofr->isReady = 1;
-		returnValues[1] = ofr->lastReturnValue;
 		setCancellable(ior, 1);
-		return 2;
 	}
+	return returnCount;
 }
 
 static OpenFileRequest *createOpenFileRequest(const BLOBAddress *file, Task *task){
@@ -91,7 +103,7 @@ static OpenFileRequest *createOpenFileRequest(const BLOBAddress *file, Task *tas
 	ofr->file = file;
 	ofr->isReady = 0;
 	ofr->isClosing = 0;
-	ofr->lastReturnValue = 0;
+	MEMSET0(ofr->lastReturnValues);
 	ofr->offset = 0;
 	ofr->handle = (uintptr_t)&ofr->handle;
 	ofr->task = task;
@@ -100,34 +112,86 @@ static OpenFileRequest *createOpenFileRequest(const BLOBAddress *file, Task *tas
 	return ofr;
 }
 
+static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
+	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
+	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
+	*pageOffset = bufferBegin - (*pageBegin);
+	*pageSize = CEIL(bufferBegin + bufferSize, PAGE_SIZE) - (*pageBegin);
+}
+
+static int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer){
+	uintptr_t pageOffset, pageBegin;
+	size_t pageSize;
+	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
+	*mappedPage = checkAndMapExistingPages(
+		kernelLinear, kernelLinear,//getTaskLinearMemory(processorLocalTask()),
+		pageBegin, pageSize, KERNEL_PAGE, 0);
+	if(*mappedPage == NULL){
+		return 0;
+	}
+	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
+	return 1;
+}
+
 static IORequest *openKFS(const char *fileName, uintptr_t length){
-	//TODO: check fileName address
+	void *mappedPage;
+	void *mappedFileName;
+	if(mapBufferToKernel(fileName, length, &mappedPage, &mappedFileName) == 0)
+		return IO_REQUEST_FAILURE;
+
 	const BLOBAddress *file;
 	for(file = blobList; file != blobList + blobCount; file++){
-		if(strncmp(fileName, file->name, length) == 0){
+		if(strncmp(mappedFileName, file->name, length) == 0){
 			break;
 		}
 	}
+	unmapPages(kernelLinear, mappedPage);
 	// file not found
 	if(file == blobList + blobCount)
 		return IO_REQUEST_FAILURE;
 	OpenFileRequest *ofr = createOpenFileRequest(file, processorLocalTask());
+	if(ofr == NULL)
+		return IO_REQUEST_FAILURE;
 	setCancellable(&ofr->ior, 0);
 	pendIO(&ofr->ior);
 	addToOpenFileList(ofr);
 
-	finishFileIO(ofr, 0);
+	FINISH_FILE_IO_1(ofr);
 	return &ofr->ior;
 }
 
 static IORequest *readKFS(void *arg, uint8_t *buffer, uintptr_t bufferSize){
-	//TODO: check buffer address
+	void *mappedPage;
+	void *mappedBuffer;
+	if(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer) == 0)
+		return IO_REQUEST_FAILURE;
+
 	OpenFileRequest *ofr = arg;
 	setCancellable(&ofr->ior, 0);
 	uintptr_t copySize = MIN(bufferSize, ofr->file->end - ofr->file->begin - ofr->offset);
 	memcpy(buffer, (void*)(ofr->file->begin + ofr->offset), copySize);
+
+	unmapPages(kernelLinear, mappedPage);
 	ofr->offset += copySize;
-	finishFileIO(ofr, copySize);
+	FINISH_FILE_IO_2(ofr, copySize);
+	return &ofr->ior;
+}
+
+static IORequest *seekKFS(void *arg, uint64_t position){
+	OpenFileRequest *ofr = arg;
+	if(position > ofr->file->end - ofr->file->begin){
+		return IO_REQUEST_FAILURE;
+	}
+	setCancellable(&ofr->ior, 0);
+	ofr->offset = (uintptr_t)position;
+	FINISH_FILE_IO_1(ofr);
+	return &ofr->ior;
+}
+
+static IORequest *sizeOfKFS(void *arg){
+	OpenFileRequest *ofr = arg;
+	uint64_t s = (ofr->file->end - ofr->file->begin);
+	FINISH_FILE_IO_3(ofr, (uint32_t)(s & 0xffffffff), (uint32_t)((s >> 32) & 0xffffffff));
 	return &ofr->ior;
 }
 
@@ -135,7 +199,7 @@ static IORequest *closeKFS(void *arg){
 	OpenFileRequest *ofr = arg;
 	ofr->isClosing = 1;
 	ofr->isReady = 0;
-	finishFileIO(ofr, 0);
+	FINISH_FILE_IO_1(ofr);
 	return &ofr->ior;
 }
 
@@ -145,14 +209,13 @@ static void kernelFileServiceHandler(InterruptParam *p){
 	ff.open = openKFS;
 	ff.read = readKFS;
 	ff.write = NULL;
-	ff.seek = NULL;
+	ff.seek = seekKFS;
+	ff.sizeOf = sizeOfKFS;
 	ff.close = closeKFS;
 	ff.checkHandle = searchOpenFileList;
 	uintptr_t fileRequest = dispatchFileSystemCall(p, &ff);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = fileRequest;
 }
-
-#define KERNEL_FILE_SERVICE_NAME ("kernelfs")
 
 void kernelFileService(void){
 	int kfs = registerService(global.syscallTable,
@@ -199,6 +262,12 @@ void testKFS(void){
 	uintptr_t file, file2;
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
+	//sizeOf
+	r = systemCall_sizeOfFile(kfs, file);
+	uintptr_t sizeLow, sizeHigh;
+	r2 = systemCall_waitIOReturn(r, 3, &file2, &sizeLow, &sizeHigh);
+	printk("size = %d:%d\n",sizeHigh, sizeLow);
+	assert(r == r2 && file2 == file);
 	//read
 	int i;
 	for(i = 0; i < 3; i++){

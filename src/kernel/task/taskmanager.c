@@ -311,6 +311,9 @@ static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int p
 	// set arguments
 	uintptr_t esp0 = stackTop - CEIL(argSize, STACK_ALIGN_SIZE);
 	memcpy((void*)esp0, arg, argSize);
+	// address of arg
+	esp0 -= sizeof(uintptr_t);
+	(*(uintptr_t*)esp0) = esp0 + sizeof(uintptr_t);
 	// dummy return address of eip0
 	esp0 -= sizeof(uintptr_t);
 	(*(uintptr_t*)esp0) = 0xffffffff;
@@ -329,31 +332,35 @@ static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int p
 	return NULL;
 }
 
-struct NoLoaderParam{
-	// heapBegin = 0
-	uintptr_t linearBlockManagerBegin;
-	// linearBlockManagerEnd = linearBlockManagerBegin + maxLinearBlockManagerSize
-	uintptr_t heapEnd;
-	void(*entry)(void);
-};
+#define USER_LINEAR_BLOCK_MANAGER_ADDRESS (FLOOR(USER_LINEAR_END - maxLinearBlockManagerSize, PAGE_SIZE))
+#define USER_PAGE_TABLE_SET_ADDRESS (USER_LINEAR_BLOCK_MANAGER_ADDRESS - sizeOfPageTableSet)
+#define HEAP_END USER_PAGE_TABLE_SET_ADDRESS
 
-static void startTaskWithoutLoader(struct NoLoaderParam p){
+LinearMemoryBlockManager *initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr){
 	TaskMemoryManager *tmm = processorLocalTask()->taskMemory;
 	assert(tmm->manager.linear == NULL);
 	LinearMemoryBlockManager *lmb = createLinearBlockManager(
-			p.linearBlockManagerBegin, maxLinearBlockManagerSize, MIN_BLOCK_SIZE, MIN_BLOCK_SIZE, p.heapEnd);
-	assert((uintptr_t)lmb == p.linearBlockManagerBegin);
+		USER_LINEAR_BLOCK_MANAGER_ADDRESS, maxLinearBlockManagerSize, beginAddr, initEndAddr, HEAP_END);
+	assert((uintptr_t)lmb == USER_LINEAR_BLOCK_MANAGER_ADDRESS);
 	tmm->manager.linear = lmb;
-	p.entry();
+	return lmb;
+}
+
+struct NoLoaderParam{
+	void (*eip)(void);
+};
+
+static void noLoader(void *voidParam){
+	struct NoLoaderParam *p = voidParam;
+	initUserLinearBlockManager(PAGE_SIZE, PAGE_SIZE);
+	p->eip();
 	assert(0);
 	terminateCurrentTask();
 }
 
-// TODO: user space stack
-Task *createUserTask(void (*eip0)(void), int priority){
-	const uintptr_t targetLinearBlockManager = FLOOR(USER_LINEAR_END - maxLinearBlockManagerSize, PAGE_SIZE);
-	const uintptr_t targetPageTable = targetLinearBlockManager - sizeOfPageTableSet;
-	const uintptr_t heapEnd = targetPageTable;
+Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority){
+	const uintptr_t targetLinearBlockManager = USER_LINEAR_BLOCK_MANAGER_ADDRESS;
+	const uintptr_t targetPageTable = USER_PAGE_TABLE_SET_ADDRESS;
 	assert(minLinearBlockManagerSize <= MIN_BLOCK_MANAGER_PAGE_SIZE);
 	// 1. task PageManager
 	// IMPROVE: map to user space
@@ -365,11 +372,7 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	EXPECT(ok);
 	TaskMemoryManager *tm = createTaskMemory(kernelLinear->physical, pageManager, NULL);
 	EXPECT(tm != NULL);
-	struct NoLoaderParam p;
-	p.linearBlockManagerBegin = targetLinearBlockManager;
-	p.heapEnd = heapEnd;
-	p.entry = eip0;
-	Task *t = createKernelTask(startTaskWithoutLoader, &p, sizeof(p), priority, tm);
+	Task *t = createKernelTask(loader, arg, argSize, priority, tm);
 	EXPECT(t != NULL);
 
 	unmapUserPageTableSet(pageManager);
@@ -386,6 +389,15 @@ Task *createUserTask(void (*eip0)(void), int priority){
 	ON_ERROR;
 	return NULL;
 }
+
+Task * createUserTaskWithoutLoader(void (*eip0)(void), int priority){
+	struct NoLoaderParam p = {eip0};
+	return createUserTask(noLoader, &p, sizeof(p), priority);
+}
+
+#undef USER_LINEAR_BLOCK_MANAGER_ADDRESS
+#undef USER_PAGE_TABLE_SET_ADDRESS
+#undef HEAP_END
 
 static void createThreadHandler(InterruptParam *p){
 	sti();
@@ -467,10 +479,11 @@ void terminateCurrentTask(void){
 	if(refCnt == 0){
 		PageManager *p = tmm->manager.page;
 		// delete linear
-		assert(tmm->manager.linear != NULL);
-		releaseAllLinearBlocks(&tmm->manager);
-		// see createUserTask
-		unmapPage_L(p, tmm->manager.linear, MIN_BLOCK_MANAGER_PAGE_SIZE);
+		if(tmm->manager.linear != NULL){
+			releaseAllLinearBlocks(&tmm->manager);
+			// see createUserTask
+			unmapPage_L(p, tmm->manager.linear, MIN_BLOCK_MANAGER_PAGE_SIZE);
+		}
 		// delete page
 		cli();
 		// temporary page manager; see deleteOldTask

@@ -25,11 +25,15 @@ void initTaskManagement(SystemCallTable *systemCallTable);
 int switchToVirtual8086Mode(void (*cs_ip)(void));
 
 // initial state is suspended
-//struct PageManager;
-//struct MemoryBlockManager;
-//Task *createKernelTask(void (*eip0)(void), int priority,
-//	struct PageManager* page, struct MemoryBlockManager *linear);
-Task *createUserTask(void (*eip)(void), int priority);
+// task.c
+Task *createUserTaskWithoutLoader(void (*eip0)(void), int priority);
+// elfloader.c
+Task *createUserTaskFromELF(int fileService, const char*fileName, uintptr_t nameLength, int priority);
+// apply a custom loader to a task
+Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority);
+// the loader function is responsible to initialize LinearBlockManager
+typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
+LinearMemoryBlockManager *initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 
 // return UINTPTR_NULL if failed
 // return task id if succeeded
