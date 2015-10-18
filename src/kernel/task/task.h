@@ -33,7 +33,7 @@ Task *createUserTaskFromELF(int fileService, const char*fileName, uintptr_t name
 Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority);
 // the loader function is responsible to initialize LinearBlockManager
 typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
-LinearMemoryBlockManager *initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
+int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 
 // return UINTPTR_NULL if failed
 // return task id if succeeded

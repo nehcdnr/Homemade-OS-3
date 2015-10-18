@@ -224,6 +224,11 @@ uint32_t toCR3(PageManager *p){
 	return p->physicalPD.value;
 }
 
+
+int isKernelLinearAddress(uintptr_t address){
+	return address >= KERNEL_LINEAR_BEGIN && address < KERNEL_LINEAR_END;
+}
+
 #define PD_INDEX_ADD_BASE(P, LINEAR) ((PD_INDEX(LINEAR) + (P)->pdIndexBase) & (PAGE_DIRECTORY_LENGTH - 1))
 
 static Spinlock *pdLockByLinearAddress(PageManager *p, uintptr_t linear){

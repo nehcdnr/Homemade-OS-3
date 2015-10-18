@@ -51,11 +51,17 @@ uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
 
 uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength);
+uintptr_t syncOpenFile(int fileService, const char *fileName, uintptr_t nameLength);
 uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize);
+uintptr_t syncReadFile(int fileService, uintptr_t handle, void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize);
+//uintptr_t syncWriteFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position);
+uintptr_t syncSeekFile(int fileService, uintptr_t handle, uint64_t position);
 uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle);
+//uintptr_t syncSizeOfFile(int fileService, uintptr_t handle);
 uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
+uintptr_t syncCloseFile(int fileService, uintptr_t handle);
 
 typedef struct IORequest IORequest;
 typedef struct InterruptParam InterruptParam;

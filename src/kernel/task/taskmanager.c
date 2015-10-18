@@ -336,14 +336,18 @@ static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int p
 #define USER_PAGE_TABLE_SET_ADDRESS (USER_LINEAR_BLOCK_MANAGER_ADDRESS - sizeOfPageTableSet)
 #define HEAP_END USER_PAGE_TABLE_SET_ADDRESS
 
-LinearMemoryBlockManager *initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr){
+int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr){
+	if(beginAddr % MIN_BLOCK_SIZE != 0 || beginAddr >= HEAP_END ||
+		initEndAddr % MIN_BLOCK_SIZE != 0 || beginAddr > initEndAddr)
+		return 0;
 	TaskMemoryManager *tmm = processorLocalTask()->taskMemory;
 	assert(tmm->manager.linear == NULL);
 	LinearMemoryBlockManager *lmb = createLinearBlockManager(
 		USER_LINEAR_BLOCK_MANAGER_ADDRESS, maxLinearBlockManagerSize, beginAddr, initEndAddr, HEAP_END);
-	assert((uintptr_t)lmb == USER_LINEAR_BLOCK_MANAGER_ADDRESS);
+	if((uintptr_t)lmb != USER_LINEAR_BLOCK_MANAGER_ADDRESS)
+		return 0;
 	tmm->manager.linear = lmb;
-	return lmb;
+	return 1;
 }
 
 struct NoLoaderParam{
@@ -352,9 +356,10 @@ struct NoLoaderParam{
 
 static void noLoader(void *voidParam){
 	struct NoLoaderParam *p = voidParam;
-	initUserLinearBlockManager(PAGE_SIZE, PAGE_SIZE);
-	p->eip();
-	assert(0);
+	if(initUserLinearBlockManager(PAGE_SIZE, PAGE_SIZE) != 0){
+		p->eip();
+		printk("warning: task did not terminate by systemCall_teminate()\n");
+	}
 	terminateCurrentTask();
 }
 

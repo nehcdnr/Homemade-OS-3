@@ -284,8 +284,28 @@ uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t n
 	return systemCall4(fileService, FILE_COMMAND_OPEN, (uintptr_t)fileName, nameLength);
 }
 
+uintptr_t syncOpenFile(int fileService, const char *fileName, uintptr_t nameLength){
+	uintptr_t handle;
+	uintptr_t r = systemCall_openFile(fileService, fileName, nameLength);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, &handle))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}
+
 uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize){
 	return systemCall5(fileService, FILE_COMMAND_READ, handle, (uintptr_t)buffer, bufferSize);
+}
+
+uintptr_t syncReadFile(int fileService, uintptr_t handle, void *buffer, uintptr_t *bufferSize){
+	uintptr_t r;
+	r = systemCall_readFile(fileService, handle, buffer, *bufferSize);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, bufferSize))
+		return IO_REQUEST_FAILURE;
+	return handle;
 }
 
 uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize){
@@ -298,6 +318,16 @@ uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t positi
 	return systemCall5(fileService, FILE_COMMAND_SEEK, handle, positionLow, positionHigh);
 }
 
+uintptr_t syncSeekFile(int fileService, uintptr_t handle, uint64_t position){
+	uintptr_t r;
+	r = systemCall_seekFile(fileService, handle, position);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIO(r))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}
+
 uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle){
 	return systemCall3(fileService, FILE_COMMAND_SIZE_OF, handle);
 }
@@ -306,3 +336,12 @@ uintptr_t systemCall_closeFile(int fileService, uintptr_t handle){
 	return systemCall3(fileService, FILE_COMMAND_CLOSE, handle);
 }
 
+uintptr_t syncCloseFile(int fileService, uintptr_t handle){
+	uintptr_t r;
+	r = systemCall_closeFile(fileService, handle);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIO(r))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}

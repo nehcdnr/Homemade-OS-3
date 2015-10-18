@@ -116,6 +116,9 @@ void unmapPages(LinearMemoryManager *m, void *linearAddress);
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
 #define releaseReservedPage _releasePhysicalPages
 
+// XXX:
+int isKernelLinearAddress(uintptr_t address);
+
 // allocate new linear memory and new physical memory
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
 void *allocateKernelPages(size_t size, PageAttribute attribute);

@@ -23,7 +23,7 @@ static_assert(MEMBER_OFFSET(LinearMemoryBlockManager, b.blockArray) == sizeof(Li
 
 static void initLinearMemoryBlock(void *voidLMB){
 	LinearMemoryBlock *lmb = voidLMB;
-	lmb->mappedSize = 0;
+	lmb->mappedSize = MIN_BLOCK_SIZE;
 	lmb->status = MEMORY_USING;
 	initMemoryBlock(&lmb->block);
 }

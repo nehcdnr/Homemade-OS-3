@@ -160,7 +160,7 @@ void *checkAndMapExistingPages(
 	ON_ERROR;
 	return NULL;
 }
-
+//TODO: remove this function
 void unmapPages(LinearMemoryManager *m, void *linearAddress){
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)linearAddress);
 	_unmapPage_LP(m->page, m->physical, linearAddress, s);

@@ -69,9 +69,9 @@ static void _finishFileIO(OpenFileRequest *ofr, int returnCount, ...){
 
 	finishIO(&ofr->ior);
 }
-#define FINISH_FILE_IO_1(OFR) _finishFileIO(OFR, 1, (OFR)->handle)
-#define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 2, (OFR)->handle, (V0))
-#define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 3, (OFR)->handle, (V0), (V1))
+#define FINISH_FILE_IO_1(OFR) _finishFileIO(OFR, 0)
+#define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 1, (V0))
+#define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 2, (V0), (V1))
 
 static void closeFileRequest(IORequest *ior){
 	OpenFileRequest *of = ior->ioRequest;
@@ -124,7 +124,7 @@ static int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPa
 	size_t pageSize;
 	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
 	*mappedPage = checkAndMapExistingPages(
-		kernelLinear, kernelLinear,//getTaskLinearMemory(processorLocalTask()),
+		kernelLinear, isKernelLinearAddress(pageBegin)? kernelLinear: getTaskLinearMemory(processorLocalTask()),
 		pageBegin, pageSize, KERNEL_PAGE, 0);
 	if(*mappedPage == NULL){
 		return 0;
@@ -156,7 +156,7 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 	pendIO(&ofr->ior);
 	addToOpenFileList(ofr);
 
-	FINISH_FILE_IO_1(ofr);
+	FINISH_FILE_IO_2(ofr, &ofr->handle);
 	return &ofr->ior;
 }
 
@@ -259,20 +259,19 @@ void testKFS(void){
 	// open file
 	r = systemCall_openFile(kfs, "testfile.txt", strlen("testfile.txt"));
 	assert(r != IO_REQUEST_FAILURE);
-	uintptr_t file, file2;
+	uintptr_t file;
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
 	//sizeOf
 	r = systemCall_sizeOfFile(kfs, file);
 	uintptr_t sizeLow, sizeHigh;
-	r2 = systemCall_waitIOReturn(r, 3, &file2, &sizeLow, &sizeHigh);
+	r2 = systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh);
 	printk("size = %d:%d\n",sizeHigh, sizeLow);
-	assert(r == r2 && file2 == file);
+	assert(r == r2);
 	//read
 	int i;
 	for(i = 0; i < 3; i++){
 		char x[12];
-		file2 = 99;
 		MEMSET0(x);
 		// read file
 		r2 = systemCall_readFile(kfs, file, x, 11);
@@ -281,10 +280,14 @@ void testKFS(void){
 		r2 = systemCall_readFile(kfs, file, x, 11);
 		assert(r2 == IO_REQUEST_FAILURE);
 		uintptr_t readCount = 10000;
-		r2 = systemCall_waitIOReturn(r, 2, &file2, &readCount);
-		assert(r2 == r && file2 == file);
+		r2 = systemCall_waitIOReturn(r, 1, &readCount);
+		assert(r2 == r);
 		x[readCount] = '\0';
 		printk("%s %d\n",x, readCount);
+		r2 = systemCall_seekFile(kfs, file, (i + 1) * 5);
+		assert(r == r2);
+		r2 = systemCall_waitIO(r);
+		assert(r2 == r);
 	}
 	// close
 	r2 = systemCall_closeFile(kfs, file);
@@ -292,8 +295,8 @@ void testKFS(void){
 	// last operation is not finished
 	r2 = systemCall_closeFile(kfs, file);
 	assert(r2 == IO_REQUEST_FAILURE);
-	r2 = systemCall_waitIOReturn(r, 1, &file2);
-	assert(r2 == r && file == file2);
+	r2 = systemCall_waitIO(r);
+	assert(r2 == r);
 	// not opened
 	r2 = systemCall_readFile(kfs, file, &r2, 1);
 	assert(r2 == IO_REQUEST_FAILURE);
