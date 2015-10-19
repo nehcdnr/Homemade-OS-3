@@ -67,7 +67,7 @@ typedef struct{
 
 static_assert(sizeof(ELFSectionHeader32) == 40);
 
-static int checkELF32Header(ELFHeader32 *e){
+static int checkELFHeader32(ELFHeader32 *e){
 	if(e->magic[0] != 0x7f || e->magic[1] != 'E' ||
 		e->magic[2] != 'L' || e->magic[3] != 'F' ||
 		e->bits != 1 ||
@@ -78,6 +78,125 @@ static int checkELF32Header(ELFHeader32 *e){
 		return 0;
 	else
 		return 1;
+}
+
+static int checkAllocateProgramHeader32(
+	const ProgramHeader32 *programHeaderArray, int programHeaderCount,
+	uintptr_t *programBegin, uintptr_t *programEnd
+){
+	*programBegin = 0xffffffff;
+	*programEnd = 0;
+	int i, j;
+	for(i = 0; i < programHeaderCount; i++){
+		const ProgramHeader32 *ph = programHeaderArray + i;
+		const uintptr_t phBegin = FLOOR(ph->memoryAddress, ph->alignSize),
+			phEnd = CEIL(ph->memoryAddress + ph->memorySize, ph->alignSize);
+		if(ph->segmentType != 1) // allocate initial value
+			continue;
+		if(ph->alignSize == 0 || ph->alignSize % PAGE_SIZE != 0 ||
+			ph->memorySize < ph->fileSize || phBegin > phEnd)
+			return 0;
+		// check overlap
+		for(j = 0; j < i; j++){
+			const ProgramHeader32 *ph2 = programHeaderArray + j;
+			if(ph2->segmentType != 1)
+				continue;
+			const uintptr_t ph2Begin = FLOOR(ph2->memoryAddress, ph2->alignSize),
+				ph2End = CEIL(ph2->memoryAddress + ph2->memorySize, ph2->alignSize);
+			if(!(ph2End <= phBegin || ph2Begin >= phEnd))
+				return 0;
+		}
+		*programBegin = MIN(*programBegin, phBegin);
+		*programEnd = MAX(*programEnd, phEnd);
+	}
+	return  *programBegin < *programEnd;
+}
+
+// no matter ok or not, the pages in range will wither be mapped or released
+static int mapAllocateProgramHeader32(
+	const ProgramHeader32 *programHeaderArray, int programHeaderCount,
+	uintptr_t programBegin, uintptr_t programEnd
+){
+	int ok = 1;
+	LinearMemoryManager *taskMemory = getTaskLinearMemory(processorLocalTask());
+	uintptr_t address;
+	for(address = programBegin; address < programEnd; address += PAGE_SIZE){
+		// is address in range?
+		int j;
+		for(j = 0; j < programHeaderCount; j++){
+			const ProgramHeader32 *ph = programHeaderArray + j;
+			if(ph->segmentType != 1)
+				continue;
+			const uintptr_t phBegin = FLOOR(ph->memoryAddress, ph->alignSize),
+				phEnd = CEIL(ph->memoryAddress + ph->memorySize, ph->alignSize);
+			if(address >= phBegin && address < phEnd)
+				break;
+		}
+		// not failed and in range
+		if(ok && j < programHeaderCount){
+			ok = _mapPage_L(taskMemory->page, taskMemory->physical, (void*)address, PAGE_SIZE,
+				programHeaderToPageAttribute(programHeaderArray + j));
+			if(ok)
+				continue;
+		}
+		// address is not in range or failed to allocate memory
+		releaseLinearBlock(taskMemory->linear, address);
+	}
+	return ok;
+}
+
+static int setAllocateProgramHeader32(
+	int fileService, uintptr_t file,
+	const ProgramHeader32 *programHeaderArray, int programHeaderCount
+){
+	int i;
+	for(i = 0; i < programHeaderCount; i++){
+		const ProgramHeader32 *ph = programHeaderArray + i;
+		if(ph->segmentType != 1)
+			continue;
+		if(syncSeekFile(fileService, file, ph->offset) == IO_REQUEST_FAILURE)
+			break;
+		uintptr_t readCount = ph->fileSize;
+		if(syncReadFile(fileService, file, (void*)ph->memoryAddress, &readCount) == IO_REQUEST_FAILURE)
+			break;
+		if(readCount != ph->fileSize)
+			break;
+		memset((void*)(ph->memoryAddress + ph->fileSize), 0, ph->memorySize - ph->fileSize);
+	}
+	return i >= programHeaderCount;
+}
+
+static int loadProgramHeader32(int fileService, uintptr_t file, int programHeaderLength){
+	int ok = 0;
+	const size_t programHeaderSize = programHeaderLength * sizeof(ProgramHeader32);
+	ProgramHeader32 *programHeader32 = allocateKernelMemory(programHeaderSize);
+	EXPECT(programHeader32 != NULL);
+	uintptr_t readCount = programHeaderSize;
+	uintptr_t request = syncReadFile(fileService, file, programHeader32, &readCount);
+	EXPECT(request != IO_REQUEST_FAILURE && readCount == programHeaderSize);
+	uintptr_t programBegin;
+	uintptr_t programEnd;
+	ok = checkAllocateProgramHeader32(
+		programHeader32, programHeaderLength, &programBegin, &programEnd);
+	// check address overflow
+	EXPECT(ok);
+	ok = initUserLinearBlockManager(programBegin, programEnd); // TODO: extend
+	EXPECT(ok);
+	// TaskMemoryManager
+	ok = mapAllocateProgramHeader32(programHeader32, programHeaderLength, programBegin, programEnd);
+	EXPECT(ok);
+	// fill in memory
+	ok = setAllocateProgramHeader32(fileService, file, programHeader32, programHeaderLength);
+	EXPECT(ok);
+	// ok = 1;
+	ON_ERROR;
+	ON_ERROR;
+	ON_ERROR;
+	ON_ERROR;
+	ON_ERROR;
+	DELETE(programHeader32);
+	ON_ERROR;
+	return ok;
 }
 
 struct ELFLoaderParam{
@@ -97,107 +216,20 @@ static void elfLoader(void *arg){
 	uintptr_t readCount = sizeof(elfHeader32);
 	request = syncReadFile(p->fileService, file, &elfHeader32, &readCount);
 	EXPECT(request != IO_REQUEST_FAILURE && readCount == sizeof(elfHeader32) &&
-		checkELF32Header(&elfHeader32));
+		checkELFHeader32(&elfHeader32));
 
 	// ProgramHeader32
 	request = syncSeekFile(p->fileService, file, elfHeader32.programHeaderOffset);
 	EXPECT(request != IO_REQUEST_FAILURE);
-	const size_t programHeaderSize = elfHeader32.programHeaderLength * sizeof(ProgramHeader32);
-	ProgramHeader32 *programHeader32 = allocateKernelMemory(programHeaderSize);
-	EXPECT(programHeader32 != NULL);
-	readCount = programHeaderSize;
-	request = syncReadFile(p->fileService, file, programHeader32, &readCount);
-	EXPECT(request != IO_REQUEST_FAILURE && readCount == programHeaderSize);
-	uintptr_t programBegin = 0xffffffff;
-	uintptr_t programEnd = 0;
-	uint16_t i;
-	for(i = 0; i < elfHeader32.programHeaderLength; i++){
-		const ProgramHeader32 *ph = programHeader32 + i;
-		if(ph->segmentType != 1) // allocate initial value
-			continue;
-		if(ph->alignSize == 0 || ph->alignSize % PAGE_SIZE != 0 || ph->memoryAddress < ph->fileSize)
-			break;
-		const uintptr_t phBegin = FLOOR(ph->memoryAddress, ph->alignSize),
-			phEnd = CEIL(ph->memoryAddress + ph->memorySize, ph->alignSize);
-		// check overlap
-		uint16_t j;
-		for(j = 0; j < i; j++){
-			const ProgramHeader32 *ph2 = programHeader32 + j;
-			const uintptr_t ph2Begin = FLOOR(ph2->memoryAddress, ph2->alignSize),
-				ph2End = CEIL(ph2->memoryAddress + ph2->memorySize, ph2->alignSize);
-			if(!(ph2End <= phBegin || ph2Begin >= phEnd))
-				break;
-		}
-		if(j < i)
-			break;
-		if(phBegin > phEnd)
-			break;
-		programBegin = MIN(programBegin, phBegin);
-		programEnd = MAX(programEnd,  + phEnd);
-	}
-	// check address overflow
-	EXPECT(i == elfHeader32.programHeaderLength && programBegin < programEnd);
-	int ok = initUserLinearBlockManager(programBegin, programEnd);
+	int ok = loadProgramHeader32(p->fileService, file, elfHeader32.programHeaderLength);
 	EXPECT(ok);
-	// TaskMemoryManager
-	LinearMemoryManager *taskMemory = getTaskLinearMemory(processorLocalTask());
-	uintptr_t address;
-	for(address = programBegin; address < programEnd; address += PAGE_SIZE){
-		// is address in range?
-		uint16_t j;
-		for(j = 0; j < elfHeader32.programHeaderLength; j++){
-			const ProgramHeader32 *ph = programHeader32 + j;
-			if(ph->segmentType != 1)
-				continue;
-			const uintptr_t phBegin = FLOOR(ph->memoryAddress, ph->alignSize),
-				phEnd = CEIL(ph->memoryAddress + ph->memorySize, ph->alignSize);
-			if(address >= phBegin && address < phEnd){
-				break;
-			}
-		}
-		// not failed and in range
-		if(ok && j < elfHeader32.programHeaderLength){
-			ok = _mapPage_L(taskMemory->page, taskMemory->physical, (void*)address, PAGE_SIZE,
-				programHeaderToPageAttribute(programHeader32 + j));
-			if(ok)
-				continue;
-		}
-		// address is not in range or failed to allocate memory
-		releaseLinearBlock(taskMemory->linear, address);
-	}
-	EXPECT(ok);
-	// fill in memory
-	for(i = 0; i < elfHeader32.programHeaderLength; i++){
-		const ProgramHeader32 *ph = programHeader32 + i;
-		if(ph->segmentType != 1)
-			continue;
-		if(syncSeekFile(p->fileService, file, ph->offset) == IO_REQUEST_FAILURE)
-			break;
-		readCount = ph->fileSize;
-		if(syncReadFile(p->fileService, file, (void*)ph->memoryAddress, &readCount) == IO_REQUEST_FAILURE)
-			break;
-		if(readCount != ph->fileSize)
-			break;
-		memset((void*)(ph->memoryAddress + ph->fileSize), 0, ph->memorySize - ph->fileSize);
-	}
-	EXPECT(i >= elfHeader32.programHeaderLength);
+	ok = syncCloseFile(p->fileService, file);
+	if(!ok)
+		printk("warnging: cannot close ELF file\n");
 	printk("elf ok\n\n");
-	DELETE(programHeader32);
 	// TODO: switch to user space
-((void(*)(void))elfHeader32.entry)();
-assert(0);
-	ON_ERROR;
-	ON_ERROR;
-	/* let terminateCurrentTask cleanup
-	while(address != programBegin){
-		checkAndReleaseLinearBlock(taskMemory, address);
-		address -= PAGE_SIZE;
-	}
-	*/
-	ON_ERROR;
-	ON_ERROR;
-	ON_ERROR;
-	DELETE(programHeader32);
+	((void(*)(void))elfHeader32.entry)();
+	assert(0);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
@@ -205,7 +237,6 @@ assert(0);
 	ON_ERROR;
 	terminateCurrentTask();
 }
-
 
 Task *createUserTaskFromELF(int fileService, const char *fileName, uintptr_t nameLength, int priority){
 	const size_t pSize = sizeof(struct ELFLoaderParam) + nameLength * sizeof(*fileName);

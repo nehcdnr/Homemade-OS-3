@@ -64,20 +64,7 @@ void releaseAllLinearBlocks(LinearMemoryManager *m);
 #define MAX_BLOCK_SIZE (1<<MAX_BLOCK_ORDER)
 
 // page.c
-PageManager *initKernelPageTable(
-	uintptr_t manageBase,
-	uintptr_t manageBegin,
-	uintptr_t manageEnd,
-	uintptr_t kernelLinearBase,
-	uintptr_t kernelLinearEnd
-);
-
-// assume arguments are valid
-int _mapExistingPages_L(
-		PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
-	void *dstLinear, uintptr_t srcLinear, size_t size,
-	PageAttribute attribute, PageAttribute srcHasAttribute
-);
+PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd);
 
 PhysicalAddress _translatePage(PageManager *p, uintptr_t linearAddress, PageAttribute hasAtribute);
 

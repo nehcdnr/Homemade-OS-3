@@ -160,7 +160,7 @@ void *checkAndMapExistingPages(
 	ON_ERROR;
 	return NULL;
 }
-//TODO: remove this function
+
 void unmapPages(LinearMemoryManager *m, void *linearAddress){
 	size_t s = getAllocatedBlockSize(m->linear, (uintptr_t)linearAddress);
 	_unmapPage_LP(m->page, m->physical, linearAddress, s);
@@ -311,10 +311,7 @@ void initKernelMemory(void){
 	reservedBegin = ((uintptr_t)kernelLinear->linear) + getMaxBlockManagerSize(kernelLinear->linear);
 	// page table = fixed (4GB - KERNEL_LINEAR_BEGIN) / 4096) * 4 = 256KB
 	// page directory = 4KB
-	kernelLinear->page = initKernelPageTable(
-		reservedBase, reservedBegin, reservedEnd,
-		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
-	);
+	kernelLinear->page = initKernelPageTable(reservedBase, reservedBegin, reservedEnd);
 
 	kernelSlab = createKernelSlabManager();
 }

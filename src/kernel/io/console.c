@@ -132,7 +132,7 @@ static int printBackspace(int length){
 int printString(const char *s, size_t length);
 int printString(const char *s, size_t length){
 	int a;
-	acquireLock(&kernelConsole.lock); //TODO: 1 lock&unlock per kprintf
+	acquireLock(&kernelConsole.lock); //IMPROVE: 1 lock&unlock per kprintf
 	a = printConsole(&kernelConsole, s, length);
 	updateCursor(&kernelConsole);
 	updateVideoAddress(&kernelConsole);

@@ -214,7 +214,6 @@ struct PageManager{
 };
 
 PageManager *kernelPageManager = NULL;
-static uintptr_t kLinearBegin, kLinearEnd;
 // see entry.asm
 uint32_t kernelCR3;
 
@@ -404,7 +403,7 @@ static PhysicalAddress linearToPhysical(enum PhyscialMapping mapping, void *line
 		physical = _translatePage(kernelPageManager, (uintptr_t)linear, KERNEL_PAGE);
 		break;
 	case MAP_TO_KERNEL_RESERVED:
-		physical.value = (((uintptr_t)(linear)) - kLinearBegin);
+		physical.value = (((uintptr_t)(linear)) - KERNEL_LINEAR_BEGIN);
 		break;
 	default:
 		physical.value = INVALID_PAGE_ADDRESS;
@@ -488,18 +487,12 @@ static void initPageManagerPT(
 	}
 }
 
-PageManager *initKernelPageTable(
-	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
-	uintptr_t kernelLinearBegin, uintptr_t kernelLinearEnd
-){
-	assert(kernelLinearBegin % PAGE_TABLE_REGION_SIZE == 0 && kernelLinearEnd % PAGE_SIZE == 0);
-	assert(manageBase >= kernelLinearBegin && manageEnd <= kernelLinearEnd);
-	assert(kernelLinearBegin == KERNEL_LINEAR_BEGIN);
+PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd){
+	assert(KERNEL_LINEAR_BEGIN % PAGE_TABLE_REGION_SIZE == 0 && KERNEL_LINEAR_END % PAGE_SIZE == 0);
+	assert(manageBase >= KERNEL_LINEAR_BEGIN && manageEnd <= KERNEL_LINEAR_END);
 	assert(kernelPageManager == NULL);
 
 	kernelPageManager = (PageManager*)manageBegin;
-	kLinearBegin = kernelLinearBegin;
-	kLinearEnd = kernelLinearEnd;
 
 	manageBegin += sizeof(*kernelPageManager);
 	if(manageBegin % PAGE_SIZE != 0){
@@ -512,7 +505,7 @@ PageManager *initKernelPageTable(
 		kernelPageManager, (PageTableSet*)manageBegin, (PageTableSet*)manageBegin,
 		manageBase, manageEnd, MAP_TO_KERNEL_RESERVED
 	);
-	initPageManagerPD(kernelPageManager, kLinearBegin, kLinearEnd, MAP_TO_KERNEL_RESERVED);
+	initPageManagerPD(kernelPageManager, KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END, MAP_TO_KERNEL_RESERVED);
 	initPageManagerPT(kernelPageManager, manageBase, manageEnd, manageBase, MAP_TO_KERNEL_RESERVED);
 	kernelCR3 = toCR3(kernelPageManager);
 	setCR3(kernelCR3);
@@ -620,7 +613,7 @@ PageManager *createAndMapUserPageTable(uintptr_t reservedBase, uintptr_t reserve
 		p, (PageTableSet*)tablesLoadAddress, pts,
 		reservedBase, reservedEnd, MAP_TO_KERNEL_ALLOCATED
 	);
-	copyPageManagerPD(p, kernelPageManager, kLinearBegin, kLinearEnd);
+	copyPageManagerPD(p, kernelPageManager, KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END);
 	initPageManagerPD(p, tablesLoadAddress, tablesLoadAddress + evalSize, MAP_TO_KERNEL_ALLOCATED);
 	initPageManagerPT(p, tablesLoadAddress, tablesLoadAddress + evalSize, (uintptr_t)pts, MAP_TO_KERNEL_ALLOCATED);
 	return p;
@@ -652,7 +645,7 @@ void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
 	}
 	{ // see copyPageManagerPD & initPageManagerPD
 		int rPDBegin = PD_INDEX(deletePage->reservedBase), rPDEnd = PD_INDEX(deletePage->reservedEnd - 1),
-			kPDBegin = PD_INDEX(kLinearBegin), kPDEnd = PD_INDEX(kLinearEnd - 1), p;
+			kPDBegin = PD_INDEX(KERNEL_LINEAR_BEGIN), kPDEnd = PD_INDEX(KERNEL_LINEAR_END - 1), p;
 		for(p = 0; p < PAGE_DIRECTORY_LENGTH; p++){
 			if((p >= rPDBegin && p <= rPDEnd)){
 				p = rPDEnd;
@@ -745,28 +738,5 @@ int _mapPage_LP(
 
 	ON_ERROR;
 	_unmapPage_LP(p, physical, linearAddress, s);
-	return 0;
-}
-
-int _mapExistingPages_L(
-	PhysicalMemoryBlockManager *physical, PageManager *dst, PageManager *src,
-	void *dstLinear, uintptr_t srcLinear, size_t size,
-	PageAttribute attribute, PageAttribute srcHasAtribute
-){
-	assert(srcLinear % PAGE_SIZE == 0 && ((uintptr_t)dstLinear) % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
-	uintptr_t s;
-	for(s = 0; s < size; s += PAGE_SIZE){
-		PhysicalAddress p = _translatePage(src, srcLinear + s, srcHasAtribute);
-		assert(p.value != INVALID_PAGE_ADDRESS);
-		if(map1Page_LP(dst, physical, ((uintptr_t)dstLinear) + s, p, attribute) == 0){
-			break;
-		}
-	}
-	EXPECT(s >= size);
-
-	return 1;
-
-	ON_ERROR;
-	_unmapPage_LP(dst, physical, dstLinear, s);
 	return 0;
 }
