@@ -424,7 +424,7 @@ static void initPageManager(
 	p->page = tables;
 	p->pageInUserSpace = tablesLoadAddress;
 	p->physicalPD = linearToPhysical(mapping, &(tables->pd));
-	p->pdIndexBase = (PAGE_DIRECTORY_LENGTH - PD_INDEX(reservedBase)) & (PAGE_DIRECTORY_LENGTH - 1);
+	p->pdIndexBase = ((PAGE_DIRECTORY_LENGTH - PD_INDEX(reservedBase)) & (PAGE_DIRECTORY_LENGTH - 1));
 	assert(ptByLinearAddress(p, reservedBase) == tables->pt + 0);
 	int i;
 	for(i = 0; i < NUMBER_OF_PAGE_LOCKS; i++){
@@ -487,22 +487,22 @@ static void initPageManagerPT(
 	}
 }
 
-PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd){
+// see memorymanager.c
+PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t *manageBegin, uintptr_t manageEnd){
 	assert(KERNEL_LINEAR_BEGIN % PAGE_TABLE_REGION_SIZE == 0 && KERNEL_LINEAR_END % PAGE_SIZE == 0);
 	assert(manageBase >= KERNEL_LINEAR_BEGIN && manageEnd <= KERNEL_LINEAR_END);
 	assert(kernelPageManager == NULL);
+	uintptr_t newManageBegin = *manageBegin;
 
-	kernelPageManager = (PageManager*)manageBegin;
+	kernelPageManager = (PageManager*)newManageBegin;
 
-	manageBegin += sizeof(*kernelPageManager);
-	if(manageBegin % PAGE_SIZE != 0){
-		manageBegin += (PAGE_SIZE - (manageBegin % PAGE_SIZE));
-	}
-	if(manageBegin + evaluateSizeOfPageTableSet(manageBase, manageEnd) > manageEnd){
+	newManageBegin += sizeof(*kernelPageManager);
+	newManageBegin = CEIL(newManageBegin, PAGE_SIZE);
+	if(newManageBegin + sizeOfPageTableSet > manageEnd){
 		panic("insufficient reserved memory for kernel page table");
 	}
 	initPageManager(
-		kernelPageManager, (PageTableSet*)manageBegin, (PageTableSet*)manageBegin,
+		kernelPageManager, (PageTableSet*)newManageBegin, (PageTableSet*)newManageBegin,
 		manageBase, manageEnd, MAP_TO_KERNEL_RESERVED
 	);
 	initPageManagerPD(kernelPageManager, KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END, MAP_TO_KERNEL_RESERVED);
@@ -510,6 +510,7 @@ PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t manageBegin, ui
 	kernelCR3 = toCR3(kernelPageManager);
 	setCR3(kernelCR3);
 	setCR0PagingBit();
+	(*manageBegin) = newManageBegin + sizeOfPageTableSet;
 	return kernelPageManager;
 }
 

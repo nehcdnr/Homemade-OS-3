@@ -56,3 +56,10 @@ void initMemoryBlockManager(
 	uintptr_t endAddr,
 	InitMemoryBlockFunction initBlockFunc
 );
+
+uintptr_t evaluateMemoryBlockManagerEnd(
+	const MemoryBlockManager *bm,
+	size_t blockStructSize,
+	uintptr_t beginAddr,
+	uintptr_t endAddr
+);

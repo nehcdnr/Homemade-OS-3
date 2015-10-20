@@ -180,7 +180,7 @@ static int loadProgramHeader32(int fileService, uintptr_t file, int programHeade
 		programHeader32, programHeaderLength, &programBegin, &programEnd);
 	// check address overflow
 	EXPECT(ok);
-	ok = initUserLinearBlockManager(programBegin, programEnd); // TODO: extend
+	ok = initUserLinearBlockManager(programBegin, programEnd);
 	EXPECT(ok);
 	// TaskMemoryManager
 	ok = mapAllocateProgramHeader32(programHeader32, programHeaderLength, programBegin, programEnd);

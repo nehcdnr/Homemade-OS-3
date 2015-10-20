@@ -28,6 +28,17 @@ static void initLinearMemoryBlock(void *voidLMB){
 	initMemoryBlock(&lmb->block);
 }
 
+uintptr_t getInitialLinearBlockEnd(LinearMemoryBlockManager *bm){
+	return (uintptr_t)indexToElement(&bm->b, bm->initialBlockCount);
+}
+
+uintptr_t evaluateLinearBlockEnd(uintptr_t manageBase, uintptr_t beginAddr, uintptr_t initEndAddr){
+	return evaluateMemoryBlockManagerEnd(
+		&(((LinearMemoryBlockManager*)manageBase)->b), sizeof(LinearMemoryBlock),
+		beginAddr, initEndAddr
+	);
+}
+
 LinearMemoryBlockManager *createLinearBlockManager(
 	uintptr_t manageBase,
 	size_t manageSize,
@@ -44,7 +55,7 @@ LinearMemoryBlockManager *createLinearBlockManager(
 	bm->initialBlockCount = bm->b.blockCount;
 	bm->maxBlockCount = (maxEndAddr - beginAddr) / MIN_BLOCK_SIZE;
 
-	if(getMaxBlockManagerSize(bm) > manageSize){
+	if(getMaxLinearBlockManagerSize(bm) > manageSize){
 		panic("buddy memory manager (linear) initialization error");
 	}
 	return bm;
@@ -60,7 +71,7 @@ const size_t minLinearBlockManagerSize = sizeof(LinearMemoryBlockManager);
 const size_t maxLinearBlockManagerSize = sizeof(LinearMemoryBlockManager) +
 	((0xffffffff / MIN_BLOCK_SIZE) + 1) * sizeof(LinearMemoryBlock);
 
-size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m){
+size_t getMaxLinearBlockManagerSize(LinearMemoryBlockManager *m){
 	return sizeof(*m) + m->maxBlockCount * m->b.blockStructSize;
 }
 
@@ -265,8 +276,9 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	}
 	assert(i == bm->b.blockCount);
 	// see allocateLinearBlock
-	uintptr_t rlsPageBegin = CEIL((uintptr_t)indexToElement(&bm->b, bm->initialBlockCount), PAGE_SIZE);
+	uintptr_t rlsPageBegin = CEIL(getInitialLinearBlockEnd(bm), PAGE_SIZE);
 	uintptr_t rlsPageEnd = CEIL((uintptr_t)indexToElement(&bm->b, bm->b.blockCount), PAGE_SIZE);
+	// see extendLinearBlock_noLock
 	unmapPage_L(m->page, (void*)rlsPageBegin, rlsPageEnd - rlsPageBegin);
 	resetBlockArray(&bm->b, bm->initialBlockCount, initLinearMemoryBlock);
 }

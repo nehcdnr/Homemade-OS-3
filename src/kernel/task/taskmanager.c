@@ -299,7 +299,6 @@ static Task *createTask(
 
 #define KERNEL_STACK_SIZE ((size_t)8192)
 #define STACK_ALIGN_SIZE ((size_t)4)
-#define MIN_BLOCK_MANAGER_PAGE_SIZE ((size_t)PAGE_SIZE)
 static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
 static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int priority, TaskMemoryManager *tm){
@@ -342,12 +341,20 @@ int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr){
 		return 0;
 	TaskMemoryManager *tmm = processorLocalTask()->taskMemory;
 	assert(tmm->manager.linear == NULL);
+	uintptr_t manageBegin = USER_LINEAR_BLOCK_MANAGER_ADDRESS;
+	uintptr_t manageEnd = evaluateLinearBlockEnd(manageBegin, beginAddr, initEndAddr);
+	int ok = _mapPage_L(tmm->manager.page, tmm->manager.physical,
+		(void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE), KERNEL_PAGE);
+	EXPECT(ok);
 	LinearMemoryBlockManager *lmb = createLinearBlockManager(
-		USER_LINEAR_BLOCK_MANAGER_ADDRESS, maxLinearBlockManagerSize, beginAddr, initEndAddr, HEAP_END);
-	if((uintptr_t)lmb != USER_LINEAR_BLOCK_MANAGER_ADDRESS)
-		return 0;
+			manageBegin, maxLinearBlockManagerSize, beginAddr, initEndAddr, HEAP_END);
+	EXPECT((uintptr_t)lmb == USER_LINEAR_BLOCK_MANAGER_ADDRESS);
 	tmm->manager.linear = lmb;
 	return 1;
+	ON_ERROR;
+	_unmapPage_L(tmm->manager.page, tmm->manager.physical, (void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
+	ON_ERROR;
+	return 0;
 }
 
 struct NoLoaderParam{
@@ -356,6 +363,7 @@ struct NoLoaderParam{
 
 static void noLoader(void *voidParam){
 	struct NoLoaderParam *p = voidParam;
+
 	if(initUserLinearBlockManager(PAGE_SIZE, PAGE_SIZE) != 0){
 		p->eip();
 		printk("warning: task did not terminate by systemCall_teminate()\n");
@@ -366,15 +374,12 @@ static void noLoader(void *voidParam){
 Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority){
 	const uintptr_t targetLinearBlockManager = USER_LINEAR_BLOCK_MANAGER_ADDRESS;
 	const uintptr_t targetPageTable = USER_PAGE_TABLE_SET_ADDRESS;
-	assert(minLinearBlockManagerSize <= MIN_BLOCK_MANAGER_PAGE_SIZE);
 	// 1. task PageManager
 	// IMPROVE: map to user space
 	PageManager *pageManager = createAndMapUserPageTable(
-		targetPageTable, targetLinearBlockManager + MIN_BLOCK_MANAGER_PAGE_SIZE, targetPageTable);
+		targetPageTable, targetLinearBlockManager, targetPageTable);
 	EXPECT(pageManager != NULL);
-	// 2. taskMemory.linear will be initialized in startNoLoaderTask
-	int ok = mapPage_L(pageManager, (void*)targetLinearBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE, KERNEL_PAGE);
-	EXPECT(ok);
+	// 2. taskMemory.linear will be initialized in noLoader
 	TaskMemoryManager *tm = createTaskMemory(kernelLinear->physical, pageManager, NULL);
 	EXPECT(tm != NULL);
 	Task *t = createKernelTask(loader, arg, argSize, priority, tm);
@@ -387,8 +392,6 @@ Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int prior
 	ON_ERROR;
 	assert(tm->referenceCount == 0);
 	deleteTaskMemory(tm);
-	ON_ERROR;
-	unmapPage_L(pageManager, (void*)targetLinearBlockManager, MIN_BLOCK_MANAGER_PAGE_SIZE);
 	ON_ERROR;
 	releasePageTable(pageManager);
 	ON_ERROR;
@@ -485,9 +488,13 @@ void terminateCurrentTask(void){
 		PageManager *p = tmm->manager.page;
 		// delete linear
 		if(tmm->manager.linear != NULL){
+			// see initUserLinearBlockManager
 			releaseAllLinearBlocks(&tmm->manager);
-			// see createUserTask
-			unmapPage_L(p, tmm->manager.linear, MIN_BLOCK_MANAGER_PAGE_SIZE);
+			uintptr_t manageBegin = (uintptr_t)tmm->manager.linear;
+			uintptr_t manageEnd = getInitialLinearBlockEnd(tmm->manager.linear);
+			// assert(manageBegin % PAGE_SIZE == 0);
+			_unmapPage_L(tmm->manager.page, tmm->manager.physical,
+				(void*)tmm->manager.linear, CEIL(manageEnd - manageBegin, PAGE_SIZE));
 		}
 		// delete page
 		cli();
@@ -800,15 +807,9 @@ void testMemoryTask(void){
 	int r = 47;
 	//sleep(10);
 	for(loop=0;loop<10;loop++){//hlt();continue;
-
-		LinearMemoryManager *lm = &processorLocalTask()->taskMemory->manager;
 		// size_t phyFr[4], linFr[4];
 		// phyFr[0] = getFreeBlockSize(kernelLinear->physical);
 		// linFr[0] = getFreeBlockSize(lm->linear);
-		releaseAllLinearBlocks(lm);
-		// phyFr[1] = getFreeBlockSize(kernelLinear->physical);
-		// linFr[1] = getFreeBlockSize(lm->linear);
-
 		for(a=0;a<5;a++){
 			unsigned s = (r&0xffff)*PAGE_SIZE;
 			r=(r*7+5)%101+1;
@@ -821,13 +822,10 @@ void testMemoryTask(void){
 			}
 		}
 		/*
-		phyFr[2] = getFreeBlockSize(kernelLinear->physical);
-		linFr[2] = getFreeBlockSize(lm->linear);
-		releaseAllLinearBlocks(lm);
-		phyFr[3] = getFreeBlockSize(kernelLinear->physical);
-		linFr[3] = getFreeBlockSize(lm->linear);
-		printk("physical Free: %x %x %x %x\n", phyFr[0], phyFr[1], phyFr[2], phyFr[3]);
-		printk("linear Free  : %x %x %x %x\n", linFr[0], linFr[1], linFr[2], linFr[3]);
+		phyFr[1] = getFreeBlockSize(kernelLinear->physical);
+		linFr[1] = getFreeBlockSize(lm->linear);
+		printk("physical Free: %x %x\n", phyFr[0], phyFr[1]);
+		printk("linear Free  : %x %x\n", linFr[0], linFr[1]);
 		*/
 	}
 	systemCall_terminate();

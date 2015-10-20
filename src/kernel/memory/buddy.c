@@ -163,6 +163,11 @@ void resetBlockArray(MemoryBlockManager *bm, int initialBlockCount, InitMemoryBl
 	}
 }
 
+static int evaluateBlockCount(uintptr_t beginAddr, uintptr_t endAddr){
+	assert(beginAddr % MIN_BLOCK_SIZE == 0);
+	return (endAddr - beginAddr) / MIN_BLOCK_SIZE;
+}
+
 void initMemoryBlockManager(
 	MemoryBlockManager *bm,
 	size_t blockStructSize,
@@ -171,11 +176,20 @@ void initMemoryBlockManager(
 	uintptr_t endAddr,
 	InitMemoryBlockFunction initBlockFunc
 ){
-	assert(beginAddr % MIN_BLOCK_SIZE == 0);
 	//assert(INVALID_PAGE_ADDRESS < beginAddr || INVALID_PAGE_ADDRESS >= maxEndAddr);
 	bm->lock = initialSpinlock;
 	bm->blockStructSize = blockStructSize;
 	bm->blockStructOffset = blockStructOffset;
 	bm->beginAddress = beginAddr;
-	resetBlockArray(bm, (endAddr - bm->beginAddress) / MIN_BLOCK_SIZE, initBlockFunc);
+	resetBlockArray(bm, evaluateBlockCount(beginAddr, endAddr), initBlockFunc);
+}
+
+uintptr_t evaluateMemoryBlockManagerEnd(
+	const MemoryBlockManager *bm,
+	size_t blockStructSize,
+	uintptr_t beginAddr,
+	uintptr_t endAddr
+){
+	// indexToElement
+	return ((uintptr_t)bm->blockArray) + blockStructSize * evaluateBlockCount(beginAddr, endAddr);
 }

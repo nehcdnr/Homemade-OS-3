@@ -38,10 +38,13 @@ LinearMemoryBlockManager *createLinearBlockManager(
 	uintptr_t maxEndAddr
 );
 
+uintptr_t getInitialLinearBlockEnd(LinearMemoryBlockManager *bm);
+uintptr_t evaluateLinearBlockEnd(uintptr_t manageBase, uintptr_t beginAddr, uintptr_t initEndAddr);
+
 extern const size_t minLinearBlockManagerSize;
 extern const size_t maxLinearBlockManagerSize;
 
-size_t getMaxBlockManagerSize(LinearMemoryBlockManager *m);
+size_t getMaxLinearBlockManagerSize(LinearMemoryBlockManager *m);
 int getMaxBlockCount(LinearMemoryBlockManager *m);
 size_t getFreeLinearBlockSize(LinearMemoryBlockManager *m);
 
@@ -64,7 +67,7 @@ void releaseAllLinearBlocks(LinearMemoryManager *m);
 #define MAX_BLOCK_SIZE (1<<MAX_BLOCK_ORDER)
 
 // page.c
-PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd);
+PageManager *initKernelPageTable(uintptr_t manageBase, uintptr_t *manageBegin, uintptr_t manageEnd);
 
 PhysicalAddress _translatePage(PageManager *p, uintptr_t linearAddress, PageAttribute hasAtribute);
 

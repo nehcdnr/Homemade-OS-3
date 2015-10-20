@@ -237,11 +237,11 @@ static int isUsableInAddressRange(
 }
 
 static PhysicalMemoryBlockManager *initKernelPhysicalBlock(
-	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
+	uintptr_t manageBase, uintptr_t *manageBegin, uintptr_t manageEnd,
 	uintptr_t minAddress, uintptr_t maxAddress
 ){
 	PhysicalMemoryBlockManager *m = createPhysicalMemoryBlockManager(
-		manageBegin, manageEnd - manageBegin,
+		*manageBegin, manageEnd - *manageBegin,
 		minAddress, maxAddress
 	);
 	const AddressRange extraAR[1] = {
@@ -257,16 +257,18 @@ static PhysicalMemoryBlockManager *initKernelPhysicalBlock(
 			releasePhysicalBlock(m, address);
 		}
 	}
+	(*manageBegin) += getPhysicalBlockManagerSize(m);
 	return m;
 }
 
 static LinearMemoryBlockManager *initKernelLinearBlock(
-	uintptr_t manageBase, uintptr_t manageBegin, uintptr_t manageEnd,
+	uintptr_t manageBase, uintptr_t *manageBegin, uintptr_t manageEnd,
 	uintptr_t minAddress, uintptr_t maxAddress
 ){
+	uintptr_t newManageBegin = *manageBegin;
 	// see initKernelPhysicalBlock
 	LinearMemoryBlockManager *m = createLinearBlockManager(
-		manageBegin, manageEnd - manageBegin,
+		newManageBegin, manageEnd - newManageBegin,
 		minAddress, maxAddress, maxAddress
 	);
 	const AddressRange extraAR[2] = {
@@ -283,6 +285,9 @@ static LinearMemoryBlockManager *initKernelLinearBlock(
 			releaseLinearBlock(m, address);
 		}
 	}
+	newManageBegin += getMaxLinearBlockManagerSize(m);
+	assert(evaluateLinearBlockEnd(*manageBegin, minAddress, maxAddress) == newManageBegin);
+	(*manageBegin) = newManageBegin;
 	return m;
 }
 
@@ -295,24 +300,23 @@ void initKernelMemory(void){
 	// reserved... are linear address
 	const uintptr_t reservedBase = KERNEL_LINEAR_BEGIN;
 	uintptr_t reservedBegin = reservedBase + (1 << 20);
-	uintptr_t reservedEnd = reservedBase + (18 << 20);
+	uintptr_t reservedEnd = reservedBase + (23 << 20);
 	//IMPROVE: how to reduce reserved memory
 	// at most 4GB / 4096 * 16 = 16MB
 	kernelLinear->physical = initKernelPhysicalBlock(
-		reservedBase, reservedBegin, reservedEnd,
+		reservedBase, &reservedBegin, reservedEnd,
 		0, findMaxAddress()
 	);
-	reservedBegin = ((uintptr_t)kernelLinear->physical) + getPhysicalBlockManagerSize(kernelLinear->physical);
+	// page table = 4MB
+	// page directory = 4KB
+	kernelLinear->page = initKernelPageTable(reservedBase, &reservedBegin, reservedEnd);
+	// call initKernelConsole which enables printk to help debugging
+	// initKernelConsole();
 	// fixed (4GB - KERNEL_LINEAR_BEGIN) / 4096 * 20 = 1280KB
 	kernelLinear->linear = initKernelLinearBlock(
-		reservedBase, reservedBegin, reservedEnd,
+		reservedBase, &reservedBegin, reservedEnd,
 		KERNEL_LINEAR_BEGIN, KERNEL_LINEAR_END
 	);
-	reservedBegin = ((uintptr_t)kernelLinear->linear) + getMaxBlockManagerSize(kernelLinear->linear);
-	// page table = fixed (4GB - KERNEL_LINEAR_BEGIN) / 4096) * 4 = 256KB
-	// page directory = 4KB
-	kernelLinear->page = initKernelPageTable(reservedBase, reservedBegin, reservedEnd);
-
 	kernelSlab = createKernelSlabManager();
 }
 
