@@ -143,11 +143,11 @@ void *checkAndMapExistingPages(
 		PhysicalAddress srcPhysical = checkAndReservePage(src, (void*)(srcLinear + s), srcHasAttribute);
 		if(srcPhysical.value == INVALID_PAGE_ADDRESS)
 			break;
-		if(_mapPage_LP(dst->page, dst->physical,
-			(void*)(dstLinear + s), srcPhysical, PAGE_SIZE, attribute) == 0){
-			releaseReservedPage(src->physical, srcPhysical);
+		int ok = _mapPage_LP(dst->page, dst->physical,
+			(void*)(dstLinear + s), srcPhysical, PAGE_SIZE, attribute);
+		releaseReservedPage(src->physical, srcPhysical);
+		if(ok == 0)
 			break;
-		}
 	}
 	EXPECT(s == size);
 
