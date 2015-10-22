@@ -199,6 +199,10 @@ void schedule(){
 	taskSwitch(NULL, 0);
 }
 
+#define KERNEL_STACK_SIZE ((size_t)8192)
+#define STACK_ALIGN_SIZE ((size_t)4)
+static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
+
 //TODO: v8086Loader
 static int initV8086Memory(void){
 	PageManager *p = processorLocalTask()->taskMemory->manager.page;
@@ -228,13 +232,11 @@ static void initV8086Registers(InterruptParam *p, uint16_t ip, uint16_t cs, uint
 	p->regs.ds = p->regs.es = p->regs.fs = p->regs.gs = getDS();
 	p->eip = ip;
 	p->cs = cs;
-	EFlags flags;
-	flags.value = 0;
-	flags.bit.reserve1 = 1;
-	flags.bit.interrupt = 1;
-	flags.bit.virtual8086 = 1;
-	flags.bit.ioPrivilege = 0;
-	p->eflags = flags;
+	p->eflags.value = 0;
+	p->eflags.bit.reserve1 = 1;
+	p->eflags.bit.interrupt = 1;
+	p->eflags.bit.virtual8086 = 1;
+	p->eflags.bit.ioPrivilege = 0;
 	p->esp = sp;
 	p->ss = ss;
 	p->ds8086 = p->es8086 = p->fs8086 = p->gs8086 = 0;
@@ -256,6 +258,30 @@ int switchToVirtual8086Mode(void (*cs_ip)(void)){
 	initV8086Registers(&p, ip, cs, sp, ss);
 	returnFromInterrupt(p);
 	panic("switchToVirtual8086Mode");
+	return 0;
+}
+
+static void initUserRegisters(InterruptParam *p, uint32_t eip, uint32_t esp){
+	SegmentTable *gdt = processorLocalGDT();
+	p->eip = eip;
+	p->cs = getSegmentSelector(gdt, GDT_USER_CODE_INDEX).value;
+	p->eflags.value = 0;
+	p->eflags.bit.reserve1 = 1;
+	p->eflags.bit.interrupt = 1;
+	p->eflags.bit.ioPrivilege = 0;
+	p->esp = esp;
+	p->regs.ds = p->regs.es = p->regs.fs = p->regs.gs =
+	p->ss = getSegmentSelector(gdt, GDT_USER_DATA_INDEX).value;
+}
+
+int switchToUserMode(uintptr_t eip, size_t stackSize){
+	void *stack = allocatePages(getTaskLinearMemory(processorLocalTask()), stackSize, USER_WRITABLE_PAGE);
+	EXPECT(stack != NULL);
+	InterruptParam p;
+	initUserRegisters(&p, (uint32_t)eip, ((uintptr_t)stack) + stackSize - STACK_ALIGN_SIZE);
+	returnFromInterrupt(p);
+	panic("switchToUserMode");
+	ON_ERROR;
 	return 0;
 }
 
@@ -296,10 +322,6 @@ static Task *createTask(
 	ON_ERROR;
 	return NULL;
 }
-
-#define KERNEL_STACK_SIZE ((size_t)8192)
-#define STACK_ALIGN_SIZE ((size_t)4)
-static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
 static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int priority, TaskMemoryManager *tm){
 	// kernel task stack
@@ -494,7 +516,7 @@ void terminateCurrentTask(void){
 			uintptr_t manageEnd = getInitialLinearBlockEnd(tmm->manager.linear);
 			// assert(manageBegin % PAGE_SIZE == 0);
 			_unmapPage_L(tmm->manager.page, tmm->manager.physical,
-				(void*)tmm->manager.linear, CEIL(manageEnd - manageBegin, PAGE_SIZE));
+				(void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
 		}
 		// delete page
 		cli();

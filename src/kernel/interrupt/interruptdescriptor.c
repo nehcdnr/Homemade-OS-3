@@ -170,7 +170,7 @@ InterruptTable *initInterruptTable(SegmentTable *gdt){
 
 		d->handler_0_16 =  ((entryAddress >> 0) & 0xffff);
 		d->handler_16_32 = ((entryAddress >> 16) & 0xffff);
-		d->segmentSelector = toShort(getKernelCodeSelector(gdt));
+		d->segmentSelector = getSegmentSelector(gdt, GDT_KERNEL_CODE_INDEX).value;
 		d->reserved = 0;
 		d->gateType = 6;
 		d->bit32 = 1;

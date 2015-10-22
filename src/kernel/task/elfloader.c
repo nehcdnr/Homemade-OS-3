@@ -226,9 +226,9 @@ static void elfLoader(void *arg){
 	ok = syncCloseFile(p->fileService, file);
 	if(!ok)
 		printk("warnging: cannot close ELF file\n");
-	printk("elf ok\n\n");
-	// TODO: switch to user space
-	((void(*)(void))elfHeader32.entry)();
+	//printk("elf ok\n\n");
+	//((void(*)(void))elfHeader32.entry)();
+	switchToUserMode(elfHeader32.entry, DEFAULT_USER_STACK_SIZE);
 	assert(0);
 	ON_ERROR;
 	ON_ERROR;

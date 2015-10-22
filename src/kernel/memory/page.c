@@ -328,9 +328,9 @@ static int setPage(
 	//}
 	// page is protected by linear memory manager, so do not lock PTE
 	volatile PageTableEntry *pte = pteByLinearAddress(pt_linear, linearAddress);
+	//assert(isPTEPresent(pte) == 0);
 	setPTE(pte, attribute, physicalAddress);
-	assert(pte->present == 1);
-
+	//assert(isPTEPresent(pte) == 1);
 	return 1;
 }
 

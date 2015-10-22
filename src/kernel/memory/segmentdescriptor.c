@@ -27,30 +27,24 @@ typedef struct{
 
 static_assert(sizeof(TSS) == 104);
 
-struct SegmentSelector{
-	uint16_t shortValue;
-};
-
-uint16_t toShort(SegmentSelector* s){
-	return s->shortValue;
-}
-
 struct SegmentTable{
 	int length;
 	TSS *tss;
-	SegmentSelector *selector;
 	SegmentDescriptor *descriptor;
+	SegmentSelector *selector;
 };
 
 enum SegmentType{
+	// DPL = 0
 	KERNEL_CODE = 0x98,
 	KERNEL_DATA = 0x92,
-	// USER_CODE = ,
-	// USER_DATA =
-	KERNEL_TSS = 0x89
+	KERNEL_TSS = 0x89,
+	// DPL = 3
+	USER_CODE = 0xf8,
+	USER_DATA = 0xf2,
 };
 
-static SegmentSelector *setSegment(
+static void setSegment(
 	SegmentTable*t,
 	int index,
 	uint32_t base,
@@ -75,23 +69,21 @@ static SegmentSelector *setSegment(
 	d->limit_16_20 = ((limit >> 16) & 15);
 	d->flag =  flag;
 	d->base_24_32 = ((base >> 24) & 255);
-	t->selector[index].shortValue = (index << 3)/* + privilege*/;
-	return t->selector + index;
+	t->selector[index].value = 0;
+	t->selector[index].bit.rpl = ((type >> 5) & 3);
+	t->selector[index].bit.ldt = 0;
+	t->selector[index].bit.index = index;
 }
 
 static_assert(sizeof(SegmentDescriptor) == 8);
 
-enum{
-	GDT_0 = 0,
-	GDT_KERNEL_CODE_INDEX,
-	GDT_KERNEL_DATA_INDEX,
-	GDT_TSS_INDEX,
-	GDT_LENGTH
-};
+SegmentSelector getSegmentSelector(SegmentTable *t, enum SegmentIndex i){
+	return t->selector[i];
+}
+
 SegmentTable *createSegmentTable(void){
 	const int length = GDT_LENGTH;
 	SegmentTable *NEW(t);
-	NEW_ARRAY(t->selector, length);
 	{
 		uintptr_t desc = (uintptr_t)allocateKernelMemory((length + 1) * sizeof(SegmentDescriptor));
 		while(desc % sizeof(SegmentDescriptor) != 0){
@@ -99,14 +91,17 @@ SegmentTable *createSegmentTable(void){
 		}
 		t->descriptor = (SegmentDescriptor*)desc;
 	}
+	NEW_ARRAY(t->selector, length);
 	t->length = length;
 	MEMSET0(t->descriptor + 0);
 	setSegment(t, GDT_KERNEL_CODE_INDEX, 0, 0xffffffff, KERNEL_CODE);
 	setSegment(t, GDT_KERNEL_DATA_INDEX, 0, 0xffffffff, KERNEL_DATA);
+	setSegment(t, GDT_USER_CODE_INDEX, 0, 0xffffffff, USER_CODE);
+	setSegment(t, GDT_USER_DATA_INDEX, 0, 0xffffffff, USER_DATA);
 	{
 		TSS *NEW(tss);
 		MEMSET0(tss);
-		tss->ss0 = toShort(t->selector + GDT_KERNEL_DATA_INDEX);
+		tss->ss0 = getSegmentSelector(t, GDT_KERNEL_DATA_INDEX).value;
 		tss->esp0 = 0;
 		tss->ioBitmapAddress = 0xffff; // sizeof(TSS);
 		t->tss = tss;
@@ -115,16 +110,8 @@ SegmentTable *createSegmentTable(void){
 	return t;
 }
 
-SegmentSelector *getKernelCodeSelector(SegmentTable *t){
-	return t->selector + GDT_KERNEL_CODE_INDEX;
-}
-/*
-SegmentSelector *getKernelDataSelector(SegmentTable *t){
-	return t->selector + GDT_KERNEL_DATA_INDEX;
-}
-*/
 void setTSSKernelStack(SegmentTable *t, uint32_t esp0){
-	t->tss->ss0 = toShort(t->selector + GDT_KERNEL_DATA_INDEX);
+	t->tss->ss0 = getSegmentSelector(t, GDT_KERNEL_DATA_INDEX).value;
 	t->tss->esp0 = esp0;
 }
 
@@ -148,10 +135,10 @@ void loadgdt(SegmentTable *gdt){
 	lgdt(
 		gdt->length * sizeof(SegmentDescriptor) - 1,
 		gdt->descriptor,
-		gdt->selector[GDT_KERNEL_CODE_INDEX].shortValue,
-		gdt->selector[GDT_KERNEL_DATA_INDEX].shortValue
+		getSegmentSelector(gdt, GDT_KERNEL_CODE_INDEX).value,
+		getSegmentSelector(gdt, GDT_KERNEL_DATA_INDEX).value
 	);
-	ltr(gdt->selector[GDT_TSS_INDEX].shortValue);
+	ltr(getSegmentSelector(gdt, GDT_TSS_INDEX).value);
 }
 
 void sgdt(uint32_t *base, uint16_t *limit){

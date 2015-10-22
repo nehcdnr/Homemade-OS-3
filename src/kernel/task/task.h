@@ -24,6 +24,10 @@ void initTaskManagement(SystemCallTable *systemCallTable);
 #define V8086_STACK_BOTTOM (0x1000)
 int switchToVirtual8086Mode(void (*cs_ip)(void));
 
+#define DEFAULT_USER_STACK_SIZE ((size_t)8192)
+// IMPROVE: change stack size at runtime?
+int switchToUserMode(uintptr_t eip, size_t stackSize);
+
 // initial state is suspended
 // task.c
 Task *createUserTaskWithoutLoader(void (*eip0)(void), int priority);
