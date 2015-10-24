@@ -222,6 +222,16 @@ uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
 
+void initOpenFileRequest(OpenFileRequest *ofr, void *instance, int fileService, Task *task){
+	ofr->instance = instance;
+	ofr->fileService = fileService;
+	ofr->handle = (uintptr_t)&ofr->handle;
+	ofr->task = task;
+	ofr->next = NULL;
+	ofr->prev = NULL;
+}
+
+
 enum FileCommand{
 	FILE_COMMAND_OPEN = 1,
 	FILE_COMMAND_READ = 2,
@@ -231,16 +241,48 @@ enum FileCommand{
 	FILE_COMMAND_CLOSE = 99
 };
 
+// IMPROVE: openFileHashTable
+static OpenFileRequest *openFileList = NULL;
+static Spinlock openFileLock = INITIAL_SPINLOCK;
+
+static OpenFileRequest *searchOpenFileList(uintptr_t handle){
+	OpenFileRequest *ofr;
+	acquireLock(&openFileLock);
+	for(ofr = openFileList; ofr != NULL; ofr = ofr->next){
+		if(ofr->handle == handle)
+			break;
+	}
+	releaseLock(&openFileLock);
+	if(ofr == NULL)
+		return NULL;
+	return ofr;
+}
+
+void addToOpenFileList(OpenFileRequest *ofr){
+	acquireLock(&openFileLock);
+	ADD_TO_DQUEUE(ofr, &openFileList);
+	releaseLock(&openFileLock);
+}
+
+void removeFromOpenFileList(OpenFileRequest *ofr){
+	acquireLock(&openFileLock);
+	REMOVE_FROM_DQUEUE(ofr);
+	releaseLock(&openFileLock);
+}
+
 uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
 	// TODO: check Address
 	if(FILE_COMMAND_OPEN == SYSTEM_CALL_ARGUMENT_0(p)){
 		return NULL_OR_CALL(f->open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
 	}
-	void *arg;
-	arg = f->checkHandle(SYSTEM_CALL_ARGUMENT_1(p), processorLocalTask());
+	OpenFileRequest *arg = searchOpenFileList(SYSTEM_CALL_ARGUMENT_1(p));
 	if(arg == NULL)
 		return IO_REQUEST_FAILURE;
+	assert(arg->task == processorLocalTask());
+	if(f->isValidFile(arg) == 0){
+		return IO_REQUEST_FAILURE;
+	}
 	switch(SYSTEM_CALL_ARGUMENT_0(p)){
 	case FILE_COMMAND_READ:
 		return NULL_OR_CALL(f->read)(arg, (uint8_t*)SYSTEM_CALL_ARGUMENT_2(p), SYSTEM_CALL_ARGUMENT_3(p));

@@ -4,7 +4,9 @@ Currently the OS is under development. The following features have been implemen
 <ul>
 <li>x86 protected mode</li>
 <li>32-bit paging</li>
-<li>Multitasking</li>
+<li>Preemptive multitasking</li>
+<li>ELF program loader</li>
+<li>Asynchronous I/O</li>
 <li>Multiprocessor (APIC)</li>
 <li>SATA disk driver (AHCI)</li>
 </ul>

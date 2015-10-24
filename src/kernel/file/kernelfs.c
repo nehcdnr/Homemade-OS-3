@@ -8,9 +8,10 @@
 #include"io/io.h"
 #include<blob.h>
 
-typedef struct OpenFileRequest OpenFileRequest;
-struct OpenFileRequest{
+typedef struct KFRequest{
 	IORequest ior;
+	OpenFileRequest ofr;
+
 	int isReady;
 	int isClosing;
 	int lastReturnCount;
@@ -18,99 +19,68 @@ struct OpenFileRequest{
 
 	const BLOBAddress *file;
 	uintptr_t offset;
-	uintptr_t handle;
-	Task *task;
-	OpenFileRequest *next, **prev;
-};
+}KFRequest;
 
+static int kfService = SERVICE_NOT_EXISTING;
 
-static OpenFileRequest *openFileList = NULL;
-static Spinlock openFileLock = INITIAL_SPINLOCK;
-
-static void *searchOpenFileList(uintptr_t handle, Task *task){
-	OpenFileRequest *ofr;
-	acquireLock(&openFileLock);
-	for(ofr = openFileList; ofr != NULL; ofr = ofr->next){
-		if(ofr->handle == handle)
-			break;
-	}
-	releaseLock(&openFileLock);
-	if(ofr == NULL)
-		return NULL;
-	if(ofr->task != task)
-		return NULL;
-	if(ofr->isReady == 0)
-		return NULL;
-	return ofr;
+static int isValidKFRequest(OpenFileRequest *ofr){
+	KFRequest *kfr = ofr->instance;
+	return kfr->isReady;
 }
 
-static void addToOpenFileList(OpenFileRequest *ofr){
-	acquireLock(&openFileLock);
-	ADD_TO_DQUEUE(ofr, &openFileList);
-	releaseLock(&openFileLock);
-}
-static void removeFromOpenFileList(OpenFileRequest *ofr){
-	acquireLock(&openFileLock);
-	REMOVE_FROM_DQUEUE(ofr);
-	releaseLock(&openFileLock);
-}
-
-static void _finishFileIO(OpenFileRequest *ofr, int returnCount, ...){
-	assert(ofr->isReady == 1);
-	ofr->isReady = 0;
-	ofr->lastReturnCount = returnCount;
+static void _finishFileIO(KFRequest *kfr, int returnCount, ...){
+	assert(kfr->isReady == 1);
+	kfr->isReady = 0;
+	kfr->lastReturnCount = returnCount;
 	va_list va;
 	va_start(va, returnCount);
 	int i;
 	for(i = 0; i < returnCount; i++){
-		ofr->lastReturnValues[i] = va_arg(va, uintptr_t);
+		kfr->lastReturnValues[i] = va_arg(va, uintptr_t);
 	}
 	va_end(va);
 
-	finishIO(&ofr->ior);
+	finishIO(&kfr->ior);
 }
 #define FINISH_FILE_IO_1(OFR) _finishFileIO(OFR, 0)
 #define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 1, (V0))
 #define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 2, (V0), (V1))
 
 static void closeFileRequest(IORequest *ior){
-	OpenFileRequest *of = ior->instance;
-	removeFromOpenFileList(of);
+	KFRequest *of = ior->instance;
+	removeFromOpenFileList(&of->ofr);
 	DELETE(of);
 }
 
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
-	OpenFileRequest *ofr = ior->instance;
+	KFRequest *kfr = ior->instance;
 
-	int returnCount = ofr->lastReturnCount;
-	memcpy(returnValues, ofr->lastReturnValues, ofr->lastReturnCount * sizeof(returnValues[0]));
-	if(ofr->isClosing){
+	int returnCount = kfr->lastReturnCount;
+	memcpy(returnValues, kfr->lastReturnValues, kfr->lastReturnCount * sizeof(returnValues[0]));
+	if(kfr->isClosing){
 		closeFileRequest(ior);
 	}
 	else{
 		pendIO(ior);
-		ofr->isReady = 1;
+		kfr->isReady = 1;
 		setCancellable(ior, 1);
 	}
 	return returnCount;
 }
 
-static OpenFileRequest *createOpenFileRequest(const BLOBAddress *file, Task *task){
-	OpenFileRequest *NEW(ofr);
-	if(ofr == NULL)
+static KFRequest *createKFRequest(const BLOBAddress *file, Task *task){
+	KFRequest *NEW(kfr);
+	if(kfr == NULL)
 		return NULL;
-	initIORequest(&ofr->ior, ofr, closeFileRequest, finishOpenFileRequest);
-	ofr->file = file;
-	ofr->isReady = 0;
-	ofr->isClosing = 0;
-	MEMSET0(ofr->lastReturnValues);
-	ofr->lastReturnCount = 0;
-	ofr->offset = 0;
-	ofr->handle = (uintptr_t)&ofr->handle;
-	ofr->task = task;
-	ofr->next = NULL;
-	ofr->prev = NULL;
-	return ofr;
+	initIORequest(&kfr->ior, kfr, closeFileRequest, finishOpenFileRequest);
+	initOpenFileRequest(&kfr->ofr, kfr, kfService, task);
+	kfr->file = file;
+	kfr->isReady = 0;
+	kfr->isClosing = 0;
+	MEMSET0(kfr->lastReturnValues);
+	kfr->lastReturnCount = 0;
+	kfr->offset = 0;
+	return kfr;
 }
 
 static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
@@ -150,57 +120,57 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 	// file not found
 	if(file == blobList + blobCount)
 		return IO_REQUEST_FAILURE;
-	OpenFileRequest *ofr = createOpenFileRequest(file, processorLocalTask());
-	if(ofr == NULL)
+	KFRequest *kfr = createKFRequest(file, processorLocalTask());
+	if(kfr == NULL)
 		return IO_REQUEST_FAILURE;
-	setCancellable(&ofr->ior, 0);
-	pendIO(&ofr->ior);
-	addToOpenFileList(ofr);
-	ofr->isReady = 1;
-	FINISH_FILE_IO_2(ofr, &ofr->handle);
-	return &ofr->ior;
+	setCancellable(&kfr->ior, 0);
+	pendIO(&kfr->ior);
+	addToOpenFileList(&kfr->ofr);
+	kfr->isReady = 1;
+	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
+	return &kfr->ior;
 }
 
-static IORequest *readKFS(void *arg, uint8_t *buffer, uintptr_t bufferSize){
+static IORequest *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize){
 	void *mappedPage;
 	void *mappedBuffer;
 	if(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer) == 0)
 		return IO_REQUEST_FAILURE;
 
-	OpenFileRequest *ofr = arg;
-	setCancellable(&ofr->ior, 0);
-	uintptr_t copySize = MIN(bufferSize, ofr->file->end - ofr->file->begin - ofr->offset);
-	memcpy(buffer, (void*)(ofr->file->begin + ofr->offset), copySize);
+	KFRequest *kfr = ofr->instance;
+	setCancellable(&kfr->ior, 0);
+	uintptr_t copySize = MIN(bufferSize, kfr->file->end - kfr->file->begin - kfr->offset);
+	memcpy(buffer, (void*)(kfr->file->begin + kfr->offset), copySize);
 
 	unmapPages(kernelLinear, mappedPage);
-	ofr->offset += copySize;
-	FINISH_FILE_IO_2(ofr, copySize);
-	return &ofr->ior;
+	kfr->offset += copySize;
+	FINISH_FILE_IO_2(kfr, copySize);
+	return &kfr->ior;
 }
 
-static IORequest *seekKFS(void *arg, uint64_t position){
-	OpenFileRequest *ofr = arg;
-	if(position > ofr->file->end - ofr->file->begin){
+static IORequest *seekKFS(OpenFileRequest *ofr, uint64_t position){
+	KFRequest *kfr = ofr->instance;
+	if(position > kfr->file->end - kfr->file->begin){
 		return IO_REQUEST_FAILURE;
 	}
-	setCancellable(&ofr->ior, 0);
-	ofr->offset = (uintptr_t)position;
-	FINISH_FILE_IO_1(ofr);
-	return &ofr->ior;
+	setCancellable(&kfr->ior, 0);
+	kfr->offset = (uintptr_t)position;
+	FINISH_FILE_IO_1(kfr);
+	return &kfr->ior;
 }
 
-static IORequest *sizeOfKFS(void *arg){
-	OpenFileRequest *ofr = arg;
-	uint64_t s = (ofr->file->end - ofr->file->begin);
-	FINISH_FILE_IO_3(ofr, (uint32_t)(s & 0xffffffff), (uint32_t)((s >> 32) & 0xffffffff));
-	return &ofr->ior;
+static IORequest *sizeOfKFS(OpenFileRequest *ofr){
+	KFRequest *kfr = ofr->instance;
+	uint64_t s = (kfr->file->end - kfr->file->begin);
+	FINISH_FILE_IO_3(kfr, (uint32_t)(s & 0xffffffff), (uint32_t)((s >> 32) & 0xffffffff));
+	return &kfr->ior;
 }
 
-static IORequest *closeKFS(void *arg){
-	OpenFileRequest *ofr = arg;
-	ofr->isClosing = 1;
-	FINISH_FILE_IO_1(ofr);
-	return &ofr->ior;
+static IORequest *closeKFS(OpenFileRequest *ofr){
+	KFRequest *kfr = ofr->instance;
+	kfr->isClosing = 1;
+	FINISH_FILE_IO_1(kfr);
+	return &kfr->ior;
 }
 
 static void kernelFileServiceHandler(InterruptParam *p){
@@ -212,18 +182,18 @@ static void kernelFileServiceHandler(InterruptParam *p){
 	ff.seek = seekKFS;
 	ff.sizeOf = sizeOfKFS;
 	ff.close = closeKFS;
-	ff.checkHandle = searchOpenFileList;
+	ff.isValidFile = isValidKFRequest;
 	uintptr_t fileRequest = dispatchFileSystemCall(p, &ff);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = fileRequest;
 }
 
 void kernelFileService(void){
-	int kfs = registerService(global.syscallTable,
+	kfService = registerService(global.syscallTable,
 		KERNEL_FILE_SERVICE_NAME, kernelFileServiceHandler, 0);
-	if(kfs <= 0){
+	if(kfService <= 0){
 		systemCall_terminate();
 	}
-	int ok = addFileSystem(kfs, KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
+	int ok = addFileSystem(kfService, KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
 	if(!ok){
 		systemCall_terminate();
 	}

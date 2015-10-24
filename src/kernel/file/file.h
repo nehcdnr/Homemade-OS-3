@@ -64,24 +64,36 @@ uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
 uintptr_t syncCloseFile(int fileService, uintptr_t handle);
 
 typedef struct IORequest IORequest;
-typedef struct InterruptParam InterruptParam;
 typedef struct Task Task;
+typedef struct OpenFileRequest OpenFileRequest;
+struct OpenFileRequest{
+	void *instance;
+	int fileService;
+	uintptr_t handle;
+	Task *task;
+	OpenFileRequest *next, **prev;
+};
+
+void initOpenFileRequest(OpenFileRequest *ofr, void *instance, int fileService, Task *task);
+void addToOpenFileList(OpenFileRequest *ofr);
+void removeFromOpenFileList(OpenFileRequest *ofr);
 typedef struct{
 	IORequest *(*open)(const char *fileName, uintptr_t nameLength);
-	IORequest *(*read)(void *arg, uint8_t *buffer, uintptr_t bufferSize);
-	IORequest *(*write)(void *arg, const uint8_t *buffer, uintptr_t bufferSize);
-	IORequest *(*seek)(void *arg, uint64_t position/*, whence*/);
-	IORequest *(*sizeOf)(void *arg);
-	IORequest *(*close)(void *arg);
-	// If the argument is not a valid handle, return NULL.
-	// Otherwise, the return value of checkHandle will be passed to the above functions
-	void *(*checkHandle)(uintptr_t handle, Task* task);
+	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
+	IORequest *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
+	IORequest *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
+	IORequest *(*sizeOf)(OpenFileRequest *ofr);
+	IORequest *(*close)(OpenFileRequest *ofr);
+	// If the argument is not valid, return 0.
+	// Otherwise, the argument of isValidFile will be passed to the above functions
+	int (*isValidFile)(OpenFileRequest *ofr);
 }FileFunctions;
 
+typedef struct InterruptParam InterruptParam;
 uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f);
 
 // FAT32
 void fatService(void);
 
-//kernel file
+// kernel file
 void kernelFileService(void);
