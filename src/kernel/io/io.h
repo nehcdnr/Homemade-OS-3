@@ -5,11 +5,7 @@ typedef void CancelIORequest(IORequest*);
 typedef int FinishIORequest(IORequest*, uintptr_t*);
 typedef struct Task Task;
 struct IORequest{
-	union{
-		void *ioRequest;
-		struct TimerEvent *timerEvent;
-		struct DiskRequest *diskRequest;
-	};
+	void *instance;
 	// for Task.pendingIOList; see taskmanager.c
 	IORequest **prev, *next;
 	Task *task;

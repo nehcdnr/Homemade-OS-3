@@ -475,12 +475,12 @@ static int sendDiskRequest(DiskRequest *dr){
 }
 
 static int finishDiskRequest(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
-	DELETE(ior->diskRequest);
+	DELETE(ior->instance);
 	return 0;
 }
 
 static void cancelDiskRequest(IORequest *ior){
-	DiskRequest *dr = ior->diskRequest;
+	DiskRequest *dr = ior->instance;
 	acquireLock(dr->lock);
 	REMOVE_FROM_DQUEUE(dr);
 	releaseLock(dr->lock);

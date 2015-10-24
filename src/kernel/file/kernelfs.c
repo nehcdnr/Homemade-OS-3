@@ -56,7 +56,7 @@ static void removeFromOpenFileList(OpenFileRequest *ofr){
 }
 
 static void _finishFileIO(OpenFileRequest *ofr, int returnCount, ...){
-	assert(ofr->isReady = 1);
+	assert(ofr->isReady == 1);
 	ofr->isReady = 0;
 	ofr->lastReturnCount = returnCount;
 	va_list va;
@@ -74,13 +74,13 @@ static void _finishFileIO(OpenFileRequest *ofr, int returnCount, ...){
 #define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 2, (V0), (V1))
 
 static void closeFileRequest(IORequest *ior){
-	OpenFileRequest *of = ior->ioRequest;
+	OpenFileRequest *of = ior->instance;
 	removeFromOpenFileList(of);
 	DELETE(of);
 }
 
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
-	OpenFileRequest *ofr = ior->ioRequest;
+	OpenFileRequest *ofr = ior->instance;
 
 	int returnCount = ofr->lastReturnCount;
 	memcpy(returnValues, ofr->lastReturnValues, ofr->lastReturnCount * sizeof(returnValues[0]));
@@ -104,6 +104,7 @@ static OpenFileRequest *createOpenFileRequest(const BLOBAddress *file, Task *tas
 	ofr->isReady = 0;
 	ofr->isClosing = 0;
 	MEMSET0(ofr->lastReturnValues);
+	ofr->lastReturnCount = 0;
 	ofr->offset = 0;
 	ofr->handle = (uintptr_t)&ofr->handle;
 	ofr->task = task;
@@ -155,7 +156,7 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 	setCancellable(&ofr->ior, 0);
 	pendIO(&ofr->ior);
 	addToOpenFileList(ofr);
-
+	ofr->isReady = 1;
 	FINISH_FILE_IO_2(ofr, &ofr->handle);
 	return &ofr->ior;
 }
@@ -198,7 +199,6 @@ static IORequest *sizeOfKFS(void *arg){
 static IORequest *closeKFS(void *arg){
 	OpenFileRequest *ofr = arg;
 	ofr->isClosing = 1;
-	ofr->isReady = 0;
 	FINISH_FILE_IO_1(ofr);
 	return &ofr->ior;
 }

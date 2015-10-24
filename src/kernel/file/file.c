@@ -81,14 +81,7 @@ struct DiskPartition{
 	uint64_t sectorCount;
 	uintptr_t sectorSize;
 };
-/*
-struct DiskPartitionManager{
-	Spinlock lock; // improve: read-write lock
-	struct DiskPartition *unknownDPList;
-	struct NewDiskEvent *listenDiskEvent[MAX_DISK_TYPE];
-};
-static struct DiskPartitionManager diskManager;
-*/
+
 void readPartitions(
 	const char *driverName, int diskDriver, uintptr_t diskCode, uint64_t relativeLBA,
 	uint64_t sectorCount, uintptr_t sectorSize
@@ -138,15 +131,6 @@ void readPartitions(
 }
 
 // file system interface
-/*
-typedef struct NewDiskEvent{
-	IORequest this;
-	Spinlock *lock;
-	DiskPartition *newDPList;
-	DiskPartition *servingDP;
-	DiskPartition *discoveredDPList;
-}NewDiskEvent;
-*/
 static int returnDiskValues(Resource *resource, uintptr_t *returnValues){
 	DiskPartition *dp = resource->instance;
 	returnValues[0] = dp->driver;
@@ -200,12 +184,7 @@ typedef struct FileSystem{
 	int fileService;
 	char name[MAX_FILE_SERVICE_NAME_LENGTH];
 }FileSystem;
-/*
-struct FileSystemManager{
-	Spinlock lock;
-};
-static struct FileSystemManager fileManager;
-*/
+
 static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
 	FileSystem *fs = resource->instance;
 	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};

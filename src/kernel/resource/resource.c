@@ -36,7 +36,7 @@ static void serveNewResource(NewResourceEvent *nre){
 }
 
 static void cancelNewResourceEvent(IORequest *ior){
-	NewResourceEvent *nre = ior->ioRequest;
+	NewResourceEvent *nre = ior->instance;
 	acquireLock(nre->lock);
 	REMOVE_FROM_DQUEUE(nre); // resourceManager->listener
 	NewResource *cleanList[2] = {nre->newResourceList, nre->servingResource};
@@ -55,7 +55,7 @@ static void cancelNewResourceEvent(IORequest *ior){
 }
 
 static int finishNewResourceEvent(IORequest *ior, uintptr_t *returnValues){
-	NewResourceEvent *nre = ior->ioRequest;
+	NewResourceEvent *nre = ior->instance;
 	acquireLock(nre->lock);
 	NewResource *nr = nre->servingResource;
 	REMOVE_FROM_DQUEUE(nr);

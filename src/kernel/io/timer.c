@@ -25,7 +25,7 @@ struct TimerEventList{
 };
 
 static void cancelTimerEvent(IORequest *ior){
-	TimerEvent *te = ior->timerEvent;
+	TimerEvent *te = ior->instance;
 	acquireLock(te->lock);
 	if(IS_IN_DQUEUE(te)){ // not expire
 		REMOVE_FROM_DQUEUE(te);
@@ -35,14 +35,15 @@ static void cancelTimerEvent(IORequest *ior){
 }
 
 static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
-	if(ior->timerEvent->tickPeriod == 0){ // not periodic
-		DELETE(ior->timerEvent);
+	TimerEvent *te = ior->instance;
+	if(te->tickPeriod == 0){ // not periodic
+		DELETE(te);
 	}
 	else{
-		acquireLock(ior->timerEvent->lock);
+		acquireLock(te->lock);
 		pendIO(ior);
-		ior->timerEvent->isSentToTask = 0;
-		releaseLock(ior->timerEvent->lock);
+		te->isSentToTask = 0;
+		releaseLock(te->lock);
 	}
 	return 0;
 }

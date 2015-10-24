@@ -747,7 +747,7 @@ void initIORequest(
 	CancelIORequest *cancelIORequest,
 	FinishIORequest *finishIORequest
 ){
-	this->ioRequest = instance;
+	this->instance = instance;
 	this->prev = NULL;
 	this->next = NULL;
 	this->task = processorLocalTask();
