@@ -20,6 +20,8 @@ enum SystemCall{
 	//SYSCALL_CREATE_USER_SPACE = 13, CREATE_PROCESS
 	SYSCALL_CREATE_THREAD = 14,
 	SYSCALL_TERMINATE = 15,
+	SYSCALL_FILE_HANDLE_COMMAND = 16,
+	SYSCALL_FILE_NAME_COMMAND = 17,
 	// runtime registration
 	NUMBER_OF_RESERVED_SYSTEM_CALLS = 32,
 	NUMBER_OF_SYSTEM_CALLS = 64
@@ -87,6 +89,7 @@ int registerService(
 	uintptr_t arg
 );
 int systemCall_queryService(const char *name);
+int systemCall_queryServiceN(const char *name, uintptr_t nameLength);
 
 typedef struct InterruptTable InterruptTable;
 SystemCallTable *initSystemCall(InterruptTable *t);

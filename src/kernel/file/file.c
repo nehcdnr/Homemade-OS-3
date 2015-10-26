@@ -2,9 +2,11 @@
 #include"io/io.h"
 #include"multiprocessor/spinlock.h"
 #include"interrupt/systemcall.h"
+#include"interrupt/interrupt.h"
 #include"multiprocessor/processorlocal.h"
 #include"common.h"
 #include"file.h"
+#include"task/task.h"
 #include"resource/resource.h"
 
 // disk driver interface
@@ -181,7 +183,7 @@ int addDiskPartition(
 
 typedef struct FileSystem{
 	Resource resource;
-	int fileService;
+	OpenFileFunction *openFile;
 	char name[MAX_FILE_SERVICE_NAME_LENGTH];
 }FileSystem;
 
@@ -195,19 +197,18 @@ static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
 }
 
 static int returnFileService(Resource *resource, uintptr_t *returnValues){
-	FileSystem *fs = resource->instance;
-	returnValues[0] = fs->fileService;
+	returnValues[0] = (uintptr_t)resource->instance;
 	return 1;
 }
 
-int addFileSystem(int fileService, const char *name, size_t nameLength){
+int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t nameLength){
 	EXPECT(nameLength <= MAX_FILE_SERVICE_NAME_LENGTH);
 	FileSystem *NEW(fs);
 	EXPECT(fs != NULL);
 	initResource(&fs->resource, fs, matchFileSystemName, returnFileService);
 	MEMSET0(fs->name);
 	strncpy(fs->name, name, nameLength);
-	fs->fileService = fileService;
+	fs->openFile = openFileFunction;
 	addResource(RESOURCE_FILE_SYSTEM, &fs->resource);
 	return 1;
 	//DELETE(fs);
@@ -222,11 +223,11 @@ uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
 
-void initOpenFileRequest(OpenFileRequest *ofr, void *instance, int fileService, Task *task){
+void initOpenFileRequest(OpenFileRequest *ofr, void *instance, Task *task, const FileFunctions *fileFunctions){
 	ofr->instance = instance;
-	ofr->fileService = fileService;
 	ofr->handle = (uintptr_t)&ofr->handle;
 	ofr->task = task;
+	ofr->fileFunctions = (*fileFunctions);
 	ofr->next = NULL;
 	ofr->prev = NULL;
 }
@@ -270,15 +271,22 @@ void removeFromOpenFileList(OpenFileRequest *ofr){
 	releaseLock(&openFileLock);
 }
 
-uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
-	// TODO: check Address
-	if(FILE_COMMAND_OPEN == SYSTEM_CALL_ARGUMENT_0(p)){
-		return NULL_OR_CALL(f->open)((const char*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
+static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *fileName, uintptr_t nameLength, InterruptParam *p){
+	switch(SYSTEM_CALL_ARGUMENT_0(p)){
+	case FILE_COMMAND_OPEN:
+		return NULL_OR_CALL(fs->openFile)(fileName, nameLength);
+	default:
+		return IO_REQUEST_FAILURE;
 	}
+}
+
+uintptr_t dispatchFileHandleCommand(InterruptParam *p){
+	// TODO: check Address
 	OpenFileRequest *arg = searchOpenFileList(SYSTEM_CALL_ARGUMENT_1(p));
 	if(arg == NULL)
 		return IO_REQUEST_FAILURE;
+	const FileFunctions *f = &arg->fileFunctions;
 	assert(arg->task == processorLocalTask());
 	if(f->isValidFile(arg) == 0){
 		return IO_REQUEST_FAILURE;
@@ -297,17 +305,20 @@ uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f){
 	default:
 		return IO_REQUEST_FAILURE;
 	}
+}
 #undef NULL_OR_CALL
+
+uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength){
+	return systemCall4(SYSCALL_FILE_NAME_COMMAND, FILE_COMMAND_OPEN, (uintptr_t)fileName, fileNameLength);
 }
 
-
-uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength){
-	return systemCall4(fileService, FILE_COMMAND_OPEN, (uintptr_t)fileName, nameLength);
+uintptr_t syncOpenFile(const char *fileName){
+	return syncOpenFileN(fileName, strlen(fileName));
 }
 
-uintptr_t syncOpenFile(int fileService, const char *fileName, uintptr_t nameLength){
+uintptr_t syncOpenFileN(const char *fileName, uintptr_t nameLength){
 	uintptr_t handle;
-	uintptr_t r = systemCall_openFile(fileService, fileName, nameLength);
+	uintptr_t r = systemCall_openFile(fileName, nameLength);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
 	if(r != systemCall_waitIOReturn(r, 1, &handle))
@@ -315,13 +326,13 @@ uintptr_t syncOpenFile(int fileService, const char *fileName, uintptr_t nameLeng
 	return handle;
 }
 
-uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize){
-	return systemCall5(fileService, FILE_COMMAND_READ, handle, (uintptr_t)buffer, bufferSize);
+uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize){
+	return systemCall5(SYSCALL_FILE_HANDLE_COMMAND, FILE_COMMAND_READ, handle, (uintptr_t)buffer, bufferSize);
 }
 
-uintptr_t syncReadFile(int fileService, uintptr_t handle, void *buffer, uintptr_t *bufferSize){
+uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize){
 	uintptr_t r;
-	r = systemCall_readFile(fileService, handle, buffer, *bufferSize);
+	r = systemCall_readFile(handle, buffer, *bufferSize);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
 	if(r != systemCall_waitIOReturn(r, 1, bufferSize))
@@ -329,19 +340,19 @@ uintptr_t syncReadFile(int fileService, uintptr_t handle, void *buffer, uintptr_
 	return handle;
 }
 
-uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize){
-	return systemCall5(fileService, FILE_COMMAND_WRITE, handle, (uintptr_t)buffer, bufferSize);
+uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t bufferSize){
+	return systemCall5(SYSCALL_FILE_HANDLE_COMMAND, FILE_COMMAND_WRITE, handle, (uintptr_t)buffer, bufferSize);
 }
 
-uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position){
+uintptr_t systemCall_seekFile(uintptr_t handle, uint64_t position){
 	uintptr_t positionLow = ((position >> 0) & 0xffffffff);
 	uintptr_t positionHigh = ((position >> 32) & 0xffffffff);
-	return systemCall5(fileService, FILE_COMMAND_SEEK, handle, positionLow, positionHigh);
+	return systemCall5(SYSCALL_FILE_HANDLE_COMMAND, FILE_COMMAND_SEEK, handle, positionLow, positionHigh);
 }
 
-uintptr_t syncSeekFile(int fileService, uintptr_t handle, uint64_t position){
+uintptr_t syncSeekFile(uintptr_t handle, uint64_t position){
 	uintptr_t r;
-	r = systemCall_seekFile(fileService, handle, position);
+	r = systemCall_seekFile(handle, position);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
 	if(r != systemCall_waitIO(r))
@@ -349,20 +360,80 @@ uintptr_t syncSeekFile(int fileService, uintptr_t handle, uint64_t position){
 	return handle;
 }
 
-uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle){
-	return systemCall3(fileService, FILE_COMMAND_SIZE_OF, handle);
+uintptr_t systemCall_sizeOfFile(uintptr_t handle){
+	return systemCall3(SYSCALL_FILE_HANDLE_COMMAND, FILE_COMMAND_SIZE_OF, handle);
 }
 
-uintptr_t systemCall_closeFile(int fileService, uintptr_t handle){
-	return systemCall3(fileService, FILE_COMMAND_CLOSE, handle);
+uintptr_t systemCall_closeFile(uintptr_t handle){
+	return systemCall3(SYSCALL_FILE_HANDLE_COMMAND, FILE_COMMAND_CLOSE, handle);
 }
 
-uintptr_t syncCloseFile(int fileService, uintptr_t handle){
+uintptr_t syncCloseFile(uintptr_t handle){
 	uintptr_t r;
-	r = systemCall_closeFile(fileService, handle);
+	r = systemCall_closeFile(handle);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
 	if(r != systemCall_waitIO(r))
 		return IO_REQUEST_FAILURE;
 	return handle;
+}
+
+static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
+	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
+	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
+	*pageOffset = bufferBegin - (*pageBegin);
+	*pageSize = CEIL(bufferBegin + bufferSize, PAGE_SIZE) - (*pageBegin);
+}
+
+int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer){
+	uintptr_t pageOffset, pageBegin;
+	size_t pageSize;
+	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
+	*mappedPage = checkAndMapExistingPages(
+		kernelLinear, isKernelLinearAddress(pageBegin)? kernelLinear: getTaskLinearMemory(processorLocalTask()),
+		pageBegin, pageSize, KERNEL_PAGE, 0);
+	if(*mappedPage == NULL){
+		return 0;
+	}
+	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
+	return 1;
+}
+
+static void FileNameCommandHandler(InterruptParam *p){
+	sti();
+	const void *userFileName = (const void*)SYSTEM_CALL_ARGUMENT_1(p);
+	uintptr_t nameLength = SYSTEM_CALL_ARGUMENT_2(p);
+	void *mappedPage;
+	void *mappedBuffer;
+	int ok = mapBufferToKernel(userFileName, nameLength, &mappedPage, &mappedBuffer);
+	EXPECT(ok);
+	const char *fileName = (const char*)mappedBuffer;
+
+	uintptr_t i;
+	for(i = 0; i < nameLength && fileName[i] != ':'; i++);
+	EXPECT(i < nameLength);
+	uintptr_t r = systemCall_discoverFileSystem(fileName, i);
+	EXPECT(r != IO_REQUEST_FAILURE);
+	uintptr_t fileSystem;
+	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &fileSystem);
+	assert(r == r2);
+
+	SYSTEM_CALL_RETURN_VALUE_0(p) = dispatchFileNameCommand((FileSystem*)fileSystem, fileName + i + 1, nameLength - i - 1, p);
+	unmapPages(kernelLinear, mappedPage);
+	return;
+	ON_ERROR;
+	ON_ERROR;
+	unmapPages(kernelLinear, mappedPage);
+	ON_ERROR;
+	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
+}
+
+static void FileHandleCommandHandler(InterruptParam *p){
+	sti();
+	SYSTEM_CALL_RETURN_VALUE_0(p) = dispatchFileHandleCommand(p);
+}
+
+void initFile(SystemCallTable *s){
+	registerSystemCall(s, SYSCALL_FILE_NAME_COMMAND, FileNameCommandHandler, 0);
+	registerSystemCall(s, SYSCALL_FILE_HANDLE_COMMAND, FileHandleCommandHandler, 0);
 }

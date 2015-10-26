@@ -207,15 +207,15 @@ static int readFATDisk(const struct DiskParameter *dp){
 }
 
 #define FAT32_SERVICE_NAME "fat32"
-
-static void fat32ServiceHandler(__attribute__((__unused__)) InterruptParam *p){
-
+// TODO:
+static IORequest *openFAT(
+	__attribute__((__unused__)) const char *fileName, __attribute__((__unused__)) uintptr_t nameLength){
+	return NULL;
 }
+
 
 void fatService(void){
 	slab = createUserSlabManager(); // move it to user library
-	int fat32Service = registerService(global.syscallTable, FAT32_SERVICE_NAME, fat32ServiceHandler, 0);
-	EXPECT(fat32Service >= 0);
 	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
 	assert(discoverFAT != IO_REQUEST_FAILURE);
 	//int diskDriver;
@@ -239,7 +239,7 @@ void fatService(void){
 			printk("read fat failure\n");
 			continue;
 		}
-		if(addFileSystem(fat32Service, fatName, 4) != 1){
+		if(addFileSystem(openFAT, fatName, 4) != 1){
 			printk("add file system failure\n");
 		}
 	}
@@ -247,6 +247,5 @@ void fatService(void){
 	while(1){
 		sleep(1000);
 	}
-	ON_ERROR;
 	panic("cannot initialize FAT32 service");
 }

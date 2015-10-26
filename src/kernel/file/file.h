@@ -46,39 +46,37 @@ void readPartitions(const char *driverName, int diskDriver, uintptr_t diskCode,
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 
 // file interface
-int addFileSystem(int fileService, const char *name, size_t nameLength);
+typedef struct IORequest IORequest;
+typedef IORequest *OpenFileFunction(const char *fileName, uintptr_t nameLength);
+
+int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t nameLength);
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
+uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength);
+uintptr_t syncOpenFile(const char *fileName);
+uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength);
+uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
+uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
+uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t bufferSize);
+//uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
+uintptr_t systemCall_seekFile(uintptr_t handle, uint64_t position);
+uintptr_t syncSeekFile(uintptr_t handle, uint64_t position);
+uintptr_t systemCall_sizeOfFile(uintptr_t handle);
+//uintptr_t syncSizeOfFile(uintptr_t handle);
+uintptr_t systemCall_closeFile(uintptr_t handle);
+uintptr_t syncCloseFile(uintptr_t handle);
 
-uintptr_t systemCall_openFile(int fileService, const char *fileName, uintptr_t nameLength);
-uintptr_t syncOpenFile(int fileService, const char *fileName, uintptr_t nameLength);
-uintptr_t systemCall_readFile(int fileService, uintptr_t handle, void *buffer, uintptr_t bufferSize);
-uintptr_t syncReadFile(int fileService, uintptr_t handle, void *buffer, uintptr_t *bufferSize);
-uintptr_t systemCall_writeFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t bufferSize);
-//uintptr_t syncWriteFile(int fileService, uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
-uintptr_t systemCall_seekFile(int fileService, uintptr_t handle, uint64_t position);
-uintptr_t syncSeekFile(int fileService, uintptr_t handle, uint64_t position);
-uintptr_t systemCall_sizeOfFile(int fileService, uintptr_t handle);
-//uintptr_t syncSizeOfFile(int fileService, uintptr_t handle);
-uintptr_t systemCall_closeFile(int fileService, uintptr_t handle);
-uintptr_t syncCloseFile(int fileService, uintptr_t handle);
+// call unmapPages(kernelLinear, mappedPage) to release
+int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer);
 
-typedef struct IORequest IORequest;
-typedef struct Task Task;
+typedef struct SystemCallTable SystemCallTable;
+void initFile(SystemCallTable *s);
+
 typedef struct OpenFileRequest OpenFileRequest;
-struct OpenFileRequest{
-	void *instance;
-	int fileService;
-	uintptr_t handle;
-	Task *task;
-	OpenFileRequest *next, **prev;
-};
 
-void initOpenFileRequest(OpenFileRequest *ofr, void *instance, int fileService, Task *task);
-void addToOpenFileList(OpenFileRequest *ofr);
-void removeFromOpenFileList(OpenFileRequest *ofr);
 typedef struct{
-	IORequest *(*open)(const char *fileName, uintptr_t nameLength);
+	//IORequest *(*open)(const char *fileName, uintptr_t nameLength);
+	OpenFileFunction *open;
 	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
@@ -89,8 +87,29 @@ typedef struct{
 	int (*isValidFile)(OpenFileRequest *ofr);
 }FileFunctions;
 
+// use macro to check number of arguments
+#define INITIAL_FILE_FUNCTIONS(OPEN, READ, WRITE, SEEK, SIZE_OF, CLOSE, IS_VALID_FILE) \
+	{OPEN, READ, WRITE, SEEK, SIZE_OF, CLOSE, IS_VALID_FILE}
+
 typedef struct InterruptParam InterruptParam;
-uintptr_t dispatchFileSystemCall(InterruptParam *p, FileFunctions *f);
+uintptr_t dispatchFileHandleCommand(InterruptParam *p);
+
+typedef struct Task Task;
+struct OpenFileRequest{
+	void *instance;
+	uintptr_t handle;
+	Task *task;
+	FileFunctions fileFunctions;
+	OpenFileRequest *next, **prev;
+};
+void initOpenFileRequest(
+	OpenFileRequest *ofr,
+	void *instance,
+	Task *task,
+	const FileFunctions *fileFunctions
+);
+void addToOpenFileList(OpenFileRequest *ofr);
+void removeFromOpenFileList(OpenFileRequest *ofr);
 
 // FAT32
 void fatService(void);

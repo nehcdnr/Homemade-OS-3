@@ -146,18 +146,17 @@ static int mapAllocateProgramHeader32(
 }
 
 static int setAllocateProgramHeader32(
-	int fileService, uintptr_t file,
-	const ProgramHeader32 *programHeaderArray, int programHeaderCount
+	uintptr_t file, const ProgramHeader32 *programHeaderArray, int programHeaderCount
 ){
 	int i;
 	for(i = 0; i < programHeaderCount; i++){
 		const ProgramHeader32 *ph = programHeaderArray + i;
 		if(ph->segmentType != 1)
 			continue;
-		if(syncSeekFile(fileService, file, ph->offset) == IO_REQUEST_FAILURE)
+		if(syncSeekFile(file, ph->offset) == IO_REQUEST_FAILURE)
 			break;
 		uintptr_t readCount = ph->fileSize;
-		if(syncReadFile(fileService, file, (void*)ph->memoryAddress, &readCount) == IO_REQUEST_FAILURE)
+		if(syncReadFile(file, (void*)ph->memoryAddress, &readCount) == IO_REQUEST_FAILURE)
 			break;
 		if(readCount != ph->fileSize)
 			break;
@@ -166,13 +165,13 @@ static int setAllocateProgramHeader32(
 	return i >= programHeaderCount;
 }
 
-static int loadProgramHeader32(int fileService, uintptr_t file, int programHeaderLength){
+static int loadProgramHeader32(uintptr_t file, int programHeaderLength){
 	int ok = 0;
 	const size_t programHeaderSize = programHeaderLength * sizeof(ProgramHeader32);
 	ProgramHeader32 *programHeader32 = allocateKernelMemory(programHeaderSize);
 	EXPECT(programHeader32 != NULL);
 	uintptr_t readCount = programHeaderSize;
-	uintptr_t request = syncReadFile(fileService, file, programHeader32, &readCount);
+	uintptr_t request = syncReadFile(file, programHeader32, &readCount);
 	EXPECT(request != IO_REQUEST_FAILURE && readCount == programHeaderSize);
 	uintptr_t programBegin;
 	uintptr_t programEnd;
@@ -186,7 +185,7 @@ static int loadProgramHeader32(int fileService, uintptr_t file, int programHeade
 	ok = mapAllocateProgramHeader32(programHeader32, programHeaderLength, programBegin, programEnd);
 	EXPECT(ok);
 	// fill in memory
-	ok = setAllocateProgramHeader32(fileService, file, programHeader32, programHeaderLength);
+	ok = setAllocateProgramHeader32(file, programHeader32, programHeaderLength);
 	EXPECT(ok);
 	// ok = 1;
 	ON_ERROR;
@@ -200,7 +199,6 @@ static int loadProgramHeader32(int fileService, uintptr_t file, int programHeade
 }
 
 struct ELFLoaderParam{
-	int fileService;
 	uintptr_t nameLength;
 	char fileName[];
 };
@@ -209,21 +207,21 @@ static void elfLoader(void *arg){
 	struct ELFLoaderParam *p = arg;
 	uintptr_t file;
 	uintptr_t request;
-	file = syncOpenFile(p->fileService, p->fileName, p->nameLength);
+	file = syncOpenFileN(p->fileName, p->nameLength);
 	EXPECT(file != IO_REQUEST_FAILURE);
 	// ELFHeader32
 	ELFHeader32 elfHeader32;
 	uintptr_t readCount = sizeof(elfHeader32);
-	request = syncReadFile(p->fileService, file, &elfHeader32, &readCount);
+	request = syncReadFile(file, &elfHeader32, &readCount);
 	EXPECT(request != IO_REQUEST_FAILURE && readCount == sizeof(elfHeader32) &&
 		checkELFHeader32(&elfHeader32));
 
 	// ProgramHeader32
-	request = syncSeekFile(p->fileService, file, elfHeader32.programHeaderOffset);
+	request = syncSeekFile(file, elfHeader32.programHeaderOffset);
 	EXPECT(request != IO_REQUEST_FAILURE);
-	int ok = loadProgramHeader32(p->fileService, file, elfHeader32.programHeaderLength);
+	int ok = loadProgramHeader32(file, elfHeader32.programHeaderLength);
 	EXPECT(ok);
-	ok = syncCloseFile(p->fileService, file);
+	ok = syncCloseFile(file);
 	if(!ok)
 		printk("warnging: cannot close ELF file\n");
 	//printk("elf ok\n\n");
@@ -233,17 +231,16 @@ static void elfLoader(void *arg){
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	syncCloseFile(p->fileService, file);
+	syncCloseFile(file);
 	ON_ERROR;
 	terminateCurrentTask();
 }
 
-Task *createUserTaskFromELF(int fileService, const char *fileName, uintptr_t nameLength, int priority){
+Task *createUserTaskFromELF(const char *fileName, uintptr_t nameLength, int priority){
 	const size_t pSize = sizeof(struct ELFLoaderParam) + nameLength * sizeof(*fileName);
 	struct ELFLoaderParam *p = allocateKernelMemory(pSize);
 	if(p == NULL)
 		return NULL;
-	p->fileService = fileService;
 	p->nameLength = nameLength;
 	strncpy(p->fileName, fileName, nameLength);
 	Task *t = createUserTask(elfLoader, p, pSize, priority);

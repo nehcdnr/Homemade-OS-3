@@ -21,8 +21,6 @@ typedef struct KFRequest{
 	uintptr_t offset;
 }KFRequest;
 
-static int kfService = SERVICE_NOT_EXISTING;
-
 static int isValidKFRequest(OpenFileRequest *ofr){
 	KFRequest *kfr = ofr->instance;
 	return kfr->isReady;
@@ -68,41 +66,7 @@ static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 	return returnCount;
 }
 
-static KFRequest *createKFRequest(const BLOBAddress *file, Task *task){
-	KFRequest *NEW(kfr);
-	if(kfr == NULL)
-		return NULL;
-	initIORequest(&kfr->ior, kfr, closeFileRequest, finishOpenFileRequest);
-	initOpenFileRequest(&kfr->ofr, kfr, kfService, task);
-	kfr->file = file;
-	kfr->isReady = 0;
-	kfr->isClosing = 0;
-	MEMSET0(kfr->lastReturnValues);
-	kfr->lastReturnCount = 0;
-	kfr->offset = 0;
-	return kfr;
-}
-
-static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
-	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
-	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
-	*pageOffset = bufferBegin - (*pageBegin);
-	*pageSize = CEIL(bufferBegin + bufferSize, PAGE_SIZE) - (*pageBegin);
-}
-
-static int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer){
-	uintptr_t pageOffset, pageBegin;
-	size_t pageSize;
-	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
-	*mappedPage = checkAndMapExistingPages(
-		kernelLinear, isKernelLinearAddress(pageBegin)? kernelLinear: getTaskLinearMemory(processorLocalTask()),
-		pageBegin, pageSize, KERNEL_PAGE, 0);
-	if(*mappedPage == NULL){
-		return 0;
-	}
-	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
-	return 1;
-}
+static KFRequest *createKFRequest(const BLOBAddress *file, Task *task);
 
 static IORequest *openKFS(const char *fileName, uintptr_t length){
 	void *mappedPage;
@@ -173,27 +137,33 @@ static IORequest *closeKFS(OpenFileRequest *ofr){
 	return &kfr->ior;
 }
 
-static void kernelFileServiceHandler(InterruptParam *p){
-	sti();
-	FileFunctions ff;
-	ff.open = openKFS;
-	ff.read = readKFS;
-	ff.write = NULL;
-	ff.seek = seekKFS;
-	ff.sizeOf = sizeOfKFS;
-	ff.close = closeKFS;
-	ff.isValidFile = isValidKFRequest;
-	uintptr_t fileRequest = dispatchFileSystemCall(p, &ff);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = fileRequest;
+static const FileFunctions kernelFileFunctions = INITIAL_FILE_FUNCTIONS(
+	openKFS,
+	readKFS,
+	NULL,
+	seekKFS,
+	sizeOfKFS,
+	closeKFS,
+	isValidKFRequest
+);
+
+static KFRequest *createKFRequest(const BLOBAddress *file, Task *task){
+	KFRequest *NEW(kfr);
+	if(kfr == NULL)
+		return NULL;
+	initIORequest(&kfr->ior, kfr, closeFileRequest, finishOpenFileRequest);
+	initOpenFileRequest(&kfr->ofr, kfr, task, &kernelFileFunctions);
+	kfr->file = file;
+	kfr->isReady = 0;
+	kfr->isClosing = 0;
+	MEMSET0(kfr->lastReturnValues);
+	kfr->lastReturnCount = 0;
+	kfr->offset = 0;
+	return kfr;
 }
 
 void kernelFileService(void){
-	kfService = registerService(global.syscallTable,
-		KERNEL_FILE_SERVICE_NAME, kernelFileServiceHandler, 0);
-	if(kfService <= 0){
-		systemCall_terminate();
-	}
-	int ok = addFileSystem(kfService, KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
+	int ok = addFileSystem(openKFS, KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
 	if(!ok){
 		systemCall_terminate();
 	}
@@ -208,7 +178,7 @@ static void testListKFS(void){
 	for(a = 0; a < blobCount; a++){
 		printk("%s %x %x\n", blobList[a].name, blobList[a].begin, blobList[a].end);
 		uintptr_t b;
-		for(b = blobList[a].begin; b < blobList[a].end; b++){
+		for(b = blobList[a].begin; b < blobList[a].end && b < blobList[a].begin + 10; b++){
 			printk("%c", (*(const char*)b));
 		}
 		printk("\n");
@@ -217,23 +187,20 @@ static void testListKFS(void){
 
 void testKFS(void);
 void testKFS(void){
-	uintptr_t r = systemCall_discoverFileSystem(KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
-	assert(r != IO_REQUEST_FAILURE);
-	int kfs;
-	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &kfs);
-	assert(r == r2);
+	uintptr_t r, r2;
 	testListKFS();
 	// file not exist
-	r = systemCall_openFile(kfs, "abcdefg", strlen("abcdefg"));
+	const char *f1 = "kernelfs:abcdefg.txt", *f2 = "kernelfs:testfile.txt";
+	r = systemCall_openFile(f1, strlen(f1));
 	assert(r == IO_REQUEST_FAILURE);
 	// open file
-	r = systemCall_openFile(kfs, "testfile.txt", strlen("testfile.txt"));
+	r = systemCall_openFile(f2, strlen(f2));
 	assert(r != IO_REQUEST_FAILURE);
 	uintptr_t file;
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
 	//sizeOf
-	r = systemCall_sizeOfFile(kfs, file);
+	r = systemCall_sizeOfFile(file);
 	uintptr_t sizeLow, sizeHigh;
 	r2 = systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh);
 	printk("size = %d:%d\n",sizeHigh, sizeLow);
@@ -244,31 +211,31 @@ void testKFS(void){
 		char x[12];
 		MEMSET0(x);
 		// read file
-		r2 = systemCall_readFile(kfs, file, x, 11);
+		r2 = systemCall_readFile(file, x, 11);
 		assert(r == r2);
 		// last operation is not finished
-		r2 = systemCall_readFile(kfs, file, x, 11);
+		r2 = systemCall_readFile(file, x, 11);
 		assert(r2 == IO_REQUEST_FAILURE);
 		uintptr_t readCount = 10000;
 		r2 = systemCall_waitIOReturn(r, 1, &readCount);
 		assert(r2 == r);
 		x[readCount] = '\0';
 		printk("%s %d\n",x, readCount);
-		r2 = systemCall_seekFile(kfs, file, (i + 1) * 5);
+		r2 = systemCall_seekFile(file, (i + 1) * 5);
 		assert(r == r2);
 		r2 = systemCall_waitIO(r);
 		assert(r2 == r);
 	}
 	// close
-	r2 = systemCall_closeFile(kfs, file);
+	r2 = systemCall_closeFile(file);
 	assert(r2 == r);
 	// last operation is not finished
-	r2 = systemCall_closeFile(kfs, file);
+	r2 = systemCall_closeFile(file);
 	assert(r2 == IO_REQUEST_FAILURE);
 	r2 = systemCall_waitIO(r);
 	assert(r2 == r);
 	// not opened
-	r2 = systemCall_readFile(kfs, file, &r2, 1);
+	r2 = systemCall_readFile(file, &r2, 1);
 	assert(r2 == IO_REQUEST_FAILURE);
 	printk("testKFS ok\n");
 	systemCall_terminate();

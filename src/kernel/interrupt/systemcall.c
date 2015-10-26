@@ -249,7 +249,11 @@ static void queryServiceHandler(InterruptParam *p){
 }
 
 enum ServiceNameError systemCall_queryService(const char *name){
-	if(strlen(name) > MAX_NAME_LENGTH){
+	return systemCall_queryServiceN(name, strlen(name));
+}
+
+enum ServiceNameError systemCall_queryServiceN(const char *name, uintptr_t nameLength){
+	if(nameLength > MAX_NAME_LENGTH){
 		return INVALID_NAME;
 	}
 	uintptr_t name4[MAX_NAME_LENGTH / sizeof(uintptr_t)];

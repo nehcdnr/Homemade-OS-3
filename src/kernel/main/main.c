@@ -23,13 +23,13 @@ static void initService(void){
 		ahciDriver,
 		//fatDriver,
 		//testMemoryTask,
-		//kernelFileService,
+		kernelFileService,
 		//testKFS
 	};
 	unsigned int i;
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
-		t = createUserTask(services[i], 1);
+		t = createUserTaskWithoutLoader(services[i], 1);
 		resume(t);
 	}
 	/*

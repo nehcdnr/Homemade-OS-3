@@ -32,7 +32,7 @@ int switchToUserMode(uintptr_t eip, size_t stackSize);
 // task.c
 Task *createUserTaskWithoutLoader(void (*eip0)(void), int priority);
 // elfloader.c
-Task *createUserTaskFromELF(int fileService, const char*fileName, uintptr_t nameLength, int priority);
+Task *createUserTaskFromELF(const char*fileName, uintptr_t nameLength, int priority);
 // apply a custom loader to a task
 Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority);
 // the loader function is responsible to initialize LinearBlockManager
