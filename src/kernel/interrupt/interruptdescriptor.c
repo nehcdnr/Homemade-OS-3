@@ -186,6 +186,7 @@ void callHandler(InterruptTable *t, uint8_t intNumber, InterruptParam *p){
 	assert(intNumber < t->length);
 	InterruptVector *originalVector = p->vector;
 	uintptr_t originalArgument = p->argument;
+	assert(intNumber != SYSTEM_CALL); // system calls are recognized by eax
 	p->vector = t->vector + intNumber;
 	p->argument = t->asmIntEntry[intNumber].arg;
 	t->asmIntEntry[intNumber].handler(p);

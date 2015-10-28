@@ -1,21 +1,6 @@
 #include<std.h>
 
-// disk driver interface
-// IMPROVE: merge to file system call
-uintptr_t systemCall_readWrite(int driver,
-	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
-	uintptr_t targetIndex, int isWrite
-);
-uintptr_t systemCall_readWriteSync(int driver,
-	uintptr_t buffer, uint64_t location, uintptr_t bufferSize,
-	uintptr_t targetIndex, int isWrite
-);
-
-struct InterruptParam;
-void readWriteArgument(struct InterruptParam *p,
-	uintptr_t *buffer, uint64_t *location, uintptr_t *bufferSize,
-	uintptr_t *targetIndex, int *isWrite
-);
+// disk driver
 
 enum MBR_SystemID{
 	MBR_EMPTY = 0x00,
@@ -34,13 +19,13 @@ enum MBR_SystemID{
 typedef enum MBR_SystemID DiskPartitionType;
 
 int addDiskPartition(
-	DiskPartitionType systemID, const char *driverName, int diskDriver,
+	DiskPartitionType systemID, const char *driverName,
 	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
 	uintptr_t diskCode
 );
 //int removeDiskPartition(int diskDriver, uintptr_t diskCode);
 
-void readPartitions(const char *driverName, int diskDriver, uintptr_t diskCode,
+void readPartitions(const char *driverName, uintptr_t diskCode,
 	uint64_t lba, uint64_t sectorCount, uintptr_t sectorSize);
 
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
@@ -61,6 +46,9 @@ uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t b
 //uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_seekFile(uintptr_t handle, uint64_t position);
 uintptr_t syncSeekFile(uintptr_t handle, uint64_t position);
+uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
+uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t *bufferSize);
+uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t systemCall_sizeOfFile(uintptr_t handle);
 //uintptr_t syncSizeOfFile(uintptr_t handle);
 uintptr_t systemCall_closeFile(uintptr_t handle);
@@ -80,6 +68,8 @@ typedef struct{
 	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
+	IORequest *(*seekRead)(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+	IORequest *(*seekWrite)(OpenFileRequest *ofr, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	IORequest *(*sizeOf)(OpenFileRequest *ofr);
 	IORequest *(*close)(OpenFileRequest *ofr);
 	// If the argument is not valid, return 0.
@@ -88,11 +78,8 @@ typedef struct{
 }FileFunctions;
 
 // use macro to check number of arguments
-#define INITIAL_FILE_FUNCTIONS(OPEN, READ, WRITE, SEEK, SIZE_OF, CLOSE, IS_VALID_FILE) \
-	{OPEN, READ, WRITE, SEEK, SIZE_OF, CLOSE, IS_VALID_FILE}
-
-typedef struct InterruptParam InterruptParam;
-uintptr_t dispatchFileHandleCommand(InterruptParam *p);
+#define INITIAL_FILE_FUNCTIONS(OPEN, READ, WRITE, SEEK, SEEK_READ, SEEK_WRITE, SIZE_OF, CLOSE, IS_VALID_FILE) \
+	{OPEN, READ, WRITE, SEEK, SEEK_READ, SEEK_WRITE, SIZE_OF, CLOSE, IS_VALID_FILE}
 
 typedef struct Task Task;
 struct OpenFileRequest{
@@ -110,6 +97,7 @@ void initOpenFileRequest(
 );
 void addToOpenFileList(OpenFileRequest *ofr);
 void removeFromOpenFileList(OpenFileRequest *ofr);
+uintptr_t getFileHandle(OpenFileRequest *ofr);
 
 // FAT32
 void fatService(void);

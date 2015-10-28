@@ -162,7 +162,7 @@ void initKernelConsole(void){
 	}
 }
 
-static void syscall_printConsole(InterruptParam *p){
+static void printConsoleHandler(InterruptParam *p){
 	//ConsoleDisplay *cd = (ConsoleDisplay*)p->argument;
 	const char *string = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
 	size_t length = SYSTEM_CALL_ARGUMENT_1(p);
@@ -222,7 +222,7 @@ void kernelConsoleService(void){
 	int result;
 	result = //systemCall3(SYSCALL_REGISTER_SERVICE,
 	registerService(global.syscallTable,
-	KERNEL_CONSOLE_SERVICE_NAME, syscall_printConsole, (uintptr_t)&kernelConsole);
+		KERNEL_CONSOLE_SERVICE_NAME, printConsoleHandler, (uintptr_t)&kernelConsole);
 	EXPECT(result >= 0);
 	kernelConsoleLoop();
 	ON_ERROR;

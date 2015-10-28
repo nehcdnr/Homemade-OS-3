@@ -287,6 +287,9 @@ static PhysicalAddress checkAndTranslateBlock(
 	LinearMemoryManager *m, uintptr_t linearAddress,
 	PageAttribute hasAttribute, int doReserve
 ){
+	if(isKernelLinearAddress(linearAddress)){ // XXX:
+		m = kernelLinear;
+	}
 	LinearMemoryBlockManager *bm = m->linear;
 	PhysicalAddress p = {INVALID_PAGE_ADDRESS};
 	acquireLock(&bm->b.lock);

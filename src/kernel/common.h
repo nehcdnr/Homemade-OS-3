@@ -43,6 +43,11 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
 #define FLOOR(A,B) (((A)/(B))*(B))
 #define CEIL(A,B) (FLOOR((A)+((B)-1),B))
+
+#define LOW64(V) ((V) & 0xffffffff)
+#define HIGH64(V) ((((uint64_t)(V)) >> 32) & 0xffffffff)
+#define COMBINE64(L,H) ((uint64_t)(L) + ((uint64_t)(H) << 32))
+
 // return type of ternary operator is the 1st value
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))

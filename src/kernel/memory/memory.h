@@ -114,7 +114,7 @@ void *mapExistingPages(
 void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
-#define releaseReservedPage _releasePhysicalPages
+void releaseReservedPage(LinearMemoryManager *m, PhysicalAddress physicalAddress);
 
 // XXX:
 int isKernelLinearAddress(uintptr_t address);

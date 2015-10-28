@@ -20,8 +20,15 @@ enum SystemCall{
 	//SYSCALL_CREATE_USER_SPACE = 13, CREATE_PROCESS
 	SYSCALL_CREATE_THREAD = 14,
 	SYSCALL_TERMINATE = 15,
-	SYSCALL_FILE_HANDLE_COMMAND = 16,
-	SYSCALL_FILE_NAME_COMMAND = 17,
+	// file
+	SYSCALL_OPEN_FILE = 20,
+	SYSCALL_CLOSE_FILE = 21,
+	SYSCALL_READ_FILE = 22,
+	SYSCALL_WRITE_FILE = 23,
+	SYSCALL_SEEK_FILE = 24,
+	SYSCALL_SEEK_READ_FILE = 25,
+	SYSCALL_SEEK_WRITE_FILE = 26,
+	SYSCALL_SIZE_OF_FILE = 27,
 	// runtime registration
 	NUMBER_OF_RESERVED_SYSTEM_CALLS = 32,
 	NUMBER_OF_SYSTEM_CALLS = 64
@@ -43,6 +50,7 @@ uintptr_t systemCall6(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uint
 uintptr_t systemCall6Return(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3,
 	uintptr_t *arg4, uintptr_t *arg5);
 
+#define SYSTEM_CALL_NUMBER(P) ((P)->regs.eax)
 #define SYSTEM_CALL_ARGUMENT_0(P) ((P)->regs.edx)
 #define SYSTEM_CALL_ARGUMENT_1(P) ((P)->regs.ecx)
 #define SYSTEM_CALL_ARGUMENT_2(P) ((P)->regs.ebx)

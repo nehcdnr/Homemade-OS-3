@@ -1,9 +1,10 @@
-#include <file/file.h>
+
 #include"common.h"
 #include"io.h"
 #include"memory/memory.h"
 #include"multiprocessor/processorlocal.h"
 #include"interrupt/handler.h"
+#include"file/file.h"
 #include"interrupt/controller/pic.h"
 #include"task/task.h"
 #include"multiprocessor/spinlock.h"
@@ -182,7 +183,7 @@ static int startPort(volatile HBAPortRegister *pr, const volatile HBARegisters *
 
 	pr->commandStatus |= PR_COMMANDSTATUS_FRE;// enable receiving DeviceToHostFIS
 	pr->commandStatus |= PR_COMMANDSTATUS_ST;// set start bit
-	pr->interruptEnable |= 0xffffffff;//TODO
+	pr->interruptEnable |= 0xffffffff;//IMPROVE
 	return 1;
 }
 
@@ -445,6 +446,7 @@ struct DiskRequest{
 	IORequest this;
 	Spinlock *lock;
 	enum ATACommand command;
+	LinearMemoryManager *memoryManager;
 	PhysicalAddress buffer;
 	uint64_t lba;
 	uint32_t sectorCount;
@@ -474,9 +476,14 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static int finishDiskRequest(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
-	DELETE(ior->instance);
-	return 0;
+static int finishDiskRequest(IORequest *ior, uintptr_t *returnValues){ // TODO: delete buffer
+	DiskRequest *dr = ior->instance;
+	returnValues[0] = dr->sectorCount * dr->ahci->desc.sectorSize;
+	// see createDiskRequest
+	// assume the memoryManager is not deleted until the IORequest finishes
+	releaseReservedPage(dr->memoryManager, dr->buffer);
+	DELETE(dr);
+	return 1;
 }
 
 static void cancelDiskRequest(IORequest *ior){
@@ -484,19 +491,23 @@ static void cancelDiskRequest(IORequest *ior){
 	acquireLock(dr->lock);
 	REMOVE_FROM_DQUEUE(dr);
 	releaseLock(dr->lock);
+	releaseReservedPage(dr->memoryManager, dr->buffer);
 	DELETE(dr);
 }
 
 static DiskRequest *createDiskRequest(
-	enum ATACommand cmd,
-	PhysicalAddress buffer, uint64_t lba, uint32_t sectorCount,
+	enum ATACommand cmd, LinearMemoryManager *lm,
+	void *linearBuffer, uint64_t lba, uint32_t sectorCount,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
+	PhysicalAddress buffer = checkAndReservePage(lm, linearBuffer, KERNEL_PAGE);
+	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
 	initIORequest(&dr->this, dr, cancelDiskRequest, finishDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
+	dr->memoryManager = lm;
 	dr->buffer = buffer;
 	dr->lba = lba;
 	dr->sectorCount = sectorCount;
@@ -506,6 +517,8 @@ static DiskRequest *createDiskRequest(
 	dr->prev = NULL;
 	dr->next = NULL;
 	return dr;
+	ON_ERROR;
+	releaseReservedPage(lm, buffer);
 	ON_ERROR;
 	return NULL;
 }
@@ -578,8 +591,7 @@ static void AHCIHandler(InterruptParam *param){
 			finishIO(&dr->this);
 		}
 		if(servePortQueue(arg, p) == 0){
-			panic("servePortQueue == 0"); // TODO:
-			// this.handle(&this);
+			panic("servePortQueue == 0"); // TODO: how to handle?
 		}
 		releaseLock(&arg->lock);
 	}
@@ -597,9 +609,7 @@ union HBAPortIndex{
 	struct{
 		uint16_t hbaIndex;
 		uint8_t portIndex;
-		uint8_t invalid: 1;
-		uint8_t identifyCommand: 1;
-		uint8_t unused: 6;
+		uint8_t unused;
 	};
 	uintptr_t value;
 }__attribute__((__packed__));
@@ -635,31 +645,27 @@ static HBAPortIndex toDiskCode(int a, int p){
 	HBAPortIndex i = {value: 0};
 	i.hbaIndex = a;
 	i.portIndex = p;
+	i.unused = 0;
 	return i;
 }
 
-static void AHCIServiceHandler(InterruptParam *p){
-	sti();
-	AHCIManager *am = (AHCIManager*)p->argument;
-	uintptr_t linearBuffer;
-	uint64_t lba;
-	uintptr_t bufferSize;
-	HBAPortIndex index;
-	int isWrite;
-	readWriteArgument(p, &linearBuffer, &lba, &bufferSize, &index.value, &isWrite);
-	PhysicalAddress physicalBuffer = checkAndTranslatePage(
-		getTaskLinearMemory(processorLocalTask()), (void*)linearBuffer
-	);
-	EXPECT(physicalBuffer.value != INVALID_PAGE_ADDRESS);
+static IORequest *ahciService(
+	AHCIManager *am,
+	LinearMemoryManager *lm,
+	void *linearBuffer,
+	uint64_t lba,
+	uintptr_t bufferSize,
+	HBAPortIndex index,
+	int isWrite,
+	int isIdentify
+){
 	AHCIInterruptArgument *hba = searchHBAByPortIndex(am, index);
 	EXPECT(hba != NULL);
 	EXPECT(bufferSize % hba->desc.sectorSize == 0);
-assert(bufferSize <= PAGE_SIZE);
-// TODO improve: multiple physical regions
-// TODO check buffer address
+	EXPECT(bufferSize <= PAGE_SIZE); // TODO: allow multiple pages/physical regions
 	DiskRequest *dr = createDiskRequest(
-		(index.identifyCommand? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
-		physicalBuffer, lba, bufferSize / hba->desc.sectorSize,
+		(isIdentify? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
+		lm, linearBuffer, lba, bufferSize / hba->desc.sectorSize,
 		hba, index.portIndex, isWrite
 	);
 	EXPECT(dr != NULL);
@@ -668,43 +674,29 @@ assert(bufferSize <= PAGE_SIZE);
 	addToPortQueue(dr, /*hba, */index.portIndex);
 	if(servePortQueue(hba, index.portIndex) == 0){
 		assert(0);
-		// TODO: dr->this.handle(&dr->this); // dr->this.fail()
+		// TODO: how to handle?
 	}
 	releaseLock(dr->lock);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = (uint32_t)dr;
-	return;
+	return &dr->this;
 	// destroy(dr);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
+	return NULL;
 }
 
-uintptr_t systemCall_rwAHCI(uintptr_t buffer, uint64_t lba, uint32_t bufferSize, uint32_t index, int isWrite){
-	static int ahciService = -1;
-	while(ahciService < 0){
-		ahciService = systemCall_queryService(AHCI_SERVICE_NAME);
-		if(ahciService >= 0)
-			break;
-		printk("warning: AHCI service is not initialized\n");
-		sleep(20);
-	}
-	return systemCall_readWrite(ahciService,
-		buffer, lba, bufferSize,
-		index, isWrite
-	);
-}
-
-static int identifyDisk(int ahciDriver, HBAPortIndex i, struct DiskDescription *d){
+static int initDiskDescription(struct DiskDescription *d, AHCIManager *ahciManager, HBAPortIndex i){
 	uint16_t *buffer = systemCall_allocateHeap(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
-	i.identifyCommand = 1;
-	uintptr_t ior = systemCall_readWriteSync(ahciDriver, (uintptr_t)buffer, 0, 0, i.value, 0);
+	uintptr_t ior = (uintptr_t)ahciService(ahciManager,
+		getTaskLinearMemory(processorLocalTask()), buffer, 0, 0, i, 0, 1);
 	EXPECT(ior != IO_REQUEST_FAILURE);
+	uintptr_t waitIOR = systemCall_waitIO(ior);
+	assert(waitIOR == ior);
 	// the driver requires 48-bit address
-	const uint32_t buffer83 = buffer[83];
+	const uint16_t buffer83 = buffer[83];
 	EXPECT(buffer83 & (1 << 10));
 	// find sector size
 	const uint16_t buffer106 = buffer[106];
@@ -768,19 +760,71 @@ static AHCIInterruptArgument *initAHCI(AHCIManager *am, uint8_t bus, uint8_t dev
 	pic->setPICMask(pic, (intInfo & 0xff), 0);
 	return arg;
 }
+/*
+static void diskCodeToString(char *s, HBAPortIndex i){
+	int a;
+	uintptr_t u = i.value;
+	for(a = sizeof(u) * 2 - 1; a >= 0; a--){
+		s[a] = u % 16 + (u % 16 >= 10? 'a' - 10: '0');
+		u /= 16;
+	}
+}
 
-// must be in kernel space
-static AHCIManager ahciManager = {INITIAL_SPINLOCK, NULL, 0};
+static HBAPortIndex stringToDiskCode(const char *s, uintptr_t len){
+	HBAPortIndex r;
+	uintptr_t u = 0;
+	uintptr_t a;
+	for(a = 0; a < len; a++){
+		u = u * 16;
+		if(s[a] >= 'a' && s[a] <= 'f')
+			u += (s[a] - 'a' + 10);
+		else// if(s[a] >= '0' && s[a] <= '9')
+			u += (s[a] -'0');
+	}
+	r.value = u;
+	return r;
+}
+*/
+// file interface
+typedef struct{
+	OpenFileRequest ofr;
+	AHCIManager *manager;
+	HBAPortIndex diskCode;
+}OpenAHCIRequest;
+
+static IORequest *seekReadAHCI(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
+	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
+	OpenAHCIRequest *oar = ofr->instance;
+	IORequest *ior = ahciService(oar->manager,
+		getTaskLinearMemory(processorLocalTask()), buffer, position, bufferSize,
+		oar->diskCode, 0, 0 // isWrite, isIdentify
+	);
+	EXPECT(ior != NULL);
+	return ior;
+	ON_ERROR;
+	ON_ERROR;
+	return IO_REQUEST_FAILURE;
+}
+/*
+static IORequest *seekWriteAHCI(OpenFileRequest *ofr, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
+
+}
+*/
+static OpenAHCIRequest *createOpenAHCIRequest(AHCIManager *ahciManager, HBAPortIndex diskCode){
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS(NULL, NULL, NULL, NULL, seekReadAHCI, NULL/*seekWriteAHCI*/, NULL, NULL, NULL);
+	OpenAHCIRequest *NEW(oar);
+	EXPECT(oar != NULL);
+	initOpenFileRequest(&oar->ofr, oar, processorLocalTask(), &ff);
+	oar->manager = ahciManager;
+	oar->diskCode = diskCode;
+	return oar;
+	ON_ERROR;
+	return NULL;
+}
 
 void ahciDriver(void){
-	if(ahciManager.ahciList != NULL || ahciManager.ahciCount != 0){
-		panic("cannot initialize AHCI driver");
-	}
-	int ahciDriver = registerService(global.syscallTable, AHCI_SERVICE_NAME,
-		AHCIServiceHandler, (uintptr_t)&ahciManager);
-	if(ahciDriver < 0){
-		panic("cannot register ahci interrupt handler\n");
-	}
+	// must be in kernel space
+	static AHCIManager ahciManager = {INITIAL_SPINLOCK, NULL, 0};
 	uintptr_t discoverPCI = systemCall_discoverPCI(0x01060100, 0xffffff00);
 	while(1){
 		uintptr_t bus, dev, func;
@@ -793,11 +837,14 @@ void ahciDriver(void){
 			if(hasPort(arg, p) == 0){
 				continue;
 			}
-			if(identifyDisk(ahciDriver, toDiskCode(arg->hbaIndex, p), &arg->desc) == 0){
+			const HBAPortIndex diskCode = toDiskCode(arg->hbaIndex, p);
+			if(initDiskDescription(&arg->desc, &ahciManager, diskCode) == 0){
 				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
 			}
-			readPartitions(AHCI_SERVICE_NAME, ahciDriver, toDiskCode(arg->hbaIndex, p).value, 0,
+			OpenAHCIRequest *oar = createOpenAHCIRequest(&ahciManager, diskCode);
+			addToOpenFileList(&oar->ofr); // TODO: remove file when driver is unloaded
+			readPartitions(AHCI_SERVICE_NAME, getFileHandle(&oar->ofr), 0,
 			arg->desc.sectorCount, arg->desc.sectorSize);
 		}
 	}

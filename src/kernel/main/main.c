@@ -21,7 +21,7 @@ static void initService(void){
 		kernelConsoleService,
 		pciDriver,
 		ahciDriver,
-		//fatDriver,
+		//fatService,
 		//testMemoryTask,
 		kernelFileService,
 		//testKFS
@@ -86,6 +86,7 @@ void c_entry(void){
 	// 9. file
 	if(isBSP){
 		initResourceManager(global.syscallTable);
+		initFile(global.syscallTable);
 	}
 	// 10. driver
 	initLocalTimer(pic, global.idt, timer);

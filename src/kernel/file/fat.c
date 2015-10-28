@@ -108,9 +108,8 @@ static_assert(sizeof(LongFATDirEntry) == 32);
 static struct SlabManager *slab = NULL;
 
 struct DiskParameter{
-	int diskDriver;
 	uint64_t startLBA;
-	uintptr_t diskCode;
+	uintptr_t diskFileHandle;
 	uintptr_t sectorSize;
 };
 
@@ -122,10 +121,10 @@ static uint32_t *loadFAT32(const FATBootSector *br, const struct DiskParameter *
 	EXPECT(fat != NULL);
 	unsigned p;
 	for(p = 0; p * PAGE_SIZE < fatSize; p++){
-		uintptr_t rwDisk = systemCall_readWriteSync(dp->diskDriver,
-			((uintptr_t)fat) + PAGE_SIZE * p, fatBeginLBA + p * sectorsPerPage, PAGE_SIZE,
-			dp->diskCode, 0);
-		if(rwDisk == IO_REQUEST_FAILURE){
+		uintptr_t readSize = PAGE_SIZE;
+		uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
+			(void*)(((uintptr_t)fat) + PAGE_SIZE * p), fatBeginLBA + p * sectorsPerPage, &readSize);
+		if(rwDisk == IO_REQUEST_FAILURE || readSize != PAGE_SIZE){
 			printk("warning: failed to read FAT\n"); //TODO
 			break;
 		}
@@ -143,10 +142,10 @@ static void iterateDirectory(uint32_t beginClusterSector,
 	const uintptr_t clusterSize = sectorsPerCluster * dp->sectorSize;
 	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(rootDir != NULL);
-	uintptr_t rwDisk = systemCall_readWriteSync(dp->diskDriver,
-		(uintptr_t)rootDir, beginClusterSector, clusterSize,
-		dp->diskCode, 0);
-	EXPECT(rwDisk != IO_REQUEST_FAILURE);
+	uintptr_t readSize = clusterSize;
+	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
+		rootDir, beginClusterSector, &readSize);
+	EXPECT(rwDisk != IO_REQUEST_FAILURE && readSize == clusterSize);
 	unsigned p;
 	for(p = 0; p < clusterSize / sizeof(FATDirEntry); p++){
 		if(rootDir[p].fileName[0] == 0)break;
@@ -174,10 +173,10 @@ static int readFATDisk(const struct DiskParameter *dp){
 	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(br != NULL);
 	MEMSET0(br);
-	uintptr_t rwDisk = systemCall_readWriteSync(
-		dp->diskDriver, (uintptr_t)br, dp->startLBA, readSize,
-		dp->diskCode, 0);
-	EXPECT(rwDisk != IO_REQUEST_FAILURE);
+	uintptr_t actualReadSize = readSize;
+	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
+		br, dp->startLBA, &actualReadSize);
+	EXPECT(rwDisk != IO_REQUEST_FAILURE && actualReadSize == readSize);
 	EXPECT(br->ebr32.ext.signature == 0x28 || br->ebr32.ext.signature == 0x29);
 
 	//const uint32_t sectorsPerFAT32 = br->ebr32.sectorsPerFAT32;
@@ -227,14 +226,14 @@ void fatService(void){
 	for(fatName[3] = '0'; fatName[3] <= '9'; fatName[3]++){
 		struct DiskParameter dp;
 		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
-			discoverFAT, 5,
-			(uintptr_t)&dp.diskDriver, &startLBALow, &startLBAHigh, &dp.diskCode, &dp.sectorSize);
+			discoverFAT, 4,
+			&startLBALow, &startLBAHigh, &dp.diskFileHandle, &dp.sectorSize);
 		if(discoverFAT != discoverFAT2){
 			printk("discover disk failure\n");
 			continue;
 		}
 		dp.startLBA = (((uint64_t)startLBAHigh) << 32) + startLBALow;
-		//printk("fat received %u %x %u %u\n", diskDriver, startLBALow, diskCode, sectorSize);
+
 		if(readFATDisk(&dp) == 0){
 			printk("read fat failure\n");
 			continue;

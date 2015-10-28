@@ -23,6 +23,7 @@ typedef struct KFRequest{
 
 static int isValidKFRequest(OpenFileRequest *ofr){
 	KFRequest *kfr = ofr->instance;
+	assert(ofr->task == processorLocalTask());
 	return kfr->isReady;
 }
 
@@ -142,6 +143,8 @@ static const FileFunctions kernelFileFunctions = INITIAL_FILE_FUNCTIONS(
 	readKFS,
 	NULL,
 	seekKFS,
+	NULL,
+	NULL,
 	sizeOfKFS,
 	closeKFS,
 	isValidKFRequest
