@@ -18,7 +18,7 @@ enum SystemCall{
 	//SYSCALL_REGISTER_RESOURCE = 11,
 	SYSCALL_DISCOVER_RESOURCE = 12,
 	//SYSCALL_CREATE_USER_SPACE = 13, CREATE_PROCESS
-	SYSCALL_CREATE_THREAD = 14,
+	SYSCALL_CREATE_USER_THREAD = 14,
 	SYSCALL_TERMINATE = 15,
 	// file
 	SYSCALL_OPEN_FILE = 20,
@@ -106,7 +106,5 @@ SystemCallTable *initSystemCall(InterruptTable *t);
 #define MOUSE_SERVICE_NAME ("mouse")
 #define VIDEO_SERVICE_NAME ("video")
 #define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
-#define AHCI_SERVICE_NAME ("ahci")
-#define KERNEL_FILE_SERVICE_NAME ("kernelfs")
 
 #endif

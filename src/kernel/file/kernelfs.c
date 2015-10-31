@@ -166,7 +166,7 @@ static KFRequest *createKFRequest(const BLOBAddress *file, Task *task){
 }
 
 void kernelFileService(void){
-	int ok = addFileSystem(openKFS, KERNEL_FILE_SERVICE_NAME, strlen(KERNEL_FILE_SERVICE_NAME));
+	int ok = addFileSystem(openKFS, "kernelfs", strlen("kernelfs"));
 	if(!ok){
 		systemCall_terminate();
 	}

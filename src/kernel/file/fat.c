@@ -168,7 +168,12 @@ static void iterateDirectory(uint32_t beginClusterSector,
 	return;
 };
 
-static int readFATDisk(const struct DiskParameter *dp){
+static struct DiskParameter *createFATPartition(uintptr_t fileHandle, uint64_t startLBA, uintptr_t sectorSize){
+	struct DiskParameter *NEW(dp);
+	EXPECT(dp != NULL);
+	dp->diskFileHandle = fileHandle;
+	dp->startLBA = startLBA;
+	dp->sectorSize = sectorSize;
 	const uintptr_t readSize = CEIL(sizeof(FATBootSector), dp->sectorSize);
 	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(br != NULL);
@@ -194,15 +199,16 @@ static int readFATDisk(const struct DiskParameter *dp){
 	printk("read fat ok\n");
 	systemCall_releaseHeap(fat);
 	systemCall_releaseHeap((void*)br);
-	return 1;
+	return dp;
 	//systemCall_releaseHeap(br);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
 	systemCall_releaseHeap((void*)br);
 	ON_ERROR;
+	ON_ERROR;
 	printk("warning: read FAT32 failed\n");
-	return 0;
+	return NULL;
 }
 
 #define FAT32_SERVICE_NAME "fat32"
@@ -211,7 +217,6 @@ static IORequest *openFAT(
 	__attribute__((__unused__)) const char *fileName, __attribute__((__unused__)) uintptr_t nameLength){
 	return NULL;
 }
-
 
 void fatService(void){
 	slab = createUserSlabManager(); // move it to user library
@@ -222,25 +227,22 @@ void fatService(void){
 	uintptr_t startLBAHigh;
 	//uintptr_t diskCode;
 	//uintptr_t sectorSize;
-	char fatName[]="fat?";
-	for(fatName[3] = '0'; fatName[3] <= '9'; fatName[3]++){
-		struct DiskParameter dp;
+	if(addFileSystem(openFAT, "fat", strlen("fat")) != 1){
+		printk("add file system failure\n");
+	}
+	while(1){
+		uintptr_t diskFileHandle, sectorSize;
 		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
 			discoverFAT, 4,
-			&startLBALow, &startLBAHigh, &dp.diskFileHandle, &dp.sectorSize);
+			&startLBALow, &startLBAHigh, &diskFileHandle, &sectorSize);
 		if(discoverFAT != discoverFAT2){
 			printk("discover disk failure\n");
 			continue;
 		}
-		dp.startLBA = (((uint64_t)startLBAHigh) << 32) + startLBALow;
-
-		if(readFATDisk(&dp) == 0){
-			printk("read fat failure\n");
+		struct DiskParameter *dp = createFATPartition(diskFileHandle, COMBINE64(startLBALow, startLBAHigh), sectorSize);
+		if(dp == NULL){
 			continue;
-		}
-		if(addFileSystem(openFAT, fatName, 4) != 1){
-			printk("add file system failure\n");
-		}
+		}//TODO:
 	}
 	printk("too many fat systems\n");
 	while(1){

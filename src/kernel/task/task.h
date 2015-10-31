@@ -29,20 +29,24 @@ int switchToVirtual8086Mode(void (*cs_ip)(void));
 int switchToUserMode(uintptr_t eip, size_t stackSize);
 
 // initial state is suspended
+// create new page table and linear memory manager
 // task.c
-Task *createUserTaskWithoutLoader(void (*eip0)(void), int priority);
+Task *createTaskWithoutLoader(void (*eip0)(void), int priority);
+// create new page table and preallocated linear memory
 // elfloader.c
-Task *createUserTaskFromELF(const char*fileName, uintptr_t nameLength, int priority);
+Task *createUserTaskFromELF(const char *fileName, uintptr_t nameLength, int priority);
 // apply a custom loader to a task
-Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority);
+Task *createTaskAndMemorySpace(void (*loader)(void*), void *arg, size_t argSize, int priority);
 // the loader function is responsible to initialize LinearBlockManager
 typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
 int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 
+// create
 // return UINTPTR_NULL if failed
 // return task id if succeeded
 // task id is an address in kernel space. we haven't defined the usage yet
-uintptr_t systemCall_createThread(void(*entry)(void));
+uintptr_t systemCall_createUserThread(void (*entry)(void), uintptr_t stackSize);
+Task *createKernelThread(void (*entry)(void));
 // always succeed and do not return
 void terminateCurrentTask(void);
 void systemCall_terminate(void);

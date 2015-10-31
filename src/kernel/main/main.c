@@ -29,7 +29,7 @@ static void initService(void){
 	unsigned int i;
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
-		t = createUserTaskWithoutLoader(services[i], 1);
+		t = createTaskWithoutLoader(services[i], 1);
 		resume(t);
 	}
 	/*

@@ -60,8 +60,11 @@ typedef struct Task{
 	// uint32_t ss;
 	// SegmentTable *ldt;
 	uint32_t esp0;
+	void *kernelStackBottom;
+	// user space stack
 	uint32_t espInterrupt;
-	void *stackBottom;
+	// not exist if userStackBottom == INVALID_PAGE_ADDRESS
+	uintptr_t userStackBottom;
 
 	// user space memory
 	TaskMemoryManager *taskMemory;
@@ -81,6 +84,12 @@ typedef struct Task{
 
 	struct Task *next, *prev;
 }Task;
+
+static void setCurrentUserStackBottom(uintptr_t stack){
+	Task *t = processorLocalTask();
+	assert(t->userStackBottom = INVALID_PAGE_ADDRESS);
+	t->userStackBottom = stack;
+}
 
 #define NUMBER_OF_PRIORITIES (4)
 
@@ -277,6 +286,7 @@ static void initUserRegisters(InterruptParam *p, uint32_t eip, uint32_t esp){
 int switchToUserMode(uintptr_t eip, size_t stackSize){
 	void *stack = allocatePages(getTaskLinearMemory(processorLocalTask()), stackSize, USER_WRITABLE_PAGE);
 	EXPECT(stack != NULL);
+	setCurrentUserStackBottom((uintptr_t)stack); // see terminateCurrentTask
 	InterruptParam p;
 	initUserRegisters(&p, (uint32_t)eip, ((uintptr_t)stack) + stackSize - STACK_ALIGN_SIZE);
 	returnFromInterrupt(p);
@@ -298,8 +308,9 @@ static Task *createTask(
 	Task *NEW(t);
 	EXPECT(t != NULL);
 	t->esp0 = esp0;
+	t->kernelStackBottom = stackBottom;
 	t->espInterrupt = espInterrupt;
-	t->stackBottom = stackBottom;
+	t->userStackBottom = INVALID_PAGE_ADDRESS;
 
 	t->ioSemaphore = createSemaphore();
 	EXPECT(t->ioSemaphore != NULL);
@@ -393,7 +404,7 @@ static void noLoader(void *voidParam){
 	terminateCurrentTask();
 }
 
-Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int priority){
+Task *createTaskAndMemorySpace(void (*loader)(void*), void *arg, size_t argSize, int priority){
 	const uintptr_t targetLinearBlockManager = USER_LINEAR_BLOCK_MANAGER_ADDRESS;
 	const uintptr_t targetPageTable = USER_PAGE_TABLE_SET_ADDRESS;
 	// 1. task PageManager
@@ -420,28 +431,51 @@ Task *createUserTask(void (*loader)(void*), void *arg, size_t argSize, int prior
 	return NULL;
 }
 
-Task * createUserTaskWithoutLoader(void (*eip0)(void), int priority){
+Task * createTaskWithoutLoader(void (*eip0)(void), int priority){
 	struct NoLoaderParam p = {eip0};
-	return createUserTask(noLoader, &p, sizeof(p), priority);
+	return createTaskAndMemorySpace(noLoader, &p, sizeof(p), priority);
 }
 
 #undef USER_LINEAR_BLOCK_MANAGER_ADDRESS
 #undef USER_PAGE_TABLE_SET_ADDRESS
 #undef HEAP_END
 
-static void createThreadHandler(InterruptParam *p){
+struct UserThreadParam{
+	uintptr_t entry, stackSize;
+};
+
+static void userThreadEntry(struct UserThreadParam *p){
+	if(switchToUserMode(p->entry, p->stackSize) == 0){
+		printk("warning: fail to create user thread\n");
+	}
+	terminateCurrentTask();
+}
+
+static void createUserThreadHandler(InterruptParam *p){
 	sti();
-	void (*entry)(void) = (void (*)(void))SYSTEM_CALL_ARGUMENT_0(p);
+	uintptr_t entry = SYSTEM_CALL_ARGUMENT_0(p);
+	uintptr_t stackSize = SYSTEM_CALL_ARGUMENT_1(p);
 	Task *current = processorLocalTask();
-	Task *newTask = createKernelTask(entry, NULL, 0, current->priority, current->taskMemory);
+	// TODO: check if the entry is legal
+	struct UserThreadParam param = {entry, stackSize};
+	Task *newTask = createKernelTask(userThreadEntry, &param, sizeof(param), current->priority, current->taskMemory);
 	if(newTask != NULL){
 		resume(newTask);
 	}
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)newTask;
 }
 
-uintptr_t systemCall_createThread(void(*entry)(void)){
-	return systemCall2(SYSCALL_CREATE_THREAD, (uintptr_t)entry);
+uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
+	return systemCall3(SYSCALL_CREATE_USER_THREAD, (uintptr_t)entry, stackSize);
+}
+
+Task *createKernelThread(void (*entry)(void)){
+	Task *current = processorLocalTask();
+	Task *newTask = createKernelTask(entry, NULL, 0, current->priority,current->taskMemory);
+	if(newTask != NULL){
+		resume(newTask);
+	}
+	return newTask;
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior);
@@ -478,7 +512,7 @@ static void clearTerminateQueue(TaskQueueAndLock *ql){
 			break;
 		assert(t->state == SUSPENDED);
 		//printk("clearTerminateQueue: %x\n",t);
-		if(checkAndReleaseKernelPages(t->stackBottom) == 0){
+		if(checkAndReleaseKernelPages(t->kernelStackBottom) == 0){
 			panic("");
 		}
 		DELETE(t);
@@ -500,11 +534,19 @@ void terminateCurrentTask(void){
 	clearTerminateQueue(&terminateQueue);
 	cancelAllIORequests();
 	Task *t = processorLocalTask();
-	// delete ioSemaphore
+	// 1. delete ioSemaphore
 	deleteSemaphore(t->ioSemaphore);
 	t->ioSemaphore = NULL;
-	// delete user space
+	// 2. delete user stack
 	TaskMemoryManager *tmm = t->taskMemory;
+	if(t->userStackBottom != INVALID_PAGE_ADDRESS){
+		if(checkAndReleasePages(&tmm->manager, (void*)t->userStackBottom) == 0){
+			// the user program released its stack?
+			printk("warning: fail to release user stack %x\n", t->userStackBottom);
+		}
+		t->userStackBottom = INVALID_PAGE_ADDRESS;
+	}
+	// 3. delete user space
 	int refCnt = addTaskMemoryReference(tmm, -1);
 	if(refCnt == 0){
 		PageManager *p = tmm->manager.page;
@@ -520,7 +562,7 @@ void terminateCurrentTask(void){
 		}
 		// delete page
 		cli();
-		// temporary page manager; see deleteOldTask
+		// temporary page manager
 		// addReference(kernelTaskMemory);
 		t->taskMemory = kernelTaskMemory;
 		invalidatePageTable(p, kernelTaskMemory->manager.page);
@@ -582,7 +624,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
 	assert(kernelTaskMemory != NULL);
 	// each processor needs an idle task
-	// create a task for current running bootstrap thread. not need to initialize eip and esp
+	// create a task for current running bootstrap task. not need to initialize eip and esp
 	TaskManager *NEW(tm);
 	if(tm == NULL){
 		panic("cannot initialize task manager");
@@ -816,7 +858,7 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	registerSystemCall(systemCallTable, SYSCALL_ALLOCATE_HEAP, allocateHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_RELEASE_HEAP, releaseHeapHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_TRANSLATE_PAGE, translatePageHandler, 0);
-	registerSystemCall(systemCallTable, SYSCALL_CREATE_THREAD, createThreadHandler, 0);
+	registerSystemCall(systemCallTable, SYSCALL_CREATE_USER_THREAD, createUserThreadHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_TERMINATE, terminateHandler, 0);
 	//initSemaphore(systemCallTable);
 }
@@ -854,7 +896,7 @@ void testMemoryTask(void){
 }
 
 static void threadEntry(void){
-	printk("thread_created\n");
+	//printk("thread_created\n");
 	systemCall_terminate();
 }
 
@@ -862,7 +904,7 @@ void testCreateThread(void){
 	static int failed=0;
 	int a;
 	for(a = 0; failed == 0; a++){
-		if(systemCall_createThread(testCreateThread) == UINTPTR_NULL){
+		if(createKernelThread(testCreateThread) == NULL){
 			failed=1;
 			printk("failed\n");
 		}

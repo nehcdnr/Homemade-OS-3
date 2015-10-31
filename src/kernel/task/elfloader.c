@@ -224,14 +224,19 @@ static void elfLoader(void *arg){
 	ok = syncCloseFile(file);
 	if(!ok)
 		printk("warnging: cannot close ELF file\n");
+	file = IO_REQUEST_FAILURE;
 	//printk("elf ok\n\n");
 	//((void(*)(void))elfHeader32.entry)();
-	switchToUserMode(elfHeader32.entry, DEFAULT_USER_STACK_SIZE);
+	ok = switchToUserMode(elfHeader32.entry, DEFAULT_USER_STACK_SIZE);
+	EXPECT(ok);
 	assert(0);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	syncCloseFile(file);
+	ON_ERROR;
+	if(file != IO_REQUEST_FAILURE){
+		syncCloseFile(file);
+	}
 	ON_ERROR;
 	terminateCurrentTask();
 }
@@ -243,7 +248,7 @@ Task *createUserTaskFromELF(const char *fileName, uintptr_t nameLength, int prio
 		return NULL;
 	p->nameLength = nameLength;
 	strncpy(p->fileName, fileName, nameLength);
-	Task *t = createUserTask(elfLoader, p, pSize, priority);
+	Task *t = createTaskAndMemorySpace(elfLoader, p, pSize, priority);
 	releaseKernelMemory(p);
 	return t;
 }
