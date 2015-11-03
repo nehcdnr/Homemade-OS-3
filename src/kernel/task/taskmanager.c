@@ -334,6 +334,7 @@ static Task *createTask(
 	return NULL;
 }
 
+// create task and kernel stack
 static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int priority, TaskMemoryManager *tm){
 	// kernel task stack
 	EXPECT(argSize <= KERNEL_STACK_SIZE / 2);
@@ -469,13 +470,9 @@ uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
 	return systemCall3(SYSCALL_CREATE_USER_THREAD, (uintptr_t)entry, stackSize);
 }
 
-Task *createKernelThread(void (*entry)(void*), void *arg, uintptr_t argSize){
-	Task *current = processorLocalTask();
-	Task *newTask = createKernelTask(entry, arg, argSize, current->priority,current->taskMemory);
-	if(newTask != NULL){
-		resume(newTask);
-	}
-	return newTask;
+// TODO: how to check if sharedMemoryTask is valid?
+Task *createSharedMemoryTask(void (*entry)(void*), void *arg, uintptr_t argSize, Task *sharedMemoryTask){
+	return createKernelTask(entry, arg, argSize, sharedMemoryTask->priority, sharedMemoryTask->taskMemory);
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior);
@@ -705,7 +702,7 @@ static void waitIOHandler(InterruptParam *p){
 	sti();
 	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
 	Task *t = processorLocalTask();
-	if(searchIOList(t, ior) == 0){
+	if(ior != NULL && searchIOList(t, ior) == 0){
 		SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
 		return;
 	}
@@ -902,12 +899,17 @@ static void threadEntry(void){
 
 void testCreateThread(void *arg){
 	uintptr_t argValue = *(uintptr_t*)arg;
+	Task *current = processorLocalTask();
 	static int failed=0;
 	int a;
 	for(a = 0; failed == 0; a++){
-		if(createKernelThread(testCreateThread, &argValue, sizeof(argValue)) == NULL){
+		Task *t = createSharedMemoryTask(testCreateThread, &argValue, sizeof(argValue), current);
+		if(t == NULL){
 			failed=1;
 			printk("failed\n");
+		}
+		else{
+			resume(t);
 		}
 	}
 	threadEntry();

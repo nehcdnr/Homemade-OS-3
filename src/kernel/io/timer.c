@@ -72,20 +72,26 @@ static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *t
 	releaseLock(&tel->lock);
 }
 
-// TODO:systemCall_sleep(uint64_t millisecond);
-uintptr_t setAlarm(uint64_t millisecond, int isPeriodic){
-	if(millisecond > 1000000000 * (uint64_t)1000){
-		return IO_REQUEST_FAILURE;
-	}
+static void setAlarmHandler(InterruptParam *p){
+	uint64_t millisecond = COMBINE64(SYSTEM_CALL_ARGUMENT_0(p), SYSTEM_CALL_ARGUMENT_1(p));
+	uintptr_t isPeriodic = SYSTEM_CALL_ARGUMENT_2(p);
+	EXPECT(millisecond <= 1000000000 * (uint64_t)1000);
 	const uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
 	TimerEvent *te = createTimerEvent((isPeriodic? tick: 0));
-	if(te == NULL){
-		return IO_REQUEST_FAILURE;
-	}
+	EXPECT(te != NULL);
 	IORequest *ior = &te->this;
 	pendIO(ior);
 	addTimerEvent(processorLocalTimer(), tick, te);
-	return (uintptr_t)ior;
+	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
+	return;
+	ON_ERROR;
+	ON_ERROR;
+	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
+}
+
+//TODO:systemCall_setAlarm
+uintptr_t setAlarm(uint64_t millisecond, int isPeriodic){
+	return systemCall4(SYSCALL_SET_ALARM, LOW64(millisecond), HIGH64(millisecond), (uintptr_t)isPeriodic);
 }
 
 int sleep(uint64_t millisecond){
@@ -93,11 +99,8 @@ int sleep(uint64_t millisecond){
 	if(te == IO_REQUEST_FAILURE){
 		return 0;
 	}
-	IORequest *te2 = waitIO(processorLocalTask(), (IORequest*)te);
-	assert(((uintptr_t)te2) == te);
-	uint32_t rv[1];
-	int rvCount = te2->finish(te2, rv);
-	assert(rvCount == 0);
+	uintptr_t te2 = systemCall_waitIO(te);
+	assert(te2 == te);
 	return 1;
 }
 
@@ -154,4 +157,8 @@ TimerEventList *createTimer(){
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v){
 	setHandler(v, timerHandler, (uintptr_t)tel);
+}
+
+void initTimer(SystemCallTable *systemCallTable){
+	registerSystemCall(systemCallTable, SYSCALL_SET_ALARM, setAlarmHandler, 0);
 }

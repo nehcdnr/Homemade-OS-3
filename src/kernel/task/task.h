@@ -38,7 +38,7 @@ Task *createUserTaskFromELF(const char *fileName, uintptr_t nameLength, int prio
 // apply a custom loader to a task
 Task *createTaskAndMemorySpace(void (*loader)(void*), void *arg, size_t argSize, int priority);
 // the loader function is responsible to initialize LinearBlockManager
-typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
+//typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
 int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 
 // create
@@ -46,7 +46,7 @@ int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 // return task id if succeeded
 // task id is an address in kernel space. we haven't defined the usage yet
 uintptr_t systemCall_createUserThread(void (*entry)(void), uintptr_t stackSize);
-Task *createKernelThread(void (*entry)(void*), void *arg, uintptr_t argSize);
+Task *createSharedMemoryTask(void (*entry)(void*), void *arg, uintptr_t argSize, Task *sharedMemoryTask);
 // always succeed and do not return
 void terminateCurrentTask(void);
 void systemCall_terminate(void);

@@ -228,9 +228,10 @@ static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t sta
 #define FAT32_SERVICE_NAME "fat32"
 
 struct FAT32Collection{
+	Task *mainTask;
 	FAT32DiskPartition *head;
 	Spinlock lock;
-}fat32List = {NULL, INITIAL_SPINLOCK};
+}fat32List = {NULL, NULL, INITIAL_SPINLOCK};
 
 static FAT32DiskPartition *searchFAT32DiskPartition(const char *fileName, uintptr_t nameLength){
 	EXPECT(nameLength >= 2 && fileName[1] == '/');
@@ -284,8 +285,9 @@ static IORequest *openFAT(const char *fileName, uintptr_t nameLength){
 	strncpy(ofp->fileName, fileName, nameLength);
 	ofp->nameLength = nameLength;
 	ofp->fileHandle = IO_REQUEST_FAILURE;
-	Task *t = createKernelThread(openFATTask, &ofp, sizeof(ofp));
+	Task *t = createSharedMemoryTask(openFATTask, &ofp, sizeof(ofp), fat32List.mainTask);
 	EXPECT(t != NULL);
+	resume(t);
 	setCancellable(&ofp->ior, 0);
 	pendIO(&ofp->ior);
 	return &ofp->ior;
@@ -323,6 +325,7 @@ static void openFATTask(void *p){
 }
 
 void fatService(void){
+	fat32List.mainTask = processorLocalTask();
 	//slab = createUserSlabManager();
 	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
 	assert(discoverFAT != IO_REQUEST_FAILURE);
@@ -364,12 +367,13 @@ void testFAT(void){
 	int a;
 	for(a = 0; a < 4; a++){
 		sleep(1500);
-		printk("open fat...\n");
+		printk("test open fat...\n");
 		uintptr_t fileHandle = syncOpenFile("fat:C/");
 		if(fileHandle != IO_REQUEST_FAILURE)
 			break;
-		printk("open fat failed...\n");
+		printk("test open fat failed...\n");
 	}
+	printk("test open fat ok...\n");
 	while(1){
 		sleep(2000);
 	}

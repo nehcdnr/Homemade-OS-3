@@ -25,6 +25,8 @@ void pendIO(IORequest *ior);
 IORequest *waitIO(Task *t, IORequest *ioNumber);
 void finishIO(IORequest *ior); // IORequestHandler
 
+// call with UINTPTR_NULL to wait for any I/O request
+// IMPROVE: struct IORequestHandle{uintptr_t value;};
 uintptr_t systemCall_waitIO(uintptr_t ioNumber);
 uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
 int systemCall_cancelIO(uintptr_t io);
@@ -55,7 +57,8 @@ uintptr_t setAlarm(uint64_t millisecond, int isPeriodic);
 int sleep(uint64_t millisecond);
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);
-void initTimer(void);
+typedef struct SystemCallTable SystemCallTable;
+void initTimer(SystemCallTable *systemCallTable);
 
 //console.h
 void initKernelConsole(void);
