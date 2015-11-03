@@ -23,7 +23,6 @@ typedef struct KFRequest{
 
 static int isValidKFRequest(OpenFileRequest *ofr){
 	KFRequest *kfr = ofr->instance;
-	assert(ofr->task == processorLocalTask());
 	return kfr->isReady;
 }
 
@@ -67,7 +66,7 @@ static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 	return returnCount;
 }
 
-static KFRequest *createKFRequest(const BLOBAddress *file, Task *task);
+static KFRequest *createKFRequest(const BLOBAddress *file);
 
 static IORequest *openKFS(const char *fileName, uintptr_t length){
 	void *mappedPage;
@@ -85,7 +84,7 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 	// file not found
 	if(file == blobList + blobCount)
 		return IO_REQUEST_FAILURE;
-	KFRequest *kfr = createKFRequest(file, processorLocalTask());
+	KFRequest *kfr = createKFRequest(file);
 	if(kfr == NULL)
 		return IO_REQUEST_FAILURE;
 	setCancellable(&kfr->ior, 0);
@@ -150,12 +149,12 @@ static const FileFunctions kernelFileFunctions = INITIAL_FILE_FUNCTIONS(
 	isValidKFRequest
 );
 
-static KFRequest *createKFRequest(const BLOBAddress *file, Task *task){
+static KFRequest *createKFRequest(const BLOBAddress *file){
 	KFRequest *NEW(kfr);
 	if(kfr == NULL)
 		return NULL;
 	initIORequest(&kfr->ior, kfr, closeFileRequest, finishOpenFileRequest);
-	initOpenFileRequest(&kfr->ofr, kfr, task, &kernelFileFunctions);
+	initOpenFileRequest(&kfr->ofr, kfr, &kernelFileFunctions);
 	kfr->file = file;
 	kfr->isReady = 0;
 	kfr->isClosing = 0;

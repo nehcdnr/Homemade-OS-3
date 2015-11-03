@@ -102,14 +102,14 @@ int sleep(uint64_t millisecond){
 }
 
 static void handleTimerEvents(TimerEventList *tel){
-	TimerEvent *periodList = NULL;
+	TimerEvent *periodicList = NULL;
 	acquireLock(&tel->lock);
 	TimerEvent **prev = &(tel->head);
 	while(*prev != NULL){
 		TimerEvent *curr = *prev;
 		if(curr->countDownTicks > 0){
 			curr->countDownTicks--;
-			prev = &((*prev)->next);
+			prev = &(curr->next);
 			continue;
 		}
 		REMOVE_FROM_DQUEUE(curr);
@@ -125,10 +125,15 @@ static void handleTimerEvents(TimerEventList *tel){
 		}
 #endif
 		if(curr->tickPeriod > 0){
-			ADD_TO_DQUEUE(curr, &periodList);
+			ADD_TO_DQUEUE(curr, &periodicList);
 		}
 	}
-	APPEND_TO_DQUEUE(&periodList, prev);
+	// append periodicList to *prev
+	*prev = periodicList;
+	if(periodicList != NULL){
+		periodicList->prev = prev;
+		//periodicList = NULL;
+	}
 	releaseLock(&tel->lock);
 }
 

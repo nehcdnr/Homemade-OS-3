@@ -37,6 +37,7 @@ typedef IORequest *OpenFileFunction(const char *fileName, uintptr_t nameLength);
 int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t nameLength);
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
+// if openFile failed, return IO_REQUEST_FAILURE
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength);
 uintptr_t syncOpenFile(const char *fileName);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength);
@@ -85,14 +86,14 @@ typedef struct Task Task;
 struct OpenFileRequest{
 	void *instance;
 	uintptr_t handle;
-	Task *task;
+	//Task *task;
 	FileFunctions fileFunctions;
 	OpenFileRequest *next, **prev;
 };
 void initOpenFileRequest(
 	OpenFileRequest *ofr,
 	void *instance,
-	Task *task,
+	//Task *task,
 	const FileFunctions *fileFunctions
 );
 void addToOpenFileList(OpenFileRequest *ofr);

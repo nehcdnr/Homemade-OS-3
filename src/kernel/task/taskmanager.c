@@ -469,9 +469,9 @@ uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
 	return systemCall3(SYSCALL_CREATE_USER_THREAD, (uintptr_t)entry, stackSize);
 }
 
-Task *createKernelThread(void (*entry)(void)){
+Task *createKernelThread(void (*entry)(void*), void *arg, uintptr_t argSize){
 	Task *current = processorLocalTask();
-	Task *newTask = createKernelTask(entry, NULL, 0, current->priority,current->taskMemory);
+	Task *newTask = createKernelTask(entry, arg, argSize, current->priority,current->taskMemory);
 	if(newTask != NULL){
 		resume(newTask);
 	}
@@ -900,11 +900,12 @@ static void threadEntry(void){
 	systemCall_terminate();
 }
 
-void testCreateThread(void){
+void testCreateThread(void *arg){
+	uintptr_t argValue = *(uintptr_t*)arg;
 	static int failed=0;
 	int a;
 	for(a = 0; failed == 0; a++){
-		if(createKernelThread(testCreateThread) == NULL){
+		if(createKernelThread(testCreateThread, &argValue, sizeof(argValue)) == NULL){
 			failed=1;
 			printk("failed\n");
 		}

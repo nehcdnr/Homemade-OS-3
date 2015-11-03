@@ -814,7 +814,7 @@ static OpenAHCIRequest *createOpenAHCIRequest(AHCIManager *ahciManager, HBAPortI
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS(NULL, NULL, NULL, NULL, seekReadAHCI, NULL/*seekWriteAHCI*/, NULL, NULL, NULL);
 	OpenAHCIRequest *NEW(oar);
 	EXPECT(oar != NULL);
-	initOpenFileRequest(&oar->ofr, oar, processorLocalTask(), &ff);
+	initOpenFileRequest(&oar->ofr, oar, &ff);
 	oar->manager = ahciManager;
 	oar->diskCode = diskCode;
 	return oar;

@@ -46,7 +46,7 @@ int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 // return task id if succeeded
 // task id is an address in kernel space. we haven't defined the usage yet
 uintptr_t systemCall_createUserThread(void (*entry)(void), uintptr_t stackSize);
-Task *createKernelThread(void (*entry)(void));
+Task *createKernelThread(void (*entry)(void*), void *arg, uintptr_t argSize);
 // always succeed and do not return
 void terminateCurrentTask(void);
 void systemCall_terminate(void);

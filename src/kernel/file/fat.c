@@ -3,7 +3,9 @@
 #include"io/io.h"
 #include"file.h"
 #include"interrupt/systemcall.h"
+#include"task/task.h"
 #include"multiprocessor/processorlocal.h"
+#include"multiprocessor/spinlock.h"
 
 #pragma pack(1)
 
@@ -24,7 +26,7 @@ typedef struct __attribute((__packed__)){
 	uint32_t sectorsPerFAT32;
 	uint16_t flags; // bit 0~4: active FAT copies; bit 7: FAT mirroring disabled
 	uint16_t version;
-	uint32_t rootCluster;
+	uint32_t rootCluster; // first data cluster. typically = 2
 	uint16_t fsInfoSector;
 	uint16_t backupBootSector;
 	uint8_t reserved[12];
@@ -105,19 +107,25 @@ static_assert(sizeof(LongFATDirEntry) == 32);
 
 #pragma pack()
 
-static struct SlabManager *slab = NULL;
+//static struct SlabManager *slab = NULL;
 
-struct DiskParameter{
-	uint64_t startLBA;
+typedef struct FAT32DiskPartition{
 	uintptr_t diskFileHandle;
+	uint64_t startLBA;
+	uint64_t firstDataLBA;
 	uintptr_t sectorSize;
-};
+	char partitionName;
+	const FATBootSector *bootRecord;
+	uint32_t *fat;
 
-static uint32_t *loadFAT32(const FATBootSector *br, const struct DiskParameter *dp){
+	struct FAT32DiskPartition **prev, *next;
+}FAT32DiskPartition;
+
+static uint32_t *loadFAT32(const FATBootSector *br, const FAT32DiskPartition *dp){
 	const size_t fatSize = br->ebr32.sectorsPerFAT32 * br->bytesPerSector;
 	const uint64_t fatBeginLBA = dp->startLBA + br->reservedSectorCount;
 	const uintptr_t sectorsPerPage = PAGE_SIZE / dp->sectorSize;
-	uint32_t *fat = systemCall_allocateHeap(CEIL(fatSize, PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
+	uint32_t *fat = systemCall_allocateHeap(CEIL(fatSize, PAGE_SIZE), KERNEL_NON_CACHED_PAGE);//TODO:
 	EXPECT(fat != NULL);
 	unsigned p;
 	for(p = 0; p * PAGE_SIZE < fatSize; p++){
@@ -138,10 +146,11 @@ static uint32_t *loadFAT32(const FATBootSector *br, const struct DiskParameter *
 }
 
 static void iterateDirectory(uint32_t beginClusterSector,
-	uint32_t sectorsPerCluster, const struct DiskParameter *dp){
+	uint32_t sectorsPerCluster, const FAT32DiskPartition *dp){
 	const uintptr_t clusterSize = sectorsPerCluster * dp->sectorSize;
 	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
-	EXPECT(rootDir != NULL);
+	EXPECT(rootDir != NULL);printk("m0 %x\n",rootDir);
+	MEMSET0(rootDir);printk("m0 %x\n",rootDir);
 	uintptr_t readSize = clusterSize;
 	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
 		rootDir, beginClusterSector, &readSize);
@@ -168,15 +177,21 @@ static void iterateDirectory(uint32_t beginClusterSector,
 	return;
 };
 
-static struct DiskParameter *createFATPartition(uintptr_t fileHandle, uint64_t startLBA, uintptr_t sectorSize){
-	struct DiskParameter *NEW(dp);
+static uint64_t clusterToLBA(const FAT32DiskPartition *dp, uint32_t cluster){
+	return dp->firstDataLBA + (cluster - 2) * (uint64_t)dp->bootRecord->sectorsPerCluster;
+}
+
+static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t startLBA, uintptr_t sectorSize, char partitionName){
+	FAT32DiskPartition *NEW(dp);
 	EXPECT(dp != NULL);
 	dp->diskFileHandle = fileHandle;
 	dp->startLBA = startLBA;
 	dp->sectorSize = sectorSize;
+	dp->partitionName = partitionName;
 	const uintptr_t readSize = CEIL(sizeof(FATBootSector), dp->sectorSize);
-	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
+	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);//TODO:
 	EXPECT(br != NULL);
+	dp->bootRecord = br;
 	MEMSET0(br);
 	uintptr_t actualReadSize = readSize;
 	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
@@ -190,17 +205,16 @@ static struct DiskParameter *createFATPartition(uintptr_t fileHandle, uint64_t s
 
 	uint32_t *fat = loadFAT32(br, dp);
 	EXPECT(fat != NULL);
+	dp->fat = fat;
 	//const unsigned fatEntryCount = br->ebr32.sectorsPerFAT32 * (sectorSize / 4);
 	//unsigned p;
-	const uint64_t rootClusterSector = dp->startLBA +
-		br->reservedSectorCount + br->ebr32.sectorsPerFAT32 * br->fatCount +
-		(br->ebr32.rootCluster-2) * br->sectorsPerCluster;
-	iterateDirectory(rootClusterSector, br->sectorsPerCluster, dp);
+	dp->firstDataLBA = dp->startLBA +
+		(uint64_t)br->reservedSectorCount + br->ebr32.sectorsPerFAT32 * (uint64_t)br->fatCount;
 	printk("read fat ok\n");
-	systemCall_releaseHeap(fat);
-	systemCall_releaseHeap((void*)br);
+	dp->prev = NULL;
+	dp->next = NULL;
 	return dp;
-	//systemCall_releaseHeap(br);
+	//systemCall_releaseHeap(fat);
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
@@ -212,14 +226,104 @@ static struct DiskParameter *createFATPartition(uintptr_t fileHandle, uint64_t s
 }
 
 #define FAT32_SERVICE_NAME "fat32"
-// TODO:
-static IORequest *openFAT(
-	__attribute__((__unused__)) const char *fileName, __attribute__((__unused__)) uintptr_t nameLength){
+
+struct FAT32Collection{
+	FAT32DiskPartition *head;
+	Spinlock lock;
+}fat32List = {NULL, INITIAL_SPINLOCK};
+
+static FAT32DiskPartition *searchFAT32DiskPartition(const char *fileName, uintptr_t nameLength){
+	EXPECT(nameLength >= 2 && fileName[1] == '/');
+	FAT32DiskPartition *f;
+	acquireLock(&fat32List.lock);
+	for(f = fat32List.head; f != NULL; f = f->next){
+		if(f->partitionName == fileName[0])
+			break;
+	}
+	releaseLock(&fat32List.lock);
+	return f;
+	ON_ERROR;
 	return NULL;
 }
 
+static void addFAT32DiskPartition(FAT32DiskPartition *dp){
+	acquireLock(&fat32List.lock);
+	ADD_TO_DQUEUE(dp, &fat32List.head);
+	releaseLock(&fat32List.lock);
+}
+
+typedef struct{
+	OpenFileRequest ofr;
+}FATFile;
+
+typedef struct{
+	IORequest ior;
+	uintptr_t nameLength;
+	uintptr_t fileHandle;
+	char fileName[];
+}OpenFATRequest;
+
+static void cancelOpenFAT(__attribute__((__unused__)) IORequest *ior){
+	// OpenFATRequest *ofr = ior->instance;
+	// TODO: not supported
+}
+
+static int finishOpenFAT(IORequest *ior, uintptr_t *returnValues){
+	OpenFATRequest *ofr = ior->instance;
+	returnValues[0] = ofr->fileHandle;
+	DELETE(ofr);
+	return 1;
+}
+
+static void openFATTask(void *p);
+
+static IORequest *openFAT(const char *fileName, uintptr_t nameLength){
+	OpenFATRequest *ofp = allocateKernelMemory(sizeof(*ofp) + nameLength);
+	EXPECT(ofp != NULL);
+	initIORequest(&ofp->ior, ofp, cancelOpenFAT, finishOpenFAT);
+	strncpy(ofp->fileName, fileName, nameLength);
+	ofp->nameLength = nameLength;
+	ofp->fileHandle = IO_REQUEST_FAILURE;
+	Task *t = createKernelThread(openFATTask, &ofp, sizeof(ofp));
+	EXPECT(t != NULL);
+	setCancellable(&ofp->ior, 0);
+	pendIO(&ofp->ior);
+	return &ofp->ior;
+	// delete task
+	ON_ERROR;
+	ON_ERROR;
+	return IO_REQUEST_FAILURE;
+}
+
+static IORequest *closeFAT(__attribute__((__unused__)) OpenFileRequest *ofr){
+	// TODO:
+	return IO_REQUEST_FAILURE;
+}
+
+static void openFATTask(void *p){
+	OpenFATRequest *ofp = *(OpenFATRequest**)p;
+	FAT32DiskPartition *dp = searchFAT32DiskPartition(ofp->fileName, ofp->nameLength);
+	EXPECT(dp != NULL);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS(openFAT, NULL, NULL, NULL, NULL, NULL, NULL, closeFAT, NULL);
+	FATFile *NEW(file);
+	EXPECT(file != NULL);
+	initOpenFileRequest(&file->ofr, file, &ff);
+	// TODO: file path
+	iterateDirectory(clusterToLBA(dp, dp->bootRecord->ebr32.rootCluster), dp->bootRecord->sectorsPerCluster, dp);
+
+	ofp->fileHandle = getFileHandle(&file->ofr);
+	finishIO(&ofp->ior);
+	terminateCurrentTask();
+	//DELETE(file);
+	ON_ERROR;
+	ON_ERROR;
+	ofp->fileHandle = IO_REQUEST_FAILURE;
+	finishIO(&ofp->ior);
+	terminateCurrentTask();
+}
+
 void fatService(void){
-	slab = createUserSlabManager(); // move it to user library
+	//slab = createUserSlabManager();
 	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
 	assert(discoverFAT != IO_REQUEST_FAILURE);
 	//int diskDriver;
@@ -230,7 +334,8 @@ void fatService(void){
 	if(addFileSystem(openFAT, "fat", strlen("fat")) != 1){
 		printk("add file system failure\n");
 	}
-	while(1){
+	int i;
+	for(i = 'C'; i < 'Z'; i++){
 		uintptr_t diskFileHandle, sectorSize;
 		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
 			discoverFAT, 4,
@@ -239,10 +344,12 @@ void fatService(void){
 			printk("discover disk failure\n");
 			continue;
 		}
-		struct DiskParameter *dp = createFATPartition(diskFileHandle, COMBINE64(startLBALow, startLBAHigh), sectorSize);
+		FAT32DiskPartition *dp = createFATPartition(diskFileHandle, COMBINE64(startLBALow, startLBAHigh), sectorSize, i);
 		if(dp == NULL){
 			continue;
-		}//TODO:
+		}
+		addFAT32DiskPartition(dp);
+		//TODO:
 	}
 	printk("too many fat systems\n");
 	while(1){
@@ -250,3 +357,21 @@ void fatService(void){
 	}
 	panic("cannot initialize FAT32 service");
 }
+
+#ifndef NDEBUG
+void testFAT(void);
+void testFAT(void){
+	int a;
+	for(a = 0; a < 4; a++){
+		sleep(1500);
+		printk("open fat...\n");
+		uintptr_t fileHandle = syncOpenFile("fat:C/");
+		if(fileHandle != IO_REQUEST_FAILURE)
+			break;
+		printk("open fat failed...\n");
+	}
+	while(1){
+		sleep(2000);
+	}
+}
+#endif

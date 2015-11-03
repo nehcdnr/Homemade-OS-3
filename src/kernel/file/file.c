@@ -124,7 +124,7 @@ int addDiskPartition(
 	uintptr_t fileHandle
 ){
 	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE);
-	struct DiskPartition *NEW(dp);
+	DiskPartition *NEW(dp);
 	EXPECT(dp != NULL);
 	initResource(&dp->resource, dp, matchDiskType, returnDiskValues);
 	dp->type = diskType;
@@ -181,14 +181,15 @@ int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t na
 
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
 	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)];
+	MEMSET0(name32);
 	strncpy((char*)name32, name, nameLength);
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
 
-void initOpenFileRequest(OpenFileRequest *ofr, void *instance, Task *task, const FileFunctions *fileFunctions){
+void initOpenFileRequest(OpenFileRequest *ofr, void *instance, /*Task *task, */const FileFunctions *fileFunctions){
 	ofr->instance = instance;
 	ofr->handle = (uintptr_t)&ofr->handle;
-	ofr->task = task;
+	//ofr->task = task;
 	ofr->fileFunctions = (*fileFunctions);
 	ofr->next = NULL;
 	ofr->prev = NULL;
