@@ -843,7 +843,7 @@ void ahciDriver(void){
 				continue;
 			}
 			OpenAHCIRequest *oar = createOpenAHCIRequest(&ahciManager, diskCode);
-			addToOpenFileList(&oar->ofr); // TODO: remove file when driver is unloaded
+			addToOpenFileList(globalOpenFileManager, &oar->ofr); // TODO: remove file when driver is unloaded
 			readPartitions("ahci", getFileHandle(&oar->ofr), 0,
 			arg->desc.sectorCount, arg->desc.sectorSize);
 		}

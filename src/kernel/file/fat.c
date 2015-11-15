@@ -149,8 +149,8 @@ static void iterateDirectory(uint32_t beginClusterSector,
 	uint32_t sectorsPerCluster, const FAT32DiskPartition *dp){
 	const uintptr_t clusterSize = sectorsPerCluster * dp->sectorSize;
 	FATDirEntry *rootDir = systemCall_allocateHeap(clusterSize, KERNEL_NON_CACHED_PAGE);
-	EXPECT(rootDir != NULL);printk("m0 %x\n",rootDir);
-	MEMSET0(rootDir);printk("m0 %x\n",rootDir);
+	EXPECT(rootDir != NULL);
+	MEMSET0(rootDir);
 	uintptr_t readSize = clusterSize;
 	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
 		rootDir, beginClusterSector, &readSize);

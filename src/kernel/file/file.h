@@ -96,9 +96,17 @@ void initOpenFileRequest(
 	//Task *task,
 	const FileFunctions *fileFunctions
 );
-void addToOpenFileList(OpenFileRequest *ofr);
-void removeFromOpenFileList(OpenFileRequest *ofr);
+
+typedef struct OpenFileManager OpenFileManager;
+OpenFileManager *createOpenFileManager(void);
+void deleteOpenFileManager(OpenFileManager *ofm);
+int addOpenFileManagerReference(OpenFileManager *ofm, int n);
+void addToOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr);
+void removeFromOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr);
 uintptr_t getFileHandle(OpenFileRequest *ofr);
+void closeAllOpenFileRequest(OpenFileManager *ofm);
+
+extern OpenFileManager *globalOpenFileManager; // see taskmanager.c
 
 // FAT32
 void fatService(void);

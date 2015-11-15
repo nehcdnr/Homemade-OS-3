@@ -46,7 +46,7 @@ static void _finishFileIO(KFRequest *kfr, int returnCount, ...){
 
 static void closeFileRequest(IORequest *ior){
 	KFRequest *of = ior->instance;
-	removeFromOpenFileList(&of->ofr);
+	removeFromOpenFileList(getOpenFileManager(processorLocalTask()), &of->ofr);
 	DELETE(of);
 }
 
@@ -89,7 +89,7 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 		return IO_REQUEST_FAILURE;
 	setCancellable(&kfr->ior, 0);
 	pendIO(&kfr->ior);
-	addToOpenFileList(&kfr->ofr);
+	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
 	kfr->isReady = 1;
 	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
 	return &kfr->ior;
@@ -239,6 +239,10 @@ void testKFS(void){
 	// not opened
 	r2 = systemCall_readFile(file, &r2, 1);
 	assert(r2 == IO_REQUEST_FAILURE);
+
+	// test auto close file
+	file = syncOpenFile(f2);
+	assert(file != IO_REQUEST_FAILURE);
 	printk("testKFS ok\n");
 	systemCall_terminate();
 }

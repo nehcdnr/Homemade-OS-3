@@ -8,8 +8,8 @@
 #include"interrupt/handler.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
-#include"io/fifo.h"
 #include"io/io.h"
+#include"file/file.h"
 #include"interrupt/systemcall.h"
 #include"common.h"
 
@@ -20,6 +20,7 @@ typedef struct TaskMemoryManager{
 }TaskMemoryManager;
 
 static TaskMemoryManager *kernelTaskMemory = NULL;
+OpenFileManager *globalOpenFileManager = NULL;
 
 static int addTaskMemoryReference(TaskMemoryManager *m, int value){
 	acquireLock(&m->lock);
@@ -68,6 +69,8 @@ typedef struct Task{
 
 	// user space memory
 	TaskMemoryManager *taskMemory;
+	// opened files
+	OpenFileManager *openFileManager;
 
 	// scheduling
 	enum TaskState state;
@@ -303,7 +306,8 @@ static void undefinedSystemCall(__attribute__((__unused__)) InterruptParam *p){
 uint32_t initTaskStack(uint32_t eFlags, uint32_t eip, uint32_t esp0);
 
 static Task *createTask(
-	uint32_t esp0, uint32_t espInterrupt, void *stackBottom, TaskMemoryManager *taskMemory, int priority
+	uint32_t esp0, uint32_t espInterrupt, void *stackBottom,
+	TaskMemoryManager *taskMemory, OpenFileManager *openFileManager, int priority
 ){
 	Task *NEW(t);
 	EXPECT(t != NULL);
@@ -319,6 +323,8 @@ static Task *createTask(
 	t->finishedIOList = NULL;
 	t->taskMemory = taskMemory;
 	addTaskMemoryReference(taskMemory, 1);
+	t->openFileManager = openFileManager;
+	addOpenFileManagerReference(openFileManager, 1);
 	t->state = SUSPENDED;
 	t->priority = priority;
 	t->taskDefinedSystemCall = undefinedSystemCall;
@@ -335,7 +341,8 @@ static Task *createTask(
 }
 
 // create task and kernel stack
-static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int priority, TaskMemoryManager *tm){
+static Task *createKernelTask(void *eip0, const void *arg, size_t argSize,
+	int priority, TaskMemoryManager *tm, OpenFileManager *ofm){
 	// kernel task stack
 	EXPECT(argSize <= KERNEL_STACK_SIZE / 2);
 	void *stackBottom = allocateKernelPages(KERNEL_STACK_SIZE, KERNEL_PAGE);
@@ -354,7 +361,7 @@ static Task *createKernelTask(void *eip0, const void *arg, size_t argSize, int p
 	EFlags eflags = getEFlags();
 	eflags.bit.interrupt = 0;
 	esp0 = initTaskStack(eflags.value, (uint32_t)eip0, esp0);
-	Task *t = createTask(esp0, stackTop - 4, stackBottom, tm, priority);
+	Task *t = createTask(esp0, stackTop - 4, stackBottom, tm, ofm, priority);
 	EXPECT(t != NULL);
 	return t;
 	//DELETE(t);
@@ -373,22 +380,34 @@ int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr){
 	if(beginAddr % MIN_BLOCK_SIZE != 0 || beginAddr >= HEAP_END ||
 		initEndAddr % MIN_BLOCK_SIZE != 0 || beginAddr > initEndAddr)
 		return 0;
-	TaskMemoryManager *tmm = processorLocalTask()->taskMemory;
-	assert(tmm->manager.linear == NULL);
+	LinearMemoryManager *lmm = &(processorLocalTask()->taskMemory->manager);
+	assert(lmm->linear == NULL);
 	uintptr_t manageBegin = USER_LINEAR_BLOCK_MANAGER_ADDRESS;
 	uintptr_t manageEnd = evaluateLinearBlockEnd(manageBegin, beginAddr, initEndAddr);
-	int ok = _mapPage_L(tmm->manager.page, tmm->manager.physical,
+	int ok = _mapPage_L(lmm->page, lmm->physical,
 		(void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE), KERNEL_PAGE);
 	EXPECT(ok);
 	LinearMemoryBlockManager *lmb = createLinearBlockManager(
 			manageBegin, maxLinearBlockManagerSize, beginAddr, initEndAddr, HEAP_END);
 	EXPECT((uintptr_t)lmb == USER_LINEAR_BLOCK_MANAGER_ADDRESS);
-	tmm->manager.linear = lmb;
+	lmm->linear = lmb;
 	return 1;
 	ON_ERROR;
-	_unmapPage_L(tmm->manager.page, tmm->manager.physical, (void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
+	_unmapPage_L(lmm->page, lmm->physical, (void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
 	ON_ERROR;
 	return 0;
+}
+
+static void destroyUserLinearBlockManager(LinearMemoryManager *lmm){
+	// assert(lmm == &processorLocalTask()->taskMemory->manager);
+	assert(lmm->linear != NULL);
+	releaseAllLinearBlocks(lmm);
+	uintptr_t manageBegin = (uintptr_t)lmm->linear;
+	uintptr_t manageEnd = getInitialLinearBlockEnd(lmm->linear);
+	// assert(manageBegin % PAGE_SIZE == 0);
+	_unmapPage_L(lmm->page, lmm->physical,
+		(void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
+	lmm->linear = NULL;
 }
 
 struct NoLoaderParam{
@@ -416,15 +435,20 @@ Task *createTaskAndMemorySpace(void (*loader)(void*), void *arg, size_t argSize,
 	// 2. taskMemory.linear will be initialized in noLoader
 	TaskMemoryManager *tm = createTaskMemory(kernelLinear->physical, pageManager, NULL);
 	EXPECT(tm != NULL);
-	Task *t = createKernelTask(loader, arg, argSize, priority, tm);
+	// 3. openFileManager
+	OpenFileManager *ofm = createOpenFileManager();
+	EXPECT(ofm != NULL);
+	Task *t = createKernelTask(loader, arg, argSize, priority, tm, ofm);
 	EXPECT(t != NULL);
 
 	unmapUserPageTableSet(pageManager);
-	// 5. see startTask
+	// see startTask
 	return t;
 	// DELETE(t)
 	ON_ERROR;
-	assert(tm->referenceCount == 0);
+	assert(ofm == 0);
+	deleteOpenFileManager(ofm);
+	ON_ERROR;
 	deleteTaskMemory(tm);
 	ON_ERROR;
 	releasePageTable(pageManager);
@@ -459,7 +483,8 @@ static void createUserThreadHandler(InterruptParam *p){
 	Task *current = processorLocalTask();
 	// TODO: check if the entry is legal
 	struct UserThreadParam param = {entry, stackSize};
-	Task *newTask = createKernelTask(userThreadEntry, &param, sizeof(param), current->priority, current->taskMemory);
+	Task *newTask = createKernelTask(userThreadEntry, &param, sizeof(param),
+		current->priority, current->taskMemory, current->openFileManager);
 	if(newTask != NULL){
 		resume(newTask);
 	}
@@ -472,7 +497,8 @@ uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
 
 // TODO: how to check if sharedMemoryTask is valid?
 Task *createSharedMemoryTask(void (*entry)(void*), void *arg, uintptr_t argSize, Task *sharedMemoryTask){
-	return createKernelTask(entry, arg, argSize, sharedMemoryTask->priority, sharedMemoryTask->taskMemory);
+	return createKernelTask(entry, arg, argSize,
+		sharedMemoryTask->priority, sharedMemoryTask->taskMemory, sharedMemoryTask->openFileManager);
 }
 
 static int tryToCancelIO(Task *t, IORequest *ior);
@@ -531,6 +557,12 @@ void terminateCurrentTask(void){
 	clearTerminateQueue(&terminateQueue);
 	cancelAllIORequests();
 	Task *t = processorLocalTask();
+	int fileRefCnt = addOpenFileManagerReference(t->openFileManager, -1);
+	if(fileRefCnt == 0){
+		closeAllOpenFileRequest(t->openFileManager);
+		deleteOpenFileManager(t->openFileManager);
+	}
+	t->openFileManager = NULL;
 	// 1. delete ioSemaphore
 	deleteSemaphore(t->ioSemaphore);
 	t->ioSemaphore = NULL;
@@ -544,18 +576,12 @@ void terminateCurrentTask(void){
 		t->userStackBottom = INVALID_PAGE_ADDRESS;
 	}
 	// 3. delete user space
-	int refCnt = addTaskMemoryReference(tmm, -1);
-	if(refCnt == 0){
+	int memoryRefCnt = addTaskMemoryReference(tmm, -1);
+	if(memoryRefCnt == 0){
 		PageManager *p = tmm->manager.page;
 		// delete linear
 		if(tmm->manager.linear != NULL){
-			// see initUserLinearBlockManager
-			releaseAllLinearBlocks(&tmm->manager);
-			uintptr_t manageBegin = (uintptr_t)tmm->manager.linear;
-			uintptr_t manageEnd = getInitialLinearBlockEnd(tmm->manager.linear);
-			// assert(manageBegin % PAGE_SIZE == 0);
-			_unmapPage_L(tmm->manager.page, tmm->manager.physical,
-				(void*)manageBegin, CEIL(manageEnd - manageBegin, PAGE_SIZE));
+			destroyUserLinearBlockManager(&tmm->manager);
 		}
 		// delete page
 		cli();
@@ -608,6 +634,10 @@ LinearMemoryManager *getTaskLinearMemory(Task *t){
 	return &t->taskMemory->manager;
 }
 
+OpenFileManager *getOpenFileManager(Task *t){
+	return t->openFileManager;
+}
+
 static void taskDefinedHandler(InterruptParam *p){
 	uintptr_t oldArgument = p->argument;
 	Task *t = processorLocalTask();
@@ -619,14 +649,15 @@ static void taskDefinedHandler(InterruptParam *p){
 
 TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
-	assert(kernelTaskMemory != NULL);
+	assert(kernelTaskMemory != NULL && globalOpenFileManager != NULL);
 	// each processor needs an idle task
 	// create a task for current running bootstrap task. not need to initialize eip and esp
 	TaskManager *NEW(tm);
 	if(tm == NULL){
 		panic("cannot initialize task manager");
 	}
-	tm->current = createTask(/*esp0*/0, /*espInterrupt*/0, /*stackBottom*/0, kernelTaskMemory, NUMBER_OF_PRIORITIES - 1);
+	tm->current = createTask(/*esp0*/0, /*espInterrupt*/0, /*stackBottom*/0,
+		kernelTaskMemory, globalOpenFileManager, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
@@ -848,6 +879,10 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	kernelTaskMemory = createTaskMemory(kernelLinear->physical, kernelLinear->page, kernelLinear->linear);
 	if(kernelTaskMemory == NULL){
 		panic("cannot create kernel task memory");
+	}
+	globalOpenFileManager = createOpenFileManager();
+	if(globalOpenFileManager == NULL){
+		panic("cannot create kernel open file manager");
 	}
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);
 	registerSystemCall(systemCallTable, SYSCALL_WAIT_IO, waitIOHandler, 0);

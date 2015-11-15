@@ -196,38 +196,81 @@ void initOpenFileRequest(OpenFileRequest *ofr, void *instance, /*Task *task, */c
 }
 
 // IMPROVE: openFileHashTable
-static OpenFileRequest *openFileList = NULL;
-static Spinlock openFileLock = INITIAL_SPINLOCK;
+struct OpenFileManager{
+	OpenFileRequest *openFileList;
+	Spinlock lock;
+	int referenceCount;
+};
 
-static OpenFileRequest *searchOpenFileList(uintptr_t handle){
+OpenFileManager *createOpenFileManager(void){
+	OpenFileManager *NEW(ofm);
+	if(ofm == NULL){
+		return NULL;
+	}
+	ofm->openFileList = NULL;
+	ofm->lock = initialSpinlock;
+	ofm->referenceCount = 0;
+	return ofm;
+}
+
+void deleteOpenFileManager(OpenFileManager *ofm){
+	assert(ofm->openFileList == NULL && ofm->referenceCount == 0 && isAcquirable(&ofm->lock));
+	DELETE(ofm);
+}
+
+int addOpenFileManagerReference(OpenFileManager *ofm, int n){
+	acquireLock(&ofm->lock);
+	ofm->referenceCount += n;
+	int refCnt = ofm->referenceCount;
+	releaseLock(&ofm->lock);
+	return refCnt;
+}
+
+static OpenFileRequest *searchOpenFileList(OpenFileManager *ofm, uintptr_t handle){
 	OpenFileRequest *ofr;
-	acquireLock(&openFileLock);
-	for(ofr = openFileList; ofr != NULL; ofr = ofr->next){
+	acquireLock(&ofm->lock);
+	for(ofr = ofm->openFileList; ofr != NULL; ofr = ofr->next){
 		if(ofr->handle == handle)
 			break;
 	}
-	releaseLock(&openFileLock);
+	releaseLock(&ofm->lock);
 	if(ofr == NULL)
 		return NULL;
 	return ofr;
 }
 
-void addToOpenFileList(OpenFileRequest *ofr){
-	acquireLock(&openFileLock);
-	ADD_TO_DQUEUE(ofr, &openFileList);
-	releaseLock(&openFileLock);
+void addToOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr){
+	acquireLock(&ofm->lock);
+	ADD_TO_DQUEUE(ofr, &ofm->openFileList);
+	releaseLock(&ofm->lock);
 }
 
-void removeFromOpenFileList(OpenFileRequest *ofr){
-	acquireLock(&openFileLock);
+void removeFromOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr){
+	acquireLock(&ofm->lock);
 	REMOVE_FROM_DQUEUE(ofr);
-	releaseLock(&openFileLock);
+	releaseLock(&ofm->lock);
 }
 
 uintptr_t getFileHandle(OpenFileRequest *ofr){
 	return ofr->handle;
 }
 
+void closeAllOpenFileRequest(OpenFileManager *ofm){
+	assert(ofm->referenceCount == 0);
+	while(1){
+		acquireLock(&ofm->lock);
+		OpenFileRequest *ofr = ofm->openFileList;
+		releaseLock(&ofm->lock);
+		if(ofr == NULL)
+			break;
+		assert(ofr->fileFunctions.close == NULL);
+		uintptr_t r = syncCloseFile(ofr->handle);
+		if(r == IO_REQUEST_FAILURE){
+			printk("warning: cannot close file %x", ofr->handle);
+			REMOVE_FROM_DQUEUE(ofr);
+		}
+	}
+}
 
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
 static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *fileName, uintptr_t nameLength, InterruptParam *p){
@@ -241,7 +284,9 @@ static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *fileName, u
 
 static uintptr_t dispatchFileHandleCommand(const InterruptParam *p){
 	// TODO: check Address
-	OpenFileRequest *arg = searchOpenFileList(SYSTEM_CALL_ARGUMENT_0(p));
+	OpenFileRequest *arg = searchOpenFileList(getOpenFileManager(processorLocalTask()), SYSTEM_CALL_ARGUMENT_0(p));
+	if(arg == NULL)
+		arg = searchOpenFileList(globalOpenFileManager, SYSTEM_CALL_ARGUMENT_0(p));
 	if(arg == NULL)
 		return IO_REQUEST_FAILURE;
 	const FileFunctions *f = &arg->fileFunctions;

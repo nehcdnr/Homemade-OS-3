@@ -30,6 +30,9 @@ static void initService(void){
 	Task *t;
 	for(i = 0; i < LENGTH_OF(services); i++){
 		t = createTaskWithoutLoader(services[i], 1);
+		if(t == NULL){
+			panic("cannot create service");
+		}
 		resume(t);
 	}
 	/*
@@ -89,6 +92,9 @@ void c_entry(void){
 		initFile(global.syscallTable);
 	}
 	// 10. driver
+	if(isBSP){
+		initTimer(global.syscallTable);
+	}
 	initLocalTimer(pic, global.idt, timer);
 
 	//printk("kernel memory usage: %u\n", getAllocatedSize());

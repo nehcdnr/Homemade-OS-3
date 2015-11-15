@@ -8,12 +8,14 @@ typedef struct TaskManager TaskManager;
 typedef struct Task Task;
 typedef struct PageManager PageManager;
 typedef struct LinearMemoryManager LinearMemoryManager;
+typedef struct OpenFileManager OpenFileManager;
 
 // assume interrupt disabled
 void schedule(void);
 
 Task *currentTask(TaskManager *tm);
 LinearMemoryManager *getTaskLinearMemory(Task *t);
+OpenFileManager *getOpenFileManager(Task *t);
 
 void resume(/*TaskManager *tm, */Task *t);
 
