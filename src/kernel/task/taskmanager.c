@@ -514,10 +514,10 @@ static void cancelAllIORequests(void){
 			break;
 		if(tryToCancelIO(t, ior))
 			continue;
-		waitIO(t, ior);
-		if(tryToCancelIO(t, ior))
-			continue;
-		panic("cannot cancel All IO requests");
+		if(ior != waitIO(t, ior))
+			panic("cannot cancel All IO requests");
+		uintptr_t returnValues[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
+		ior->finish(ior, returnValues);
 	}
 }
 
@@ -686,7 +686,7 @@ void finishIO(IORequest *ior){
 	assert(IS_IN_DQUEUE(ior) != 0);
 	REMOVE_FROM_DQUEUE(ior); // t->pendingIOList
 	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
-	ior->cancellable = 1;
+	ior->cancellable = 0;
 	releaseLock(&t->ioListLock);
 	releaseSemaphore(t->ioSemaphore);
 }
@@ -822,7 +822,7 @@ void initIORequest(
 	this->next = NULL;
 	this->task = processorLocalTask();
 	this->cancel = cancelIORequest;
-	this->cancellable = 1;
+	this->cancellable = 0; // not support cancellation by default
 	this->finish = finishIORequest;
 }
 

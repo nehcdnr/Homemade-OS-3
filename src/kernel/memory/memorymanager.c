@@ -90,7 +90,7 @@ void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t s
 	size_t l_size = size;
 	uintptr_t linearAddress = allocateLinearBlock(m, &l_size);
 	EXPECT(linearAddress != INVALID_PAGE_ADDRESS);
-	assert(linearAddress % PAGE_SIZE == 0);
+	assert(linearAddress % PAGE_SIZE == 0 && l_size != 0);
 	// assume linear memory manager and page table are consistent
 	// linearAddess[0 ~ l_size] are guaranteed to be available
 	// it is safe to map pages of l_size

@@ -53,7 +53,7 @@ typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
 TimerEventList *createTimer(void);
 
-uintptr_t setAlarm(uint64_t millisecond, int isPeriodic);
+uintptr_t systemCall_setAlarm(uint64_t millisecond, int isPeriodic);
 int sleep(uint64_t millisecond);
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);

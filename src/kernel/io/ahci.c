@@ -476,7 +476,7 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static int finishDiskRequest(IORequest *ior, uintptr_t *returnValues){ // TODO: delete buffer
+static int finishDiskRequest(IORequest *ior, uintptr_t *returnValues){
 	DiskRequest *dr = ior->instance;
 	returnValues[0] = dr->sectorCount * dr->ahci->desc.sectorSize;
 	// see createDiskRequest
@@ -542,7 +542,6 @@ static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
 	DiskRequest *dr = a->port[portIndex].pendingRequest;
 	if(dr != NULL){
 		REMOVE_FROM_DQUEUE(dr);
-		setCancellable(&dr->this, 0);
 		ADD_TO_DQUEUE(dr, &a->port[portIndex].servingRequest);
 		ok = sendDiskRequest(dr);
 	}

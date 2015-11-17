@@ -284,6 +284,7 @@ void vbeDriver(void){
 	registerService(global.syscallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
 
 	if(switchToVirtual8086Mode(callBIOS) == 0){
-		panic("switch to v8086 error");//TODO: terminate task
+		terminateCurrentTask();
 	}
+	panic("switch to v8086 error");
 }

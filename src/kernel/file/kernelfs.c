@@ -40,14 +40,13 @@ static void _finishFileIO(KFRequest *kfr, int returnCount, ...){
 
 	finishIO(&kfr->ior);
 }
+
 #define FINISH_FILE_IO_1(OFR) _finishFileIO(OFR, 0)
 #define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 1, (V0))
 #define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 2, (V0), (V1))
 
-static void closeFileRequest(IORequest *ior){
-	KFRequest *of = ior->instance;
-	removeFromOpenFileList(getOpenFileManager(processorLocalTask()), &of->ofr);
-	DELETE(of);
+static void cancelOpenFileRequest(__attribute__((__unused__)) IORequest *ior){
+	panic("kernelfs does not support cancellation");
 }
 
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
@@ -56,12 +55,11 @@ static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 	int returnCount = kfr->lastReturnCount;
 	memcpy(returnValues, kfr->lastReturnValues, kfr->lastReturnCount * sizeof(returnValues[0]));
 	if(kfr->isClosing){
-		closeFileRequest(ior);
+		removeFromOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
+		DELETE(kfr);
 	}
 	else{
-		pendIO(ior);
 		kfr->isReady = 1;
-		setCancellable(ior, 1);
 	}
 	return returnCount;
 }
@@ -87,7 +85,6 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 	KFRequest *kfr = createKFRequest(file);
 	if(kfr == NULL)
 		return IO_REQUEST_FAILURE;
-	setCancellable(&kfr->ior, 0);
 	pendIO(&kfr->ior);
 	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
 	kfr->isReady = 1;
@@ -102,7 +99,7 @@ static IORequest *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t buffe
 		return IO_REQUEST_FAILURE;
 
 	KFRequest *kfr = ofr->instance;
-	setCancellable(&kfr->ior, 0);
+	pendIO(&kfr->ior);
 	uintptr_t copySize = MIN(bufferSize, kfr->file->end - kfr->file->begin - kfr->offset);
 	memcpy(buffer, (void*)(kfr->file->begin + kfr->offset), copySize);
 
@@ -117,7 +114,7 @@ static IORequest *seekKFS(OpenFileRequest *ofr, uint64_t position){
 	if(position > kfr->file->end - kfr->file->begin){
 		return IO_REQUEST_FAILURE;
 	}
-	setCancellable(&kfr->ior, 0);
+	pendIO(&kfr->ior);
 	kfr->offset = (uintptr_t)position;
 	FINISH_FILE_IO_1(kfr);
 	return &kfr->ior;
@@ -125,6 +122,7 @@ static IORequest *seekKFS(OpenFileRequest *ofr, uint64_t position){
 
 static IORequest *sizeOfKFS(OpenFileRequest *ofr){
 	KFRequest *kfr = ofr->instance;
+	pendIO(&kfr->ior);
 	uint64_t s = (kfr->file->end - kfr->file->begin);
 	FINISH_FILE_IO_3(kfr, (uint32_t)(s & 0xffffffff), (uint32_t)((s >> 32) & 0xffffffff));
 	return &kfr->ior;
@@ -132,6 +130,7 @@ static IORequest *sizeOfKFS(OpenFileRequest *ofr){
 
 static IORequest *closeKFS(OpenFileRequest *ofr){
 	KFRequest *kfr = ofr->instance;
+	pendIO(&kfr->ior);
 	kfr->isClosing = 1;
 	FINISH_FILE_IO_1(kfr);
 	return &kfr->ior;
@@ -153,12 +152,12 @@ static KFRequest *createKFRequest(const BLOBAddress *file){
 	KFRequest *NEW(kfr);
 	if(kfr == NULL)
 		return NULL;
-	initIORequest(&kfr->ior, kfr, closeFileRequest, finishOpenFileRequest);
+	initIORequest(&kfr->ior, kfr, cancelOpenFileRequest, finishOpenFileRequest);
 	initOpenFileRequest(&kfr->ofr, kfr, &kernelFileFunctions);
 	kfr->file = file;
 	kfr->isReady = 0;
 	kfr->isClosing = 0;
-	MEMSET0(kfr->lastReturnValues);
+	memset(kfr->lastReturnValues, 0, sizeof(kfr->lastReturnValues));
 	kfr->lastReturnCount = 0;
 	kfr->offset = 0;
 	return kfr;

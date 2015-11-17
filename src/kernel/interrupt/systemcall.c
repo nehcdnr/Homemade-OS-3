@@ -257,7 +257,7 @@ enum ServiceNameError systemCall_queryServiceN(const char *name, uintptr_t nameL
 		return INVALID_NAME;
 	}
 	uintptr_t name4[MAX_NAME_LENGTH / sizeof(uintptr_t)];
-	MEMSET0((void*)name4);
+	memset(name4, 0, sizeof(name4));
 	strncpy((char*)name4, name, MAX_NAME_LENGTH);
 	enum ServiceNameError r = systemCall5(SYSCALL_QUERY_SERVICE ,name4[0], name4[1], name4[2], name4[3]);
 	assert((r < SYSCALL_SERVICE_END && r >= SYSCALL_SERVICE_BEGIN) || r < 0);

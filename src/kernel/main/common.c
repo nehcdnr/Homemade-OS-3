@@ -63,6 +63,14 @@ char *strncpy(char *dst, const char *src, size_t n){
 	return dst;
 }
 
+int tolower(int c){
+	return (c >= 'A' && c <= 'Z'? c - 'A' + 'a': c);
+}
+
+int toupper(int c){
+	return (c >= 'a' && c <= 'z'? c - 'a' + 'A': c);
+}
+
 int printString(const char *s, size_t length);
 
 #define printUnsigned(FUNC, BASE, BUFSIZE) \

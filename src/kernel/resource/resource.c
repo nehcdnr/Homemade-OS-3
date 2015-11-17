@@ -61,6 +61,7 @@ static int finishNewResourceEvent(IORequest *ior, uintptr_t *returnValues){
 	REMOVE_FROM_DQUEUE(nr);
 	releaseLock(nre->lock);
 
+	setCancellable(&nre->this, 1);
 	pendIO(&nre->this);
 
 	acquireLock(nre->lock);
@@ -122,7 +123,9 @@ static void discoverResourceHandler(InterruptParam *p){
 	ResourceManager *rm = resourceManager + t;
 	NewResourceEvent *nre = createNewResourceEvent(&rm->lock, p);
 	EXPECT(nre != NULL);
+	setCancellable(&nre->this, 1);
 	pendIO(&nre->this);
+
 	acquireLock(&rm->lock);
 	ADD_TO_DQUEUE(nre, &rm->listener);
 	for(r = rm->list; r != NULL; r = r->next){

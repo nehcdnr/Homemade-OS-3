@@ -41,6 +41,7 @@ static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_
 	}
 	else{
 		acquireLock(te->lock);
+		setCancellable(ior, 1);
 		pendIO(ior);
 		te->isSentToTask = 0;
 		releaseLock(te->lock);
@@ -76,10 +77,13 @@ static void setAlarmHandler(InterruptParam *p){
 	uint64_t millisecond = COMBINE64(SYSTEM_CALL_ARGUMENT_0(p), SYSTEM_CALL_ARGUMENT_1(p));
 	uintptr_t isPeriodic = SYSTEM_CALL_ARGUMENT_2(p);
 	EXPECT(millisecond <= 1000000000 * (uint64_t)1000);
-	const uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
+	uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
+	if(tick == 0)
+		tick = 1;
 	TimerEvent *te = createTimerEvent((isPeriodic? tick: 0));
 	EXPECT(te != NULL);
 	IORequest *ior = &te->this;
+	setCancellable(ior, 1);
 	pendIO(ior);
 	addTimerEvent(processorLocalTimer(), tick, te);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
@@ -89,13 +93,12 @@ static void setAlarmHandler(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
 }
 
-//TODO:systemCall_setAlarm
-uintptr_t setAlarm(uint64_t millisecond, int isPeriodic){
+uintptr_t systemCall_setAlarm(uint64_t millisecond, int isPeriodic){
 	return systemCall4(SYSCALL_SET_ALARM, LOW64(millisecond), HIGH64(millisecond), (uintptr_t)isPeriodic);
 }
 
 int sleep(uint64_t millisecond){
-	uintptr_t te = setAlarm(millisecond, 0);
+	uintptr_t te = systemCall_setAlarm(millisecond, 0);
 	if(te == IO_REQUEST_FAILURE){
 		return 0;
 	}

@@ -151,7 +151,7 @@ typedef struct FileSystem{
 
 static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
 	FileSystem *fs = resource->instance;
-	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};
+	uintptr_t name32[MAX_FILE_SERVICE_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};
 	if(((char*)name32)[0] == '\0' || // match any file system
 	strncmp(fs->name, (const char*)name32, MAX_FILE_SERVICE_NAME_LENGTH) == 0)
 		return 1;
@@ -168,7 +168,7 @@ int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t na
 	FileSystem *NEW(fs);
 	EXPECT(fs != NULL);
 	initResource(&fs->resource, fs, matchFileSystemName, returnFileService);
-	MEMSET0(fs->name);
+	memset(fs->name, 0, sizeof(fs->name));
 	strncpy(fs->name, name, nameLength);
 	fs->openFile = openFileFunction;
 	addResource(RESOURCE_FILE_SYSTEM, &fs->resource);
@@ -180,8 +180,8 @@ int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t na
 }
 
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
-	uintptr_t name32[MAX_NAME_LENGTH / sizeof(uintptr_t)];
-	MEMSET0(name32);
+	uintptr_t name32[MAX_FILE_SERVICE_NAME_LENGTH / sizeof(uintptr_t)];
+	memset(name32, 0, sizeof(name32));
 	strncpy((char*)name32, name, nameLength);
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
@@ -263,7 +263,7 @@ void closeAllOpenFileRequest(OpenFileManager *ofm){
 		releaseLock(&ofm->lock);
 		if(ofr == NULL)
 			break;
-		assert(ofr->fileFunctions.close == NULL);
+		assert(ofr->fileFunctions.close != NULL);
 		uintptr_t r = syncCloseFile(ofr->handle);
 		if(r == IO_REQUEST_FAILURE){
 			printk("warning: cannot close file %x", ofr->handle);
@@ -443,6 +443,8 @@ static void FileNameCommandHandler(InterruptParam *p){
 	uintptr_t fileSystem;
 	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &fileSystem);
 	assert(r == r2);
+	r2 = systemCall_cancelIO(r);
+	assert(r2);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = dispatchFileNameCommand((FileSystem*)fileSystem, fileName + i + 1, nameLength - i - 1, p);
 	unmapPages(kernelLinear, mappedPage);
 	return;
