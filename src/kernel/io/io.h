@@ -33,6 +33,8 @@ int systemCall_cancelIO(uintptr_t io);
 
 void setCancellable(IORequest *ior, int value);
 
+CancelIORequest notSupportCancelIORequest;
+
 void initIORequest(
 	IORequest *this,
 	void *instance,

@@ -809,6 +809,11 @@ void setCancellable(IORequest *ior, int value){
 	releaseLock(&ior->task->ioListLock);
 }
 
+void notSupportCancelIORequest(IORequest *r){
+	printk("task=%x; instance=%x\n",r->task, r->instance);
+	panic("notSupportCancelIORequest");
+}
+
 void initIORequest(
 	IORequest *this,
 	void *instance,
