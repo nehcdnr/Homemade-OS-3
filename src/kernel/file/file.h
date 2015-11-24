@@ -1,4 +1,5 @@
 #include<std.h>
+#include"memory/memory.h"
 
 // disk driver
 
@@ -51,12 +52,13 @@ uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t posit
 uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t *bufferSize);
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t systemCall_sizeOfFile(uintptr_t handle);
-//uintptr_t syncSizeOfFile(uintptr_t handle);
+uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
 
 // call unmapPages(kernelLinear, mappedPage) to release
 int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer);
+PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uintptr_t *bufferOffset);
 
 typedef struct SystemCallTable SystemCallTable;
 void initFile(SystemCallTable *s);

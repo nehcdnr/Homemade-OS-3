@@ -93,8 +93,7 @@ void *mapPages(LinearMemoryManager *m, PhysicalAddress address, size_t size, Pag
 // translate linear address to physical memory
 PhysicalAddress checkAndTranslatePage(LinearMemoryManager *m, void *linearAddress);
 // same as above; add physical page's reference count
-// call releaseReservedPages to decrease reference count
-// IMPROVE: currently this function cannot reserve physical blocks > MIN_BLOCK_SIZE ( = PAGE_SIZE)
+// call releaseReservedPage to decrease reference count
 PhysicalAddress checkAndReservePage(LinearMemoryManager *m, void *linearAddress, PageAttribute hasAttribute);
 // allocate new linear memory;
 // map to the physical address translated from srcLinear
@@ -116,6 +115,19 @@ void unmapPages(LinearMemoryManager *m, void *linearAddress);
 #define unmapKernelPages(ADDRESS) unmapPages(kernelLinear, ADDRESS)
 int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress);
 void releaseReservedPage(LinearMemoryManager *m, PhysicalAddress physicalAddress);
+
+typedef struct{
+	PhysicalMemoryBlockManager *physicalManager;
+	uintptr_t length;
+	PhysicalAddress address[0];
+}PhysicalAddressArray;
+
+// reserve multiple physical pages
+// the returned data structure is in kernel space
+PhysicalAddressArray *checkAndReservePages(LinearMemoryManager *lm, const void *linearAddress, uintptr_t size);
+void deletePhysicalAddressArray(/*PhysicalMemoryBlockManager *physical, */PhysicalAddressArray *pa);
+// call unmapPages to release
+void *mapReservedPages(LinearMemoryManager *lm, const PhysicalAddressArray*pa, PageAttribute attribute);
 
 // XXX:
 int isKernelLinearAddress(uintptr_t address);

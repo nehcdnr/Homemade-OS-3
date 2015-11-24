@@ -179,6 +179,63 @@ void releaseReservedPage(LinearMemoryManager *m, PhysicalAddress physicalAddress
 	_releasePhysicalPages(m->physical, physicalAddress);
 }
 
+
+static void _deleteBufferPhysicalAddressArray(PhysicalAddressArray *pa, uintptr_t paLength){
+	while(paLength != 0){
+		paLength--;
+		_releasePhysicalPages(pa->physicalManager, pa->address[paLength]);
+	}
+	DELETE(pa);
+}
+
+PhysicalAddressArray *checkAndReservePages(LinearMemoryManager *lm, const void *linearAddress, uintptr_t size){
+	EXPECT(((uintptr_t)linearAddress) % PAGE_SIZE == 0 && size % PAGE_SIZE == 0);
+	const uintptr_t pageLength = (size) / PAGE_SIZE;
+	PhysicalAddressArray *pa = allocateKernelMemory(sizeof(*pa) + sizeof(pa->address[0]) * pageLength);
+	EXPECT(pa != NULL);
+	pa->length = pageLength;
+	pa->physicalManager = lm->physical;
+	uintptr_t a = 0;
+	for(a = 0; a < pageLength; a++){
+		pa->address[a] = checkAndReservePage(lm, (void*)(((uintptr_t)linearAddress) + a * PAGE_SIZE), 0/*TODO*/);
+		if(pa->address[a].value == INVALID_PAGE_ADDRESS)
+			break;
+	}
+	EXPECT(a * PAGE_SIZE == size);
+
+	return pa;
+	ON_ERROR;
+	_deleteBufferPhysicalAddressArray(pa, a);
+	ON_ERROR;
+	ON_ERROR;
+	return NULL;
+}
+
+void deletePhysicalAddressArray(PhysicalAddressArray *pa){
+	_deleteBufferPhysicalAddressArray(pa, pa->length);
+}
+
+void *mapReservedPages(LinearMemoryManager *lm, const PhysicalAddressArray *pa, PageAttribute attribute){
+	size_t l_size = PAGE_SIZE * pa->length;
+	uintptr_t linearAddress = allocateLinearBlock(lm, &l_size);
+	EXPECT(linearAddress != INVALID_PAGE_ADDRESS);
+	uintptr_t a;
+	for(a = 0; a < pa->length; a++){
+		if(_mapPage_LP(lm->page, pa->physicalManager,
+			(void*)(linearAddress + a * PAGE_SIZE), pa->address[a], PAGE_SIZE, attribute) == 0)
+			break;;
+	}
+	EXPECT(a == pa->length);
+	commitAllocatingLinearBlock(lm, linearAddress);
+	return (void*)linearAddress;
+
+	ON_ERROR;
+	_unmapPage_LP(lm->page, pa->physicalManager, (void*)linearAddress, a * PAGE_SIZE);
+	releaseLinearBlock(lm->linear, linearAddress);
+	ON_ERROR;
+	return NULL;
+}
+
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
 	// linear
 	size_t l_size = size;

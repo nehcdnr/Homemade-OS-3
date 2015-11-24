@@ -404,6 +404,17 @@ uintptr_t systemCall_sizeOfFile(uintptr_t handle){
 	return systemCall2(SYSCALL_SIZE_OF_FILE, handle);
 }
 
+uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
+	uintptr_t r, sizeLow, sizeHigh;
+	r = systemCall_sizeOfFile(handle);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh))
+		return IO_REQUEST_FAILURE;
+	*size = COMBINE64(sizeLow, sizeHigh);
+	return handle;
+}
+
 static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
 	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
 	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
@@ -424,6 +435,13 @@ int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, voi
 	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
 	return 1;
 }
+
+PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uintptr_t *bufferOffset){
+	uintptr_t pageBegin, pageSize;
+	bufferToPageRange((uintptr_t)buffer, bufferSize, &pageBegin, bufferOffset, &pageSize);
+	return checkAndReservePages(getTaskLinearMemory(processorLocalTask()), (void*)pageBegin, pageSize);
+}
+
 
 static void FileNameCommandHandler(InterruptParam *p){
 	sti();

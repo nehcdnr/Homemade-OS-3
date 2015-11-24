@@ -21,10 +21,11 @@ static void initService(void){
 		kernelConsoleService,
 		pciDriver,
 		ahciDriver,
-		//fatService,
-		//testMemoryTask,
 		kernelFileService,
-		//testKFS
+		fatService,
+		//testMemoryTask,
+		//testKFS,
+		//testFAT
 	};
 	unsigned int i;
 	Task *t;
