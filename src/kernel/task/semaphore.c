@@ -6,85 +6,111 @@
 #include"assembly/assembly.h"
 #include"task.h"
 
-typedef struct Semaphore{
-	volatile int quota;
+typedef struct ExclusiveLock{
+	void *instance;
 	Spinlock lock;
-	TaskQueue taskQueue;
-}Semaphore;
-/*
-static void _acquireSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p);
-	acquireSemaphore(s);
-	sti();
+	void (*pushLockQueue)(void *, Task*);
+}ExclusiveLock;
+
+static void initExclusiveLock(struct ExclusiveLock *exLock, void *instance){
+	exLock->instance = instance;
+	exLock->lock = initialSpinlock;
+	exLock->pushLockQueue = NULL;
 }
 
-static void _releaseSemaphore(InterruptParam *p){
-	Semaphore *s = (Semaphore*)SYSTEM_CALL_ARGUMENT_0(p);
-	releaseSemaphore(s);
-	sti();
-}
-*/
-static void pushSemaphoreQueue(Task *t, uintptr_t s_ptr){
-	Semaphore *s = (Semaphore*)s_ptr;
-	pushQueue(&s->taskQueue, t);
-	releaseLock(&s->lock);
+static void afterExLock(Task *t, uintptr_t exLockPtr){
+	ExclusiveLock *exLock = (ExclusiveLock*)exLockPtr;
+	assert(exLock->pushLockQueue != NULL);
+	exLock->pushLockQueue(exLock->instance, t);
+	exLock->pushLockQueue = NULL;
+	releaseLock(&exLock->lock);
 }
 
-void acquireSemaphore(Semaphore *s){
+static void acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLockQueue)(void*, Task *)){
 	int interruptEnabled = getEFlags().bit.interrupt;
 	// turn off interrupt to prevent sti in releaseLock in pushSemaphoreQueue
 	if(interruptEnabled){
 		cli();
 	}
-	acquireLock(&s->lock);
-	if(s->quota >= 1){
-		s->quota -= 1;
-		releaseLock(&s->lock);
+	acquireLock(&e->lock);
+	if(acquire(e->instance)){
+		releaseLock(&e->lock);
 	}
 	else{
-		taskSwitch(pushSemaphoreQueue, (uintptr_t)s);
+		e->pushLockQueue = pushLockQueue;
+		taskSwitch(afterExLock, (uintptr_t)e);
 	}
 	if(interruptEnabled){
 		sti();
 	}
 }
 
-void releaseSemaphore(Semaphore *s){
+static void releaseExLock(ExclusiveLock *e, Task *(*release)(void*)){
 	Task *t;
-	acquireLock(&s->lock);
-	t = popQueue(&s->taskQueue);
-	if(t == NULL){
-		s->quota += 1;
-	}
-	releaseLock(&s->lock);
+	acquireLock(&e->lock);
+	t = release(e->instance);
+	releaseLock(&e->lock);
 	if(t != NULL){
 		resume(t);
 	}
 }
 
+// Semaphore
+
+struct Semaphore{
+	volatile int quota;
+	TaskQueue taskQueue;
+	ExclusiveLock exLock;
+};
+
+static int _acquireSemaphore(void *inst){
+	Semaphore *s = (Semaphore*)inst;
+	if(s->quota >= 1){
+		s->quota -= 1;
+		return 1;
+	}
+	return 0;
+}
+
+static void _pushSemaphoreQueue(void *inst, Task *t){
+	pushQueue(&((Semaphore*)inst)->taskQueue, t);
+}
+
+static Task *_releaseSemaphore(void *inst){
+	Semaphore *s = inst;
+	Task *t = popQueue(&s->taskQueue);
+	if(t == NULL){
+		//if(s->quota + 1 == 0xffffffff){
+		//	assert(0);
+		//}
+		s->quota += 1;
+	}
+	return t;
+}
+
+void acquireSemaphore(Semaphore *s){
+	acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue);
+}
+
+void releaseSemaphore(Semaphore *s){
+	releaseExLock(&s->exLock, _releaseSemaphore);
+}
+
 int getSemaphoreValue(Semaphore *s){
 	int v;
-	acquireLock(&s->lock);
+	acquireLock(&s->exLock.lock);
 	v = s->quota;
-	releaseLock(&s->lock);
+	releaseLock(&s->exLock.lock);
 	return v;
 }
 
-/*
-void syscall_acquireSemaphore(Semaphore *s){
-	systemCall1(SYSCALL_ACQUIRE_SEMAPHORE, (uintptr_t)s);
-}
-void syscall_releaseSemaphore(Semaphore *s){
-	systemCall1(SYSCALL_RELEASE_SEMAPHORE, (uintptr_t)s);
-}
-*/
 Semaphore *createSemaphore(){
 	Semaphore *NEW(s);
 	if(s == NULL)
 		return NULL;
-	s->lock = initialSpinlock;
 	s->quota = 0;
 	s->taskQueue = initialTaskQueue;
+	initExclusiveLock(&s->exLock, s);
 	return s;
 }
 
@@ -93,9 +119,164 @@ void deleteSemaphore(Semaphore *s){
 	assert(s->taskQueue.head == NULL);
 	DELETE(s);
 }
-/*
-void initSemaphore(SystemCallTable *systemCallTable){
-	registerSystemCall(systemCallTable, SYSCALL_ACQUIRE_SEMAPHORE, _acquireSemaphore, 0);
-	registerSystemCall(systemCallTable, SYSCALL_RELEASE_SEMAPHORE, _releaseSemaphore, 0);
+
+// ReaderWriterLock
+
+struct ReaderWriterLock{
+	int writerFirst;
+	int writerCount, readerCount;
+	TaskQueue writerQueue, readerQueue;
+	ExclusiveLock exLock;
+};
+
+ReaderWriterLock *createReaderWriterLock(int writerFirst){
+	ReaderWriterLock *NEW(rwl);
+	if(rwl == NULL)
+		return NULL;
+	rwl->writerFirst = writerFirst;
+	rwl->writerCount =
+	rwl->readerCount = 0;
+	rwl->readerQueue = initialTaskQueue;
+	rwl->writerQueue = initialTaskQueue;
+	initExclusiveLock(&rwl->exLock, rwl);
+	return rwl;
 }
-*/
+
+void deleteReaderWriterLock(ReaderWriterLock *rwl){
+	assert(rwl->readerCount == 0 && rwl->writerCount == 0 &&
+		IS_TASK_QUEUE_EMPTY(&rwl->readerQueue) && IS_TASK_QUEUE_EMPTY(&rwl->writerQueue));
+	DELETE(rwl);
+}
+
+static int _acquireReaderLock(void *inst){
+	ReaderWriterLock *rwl = inst;
+	if(rwl->writerCount == 0 && (rwl->writerFirst == 0 || IS_TASK_QUEUE_EMPTY(&rwl->writerQueue))){
+		rwl->readerCount++;
+		return 1;
+	}
+	return 0;
+}
+
+static void _pushReaderQueue(void *inst, Task *t){
+	pushQueue(&((ReaderWriterLock *)inst)->readerQueue, t);
+}
+
+void acquireReaderLock(ReaderWriterLock *rwl){
+	acquireExLock(&rwl->exLock, _acquireReaderLock, _pushReaderQueue);
+}
+
+static int _acquireWriterLock(void *inst){
+	ReaderWriterLock *rwl = inst;
+	if(rwl->writerCount == 0 && rwl->readerCount == 0){
+		rwl->writerCount++;
+		return 1;
+	}
+	return 0;
+}
+
+static void _pushWriterQueue(void *inst, Task *t){
+	pushQueue(&((ReaderWriterLock *)inst)->writerQueue, t);
+}
+
+void acquireWriterLock(ReaderWriterLock *rwl){
+	acquireExLock(&rwl->exLock, _acquireWriterLock, _pushWriterQueue);
+}
+
+static Task *_releaseReaderWriterLock(void *instance){
+	ReaderWriterLock *rwl = instance;
+	Task *t = NULL;
+	if(rwl->writerCount != 0){ // current task is writer
+		rwl->writerCount--;
+	}
+	else/*if(rwl->readerCount != 0)*/{
+		rwl->readerCount--;
+	}
+	if((rwl->writerFirst && IS_TASK_QUEUE_EMPTY(&rwl->writerQueue) == 0) ||
+		IS_TASK_QUEUE_EMPTY(&rwl->readerQueue)){ // next writer
+		t = popQueue(&rwl->writerQueue);
+		if(t != NULL){
+			rwl->writerCount++;
+		}
+	}
+	else{ // next reader
+		t = popQueue(&rwl->readerQueue);
+		if(t != NULL){
+			rwl->readerCount++;
+		}
+	}
+	return t;
+}
+
+void releaseReaderWriterLock(ReaderWriterLock *rwl){
+	releaseExLock(&rwl->exLock, _releaseReaderWriterLock);
+}
+
+#ifndef NDEBUG
+#include"io/io.h"
+
+static void testRWLock_r(void *rwlPtr){
+	ReaderWriterLock *rwl = (*(ReaderWriterLock**)rwlPtr);
+
+	acquireReaderLock(rwl);
+	printk("test_r acquired\n");
+	releaseReaderWriterLock(rwl);
+
+	systemCall_terminate();
+}
+
+static void testRWLock_w(void *rwlPtr){
+	ReaderWriterLock *rwl = (*(ReaderWriterLock**)rwlPtr);
+
+	acquireWriterLock(rwl);
+	printk("test_w acquired\n");
+	releaseReaderWriterLock(rwl);
+
+	systemCall_terminate();
+}
+
+void testRWLock(void);
+
+void testRWLock(void){
+	ReaderWriterLock *rl = createReaderWriterLock(0); // reader first
+	ReaderWriterLock *wl = createReaderWriterLock(1); // writer first
+	Task *task_r, *task_w;
+	assert(wl != NULL && rl != NULL);
+	acquireWriterLock(rl);
+	acquireWriterLock(wl);
+
+	task_r = createSharedMemoryTask(testRWLock_r, &rl, sizeof(rl), processorLocalTask());
+	task_w = createSharedMemoryTask(testRWLock_w, &rl, sizeof(rl), processorLocalTask());
+	assert(task_r != NULL && task_w != NULL);
+	resume(task_r);
+	resume(task_w);
+
+	sleep(500);
+	printk("test reader first lock\n");
+	releaseReaderWriterLock(rl);
+	sleep(500);
+
+	task_r = createSharedMemoryTask(testRWLock_r, &wl, sizeof(wl), processorLocalTask());
+	task_w = createSharedMemoryTask(testRWLock_w, &wl, sizeof(wl), processorLocalTask());
+	assert(task_r != NULL && task_w != NULL);
+	resume(task_r);
+	resume(task_w);
+	sleep(500);
+	printk("test writer first lock\n");
+	releaseReaderWriterLock(wl);
+	sleep(500);
+
+	acquireReaderLock(rl);
+	printk("testRWLock_r acquired\n");
+	task_r = createSharedMemoryTask(testRWLock_r, &rl, sizeof(rl), processorLocalTask());
+	assert(task_r != NULL);
+	resume(task_r);
+	sleep(700);
+	printk("testRWLock_r released\n");
+	releaseReaderWriterLock(rl);
+
+	deleteReaderWriterLock(rl);
+	deleteReaderWriterLock(wl);
+	printk("test rwlock ok\n");
+	systemCall_terminate();
+}
+#endif

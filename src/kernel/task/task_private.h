@@ -14,8 +14,9 @@ extern const TaskQueue initialTaskQueue;
 void pushQueue(TaskQueue *q, struct Task *t);
 // get the first task in the queue
 struct Task *popQueue(TaskQueue *q);
+#define IS_TASK_QUEUE_EMPTY(Q) ((Q)->head == NULL)
 
-// assume interrupt disabled
+// assume taskSwitch and afterTaskSwitchFunc are executed with interrupt disabled
 void taskSwitch(void (*afterTaskSwitchFunc)(struct Task*, uintptr_t), uintptr_t arg);
 
 // semaphore.c

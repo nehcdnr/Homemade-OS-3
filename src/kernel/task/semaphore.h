@@ -13,3 +13,11 @@ void syscall_releaseSemaphore(Semaphore *s);
 void acquireSemaphore(Semaphore *s);
 void releaseSemaphore(Semaphore *s);
 int getSemaphoreValue(Semaphore *s);
+
+typedef struct ReaderWriterLock ReaderWriterLock;
+ReaderWriterLock *createReaderWriterLock(int writerFirst);
+void deleteReaderWriterLock(ReaderWriterLock *rwl);
+
+void acquireReaderLock(ReaderWriterLock *rwl);
+void acquireWriterLock(ReaderWriterLock *rwl);
+void releaseReaderWriterLock(ReaderWriterLock *rwl);

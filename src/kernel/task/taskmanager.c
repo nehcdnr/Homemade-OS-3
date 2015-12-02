@@ -176,7 +176,6 @@ static void callAfterTaskSwitchFunc(void){
 	tm->oldTask = NULL;
 }
 
-// assume interrupt is disabled
 void taskSwitch(void (*func)(Task*, uintptr_t), uintptr_t arg){
 	TaskManager *tm = processorLocalTaskManager();
 	// putting into suspendQueue and switching to another task have to be atomic
