@@ -3,6 +3,7 @@
 #include"io/io.h"
 #include"file.h"
 #include"interrupt/systemcall.h"
+#include"task/semaphore.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
 #include"multiprocessor/spinlock.h"
@@ -121,6 +122,13 @@ typedef struct FAT32DiskPartition{
 	struct FAT32DiskPartition **prev, *next;
 }FAT32DiskPartition;
 
+static void initRootDirEntry(FATDirEntry *d, uint32_t rootCluster){
+	MEMSET0(d);
+	d->clusterLow = ((rootCluster) & 0xffff);
+	d->clusterHigh = ((rootCluster >> 16) & 0xffff);
+	d->attribute = FAT_DIRECTORY;
+}
+
 static uint32_t getBeginCluster(const FATDirEntry *d){
 	return ((uint32_t)d->clusterLow) + (((uint32_t)d->clusterHigh) << 16);
 }
@@ -183,29 +191,6 @@ static uint32_t countClusterByFAT(uint32_t cluster, const FAT32DiskPartition *dp
 		cluster = nextClusterByFAT(cluster, dp);
 	}
 	return clusterCount;
-}
-
-// assume all arguments are valid
-static int loadClustersByFAT(FATDirEntry *dirEntry,
-	uint32_t cluster , uintptr_t clusterCount, const FAT32DiskPartition *dp
-){	const uint32_t clustersPerFAT = dp->bootRecord->ebr32.sectorsPerFAT32 / dp->bootRecord->sectorsPerCluster;
-	uintptr_t clusterSize = getClusterSize(dp);
-	uintptr_t c;
-	for(c = 0; c < clusterCount; c++){
-		assert(cluster < clustersPerFAT);
-		uintptr_t readSize = clusterSize;
-		if(syncSeekReadFile(dp->diskFileHandle,
-			(void*)(((uintptr_t)dirEntry) + c * clusterSize),
-			clusterToLBA(dp, cluster), &readSize) == IO_REQUEST_FAILURE
-		){
-			return 0;
-		}
-		if(readSize != clusterSize){
-			return 0;
-		}
-		cluster = nextClusterByFAT(cluster, dp);
-	}
-	return 1;
 }
 
 // currently not support long file name
@@ -271,7 +256,8 @@ static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t sta
 	dp->sectorSize = sectorSize;
 	dp->partitionName = partitionName;
 	const uintptr_t readSize = CEIL(sizeof(FATBootSector), dp->sectorSize);
-	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);//TODO:
+	//TODO: dp->bootRecord is in user space, and thus not accessible in interrupt handler
+	FATBootSector *br = systemCall_allocateHeap(readSize, KERNEL_NON_CACHED_PAGE);
 	EXPECT(br != NULL);
 	dp->bootRecord = br;
 	MEMSET0(br);
@@ -309,7 +295,7 @@ static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t sta
 
 #define FAT32_SERVICE_NAME "fat32"
 
-struct FAT32Collection{
+struct FAT32DiskPartitionList{
 	Task *mainTask;
 	FAT32DiskPartition *head;
 	Spinlock lock;
@@ -338,31 +324,99 @@ static void addFAT32DiskPartition(FAT32DiskPartition *dp){
 	releaseLock(&fat32List.lock);
 }
 
+// FAT file
+
+typedef struct FATFile{
+	// search key
+	uint32_t beginCluster;
+	const FAT32DiskPartition *diskPartition;
+	// lock
+	ReaderWriterLock *rwLock;
+	int referenceCount;
+
+	struct FATFile *next, **prev;
+}FATFile;
+
+struct FATFileList{
+	FATFile *head;
+	Spinlock lock;
+}fatFileList = {NULL, INITIAL_SPINLOCK};
+
+static FATFile *searchCreateFATFile(const FAT32DiskPartition *dp, uint32_t cluster, int refCnt){
+	acquireLock(&fatFileList.lock);
+	FATFile *ff;/*
+	for(ff = fatFileList.head; ff != NULL; ff = ff->next){
+		if(ff->beginCluster == cluster && ff->diskPartition == dp)
+			break;
+	}
+	while(ff != NULL){
+		ff->referenceCount += refCnt;
+		releaseLock(&fatFileList.lock);
+		return ff;
+	}*/
+	NEW(ff);
+	if(ff == NULL){
+		releaseLock(&fatFileList.lock);
+		return NULL;
+	}
+	ff->beginCluster = cluster;
+	ff->rwLock = createReaderWriterLock(1);
+	if(ff->rwLock == NULL){
+		releaseLock(&fatFileList.lock);
+		DELETE(ff);
+		return NULL;
+	}
+	ff->referenceCount = refCnt;
+	ff->diskPartition = dp;
+	ff->next = NULL;
+	ff->prev = NULL;
+	ADD_TO_DQUEUE(ff, &fatFileList.head);
+	releaseLock(&fatFileList.lock);
+	return ff;
+}
+
+static int addFATFileReference(FATFile *ff, int refCnt){
+	acquireLock(&fatFileList.lock);
+	ff->referenceCount += refCnt;
+	int r = ff->referenceCount;
+	int needDelete = (r == 0);
+	if(needDelete){
+		REMOVE_FROM_DQUEUE(ff);
+	}
+	releaseLock(&fatFileList.lock);
+	if(needDelete){
+		deleteReaderWriterLock(ff->rwLock);
+		DELETE(ff);
+	}
+	return r;
+}
+
 typedef struct{
 	OpenFileRequest ofr;
 	uint32_t offset;
-	const FAT32DiskPartition *diskPartition;
 	FATDirEntry dirEntry;
-	//TODO: semaphore, rwLock
-}FATFile;
+	FATFile *shared;
+}OpenedFATFile;
 
-static FATFile *createFATFile(const FileFunctions *ff, FAT32DiskPartition *dp){
-	FATFile *NEW(f);
-	if(f == NULL)
-		return NULL;
+static OpenedFATFile *createOpenedFATFile(const FileFunctions *ff,
+	const FAT32DiskPartition *dp, const FATDirEntry *dir){
+	OpenedFATFile *NEW(f);
+	EXPECT(f != NULL);
 	initOpenFileRequest(&f->ofr, f, ff);
 	f->offset = 0;
-	f->diskPartition = dp;
-	FATDirEntry *const d = &f->dirEntry;
-	MEMSET0(d);
-	uint32_t cluster = dp->bootRecord->ebr32.rootCluster;
-	d->clusterLow = ((cluster) & 0xffff);
-	d->clusterHigh = ((cluster >> 16) & 0xffff);
-	d->attribute = FAT_DIRECTORY;
+	f->dirEntry = (*dir);
+	f->shared = searchCreateFATFile(dp, getBeginCluster(dir), 1);
+	EXPECT(f->shared != NULL);
 	return f;
+	//addFATFileReference(f->shared, -1);
+	ON_ERROR;
+	DELETE(f);
+	ON_ERROR;
+	return NULL;
 }
 
-static void deleteFATFile(FATFile *f){
+static void deleteOpenedFATFile(OpenedFATFile *f){
+	addFATFileReference(f->shared, -1);
 	DELETE(f);
 }
 
@@ -370,7 +424,7 @@ static void deleteFATFile(FATFile *f){
 
 typedef struct{
 	uintptr_t nameLength;
-	FATFile *file; // NULL if failed to open
+	OpenedFATFile *file; // NULL if failed to open
 	OpenFileManager *fileManager;
 	IORequest ior;
 	char fileName[];
@@ -386,18 +440,18 @@ static int finishOpenFAT(IORequest *ior, uintptr_t *returnValues){
 static void openFATTask(void *p);
 
 static IORequest *openFAT(const char *fileName, uintptr_t nameLength){
-	OpenFATRequest *ofp = allocateKernelMemory(sizeof(*ofp) + nameLength);
-	EXPECT(ofp != NULL);
-	initIORequest(&ofp->ior, ofp, notSupportCancelIORequest, finishOpenFAT);
-	strncpy(ofp->fileName, fileName, nameLength);
-	ofp->nameLength = nameLength;
-	ofp->file = NULL;
-	ofp->fileManager = getOpenFileManager(processorLocalTask());
-	Task *t = createSharedMemoryTask(openFATTask, &ofp, sizeof(ofp), fat32List.mainTask);
+	OpenFATRequest *ofr = allocateKernelMemory(sizeof(*ofr) + nameLength);
+	EXPECT(ofr != NULL);
+	initIORequest(&ofr->ior, ofr, notSupportCancelIORequest, finishOpenFAT);
+	strncpy(ofr->fileName, fileName, nameLength);
+	ofr->nameLength = nameLength;
+	ofr->file = NULL;
+	ofr->fileManager = getOpenFileManager(processorLocalTask());
+	Task *t = createSharedMemoryTask(openFATTask, &ofr, sizeof(ofr), fat32List.mainTask);
 	EXPECT(t != NULL);
-	pendIO(&ofp->ior);
+	pendIO(&ofr->ior);
 	resume(t);
-	return &ofp->ior;
+	return &ofr->ior;
 	// delete task
 	ON_ERROR;
 	ON_ERROR;
@@ -410,7 +464,7 @@ typedef struct{
 	uintptr_t inputRWSize, outputRWSize;
 	uintptr_t bufferOffset;
 	PhysicalAddressArray *pa;
-	FATFile *file;
+	OpenedFATFile *file;
 	IORequest ior;
 }RWFATRequest;
 
@@ -447,62 +501,71 @@ static IORequest *readFAT(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t readS
 	return IO_REQUEST_FAILURE;
 }
 
-static void rwFATTask(void *rwfrPtr){
-	LinearMemoryManager *lm = getTaskLinearMemory(processorLocalTask());
-	RWFATRequest *rwfr = *(RWFATRequest**)rwfrPtr;
-	FATFile *f = rwfr->file;
-	const FAT32DiskPartition *dp = f->diskPartition;
-	void *bufferPage2 = mapReservedPages(lm, rwfr->pa, USER_WRITABLE_PAGE);
-	EXPECT(bufferPage2 != NULL);
+static uintptr_t readByFAT(const FAT32DiskPartition *dp, void *buffer, uint32_t beginCluster,
+	uint32_t readOffset, uint32_t readSize){
+	const uint32_t readFileEnd = readOffset + readSize;
 	const uintptr_t clusterSize = getClusterSize(dp);
-	void *bufferPage1 = systemCall_allocateHeap(clusterSize, USER_NON_CACHED_PAGE);
-	EXPECT(bufferPage1 != NULL);
-	// acquire semaphore or rwlock
-	uint32_t readFileBegin = f->offset;
-	uint32_t readFileEnd;
-	if(rwfr->inputRWSize > f->dirEntry.fileSize - f->offset){
-		readFileEnd = readFileBegin + f->dirEntry.fileSize - f->offset;
-	}
-	else{
-		readFileEnd = readFileBegin + rwfr->inputRWSize;
-	}
-	f->offset = readFileEnd;
-	// release semaphore
-	uint32_t cluster = getBeginCluster(&f->dirEntry);
+	void *clusterBuffer = systemCall_allocateHeap(clusterSize, USER_NON_CACHED_PAGE);
+	EXPECT(clusterBuffer != NULL);
 	uint32_t fileIndex = 0;
 	uintptr_t bufferIndex = 0;
-	// IMPROVE: merge searchDirectory
+	uint32_t cluster = beginCluster;
 	while(fileIndex < readFileEnd && isValidCluster(cluster, dp)){
-		if(/*fileIndex < readFileEnd &&*/fileIndex + clusterSize > readFileBegin){
+		if(/*fileIndex < readFileEnd &&*/fileIndex + clusterSize > readOffset){
 			// read next cluster to buffer1
 			uintptr_t readDiskSize = clusterSize;
-			uintptr_t ret = syncSeekReadFile(dp->diskFileHandle, bufferPage1, clusterToLBA(dp, cluster), &readDiskSize);
+			uintptr_t ret = syncSeekReadFile(dp->diskFileHandle, clusterBuffer, clusterToLBA(dp, cluster), &readDiskSize);
 			if(readDiskSize != clusterSize || ret == IO_REQUEST_FAILURE)
 				break;
-			// copy buffer1 to buffer2
-			uintptr_t copyBegin = (fileIndex > readFileBegin ? fileIndex: readFileBegin);
+			// copy clusterBuffer to buffer
+			uintptr_t copyBegin = (fileIndex > readOffset ? fileIndex: readOffset);
 			uintptr_t copyEnd = (fileIndex + clusterSize < readFileEnd? fileIndex + clusterSize: readFileEnd);
-			memcpy((void*)(((uintptr_t)bufferPage2) + rwfr->bufferOffset + bufferIndex),
-				(const void*)(((uintptr_t)bufferPage1) + copyBegin % clusterSize), copyEnd - copyBegin);
+			memcpy((void*)(((uintptr_t)buffer) + bufferIndex),
+				(const void*)(((uintptr_t)clusterBuffer) + copyBegin % clusterSize), copyEnd - copyBegin);
 			bufferIndex += copyEnd - copyBegin;
 		}
 		fileIndex += clusterSize;
-		cluster = nextClusterByFAT(cluster, f->diskPartition);
+		cluster = nextClusterByFAT(cluster, dp);
 	}
-	EXPECT(fileIndex >= readFileEnd);
-	systemCall_releaseHeap(bufferPage1);
-	rwfr->outputRWSize = readFileEnd - readFileBegin;
-	unmapPages(lm, bufferPage2);
 
+	systemCall_releaseHeap(clusterBuffer);
+	return bufferIndex;
+
+	// systemCall_releaseHeap(clusterBuffer);
+	ON_ERROR;
+	return 0;
+}
+
+static void rwFATTask(void *rwfrPtr){
+	LinearMemoryManager *lm = getTaskLinearMemory(processorLocalTask());
+	RWFATRequest *rwfr = *(RWFATRequest**)rwfrPtr;
+	OpenedFATFile *f = rwfr->file;
+	void *bufferPage2 = mapReservedPages(lm, rwfr->pa, USER_WRITABLE_PAGE);
+	EXPECT(bufferPage2 != NULL);
+	acquireReaderLock(f->shared->rwLock);
+	// acquire semaphore or rwlock
+	uint32_t readFileBegin = f->offset;
+	uint32_t readFileSize;
+	if(rwfr->inputRWSize > f->dirEntry.fileSize - f->offset){
+		readFileSize = f->dirEntry.fileSize - f->offset;
+	}
+	else{
+		readFileSize = rwfr->inputRWSize;
+	}
+	f->offset += readFileSize;
+	rwfr->outputRWSize = readByFAT(f->shared->diskPartition,
+		(void*)(((uintptr_t)bufferPage2) + rwfr->bufferOffset),
+		f->shared->beginCluster, readFileBegin, readFileSize);
+	releaseReaderWriterLock(f->shared->rwLock);
+	EXPECT(rwfr->outputRWSize == readFileSize);
+
+	unmapPages(lm, bufferPage2);
 	finishIO(&rwfr->ior);
 	systemCall_terminate();
 
 	ON_ERROR;
-	systemCall_releaseHeap(bufferPage1);
-	ON_ERROR;
 	unmapPages(lm, bufferPage2);
 	ON_ERROR;
-	rwfr->outputRWSize = 0;
 	finishIO(&rwfr->ior);
 	systemCall_terminate();
 }
@@ -523,7 +586,7 @@ static int finishSizeOfFAT(IORequest *ior, uintptr_t *returnValues){
 }
 
 static IORequest *sizeOfFAT(OpenFileRequest *ofr){
-	FATFile *f = ofr->instance;
+	OpenedFATFile *f = ofr->instance;
 	SizeOfFATRequest *NEW(sofr);
 	if(sofr == NULL){
 		return IO_REQUEST_FAILURE;
@@ -538,7 +601,7 @@ static IORequest *sizeOfFAT(OpenFileRequest *ofr){
 // closeFAT
 
 typedef struct{
-	FATFile *file;
+	OpenedFATFile *file;
 	OpenFileManager *fileManager;
 	IORequest ior;
 }CloseFATRequest;
@@ -546,13 +609,13 @@ typedef struct{
 static int finishCloseFAT(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
 	CloseFATRequest *cfr = ior->instance;
 	removeFromOpenFileList(cfr->fileManager, &cfr->file->ofr);
-	deleteFATFile(cfr->file);
+	deleteOpenedFATFile(cfr->file);
 	DELETE(cfr);
 	return 0;
 }
 
 static IORequest *closeFAT(OpenFileRequest *ofr){
-	FATFile *f = ofr->instance;
+	OpenedFATFile *f = ofr->instance;
 	// TODO: rwlock. if there are pending io request, wait until they finish
 	CloseFATRequest *NEW(cfr);
 	initIORequest(&cfr->ior, cfr, notSupportCancelIORequest, finishCloseFAT);
@@ -562,7 +625,6 @@ static IORequest *closeFAT(OpenFileRequest *ofr){
 	finishIO(&cfr->ior);
 	return &cfr->ior;
 }
-
 
 static int skipSlash(const char *s, uintptr_t i, uintptr_t len){
 	while(i < len && s[i] == '/')
@@ -575,61 +637,79 @@ static int skipNonSlash(const char *s, uintptr_t i, uintptr_t len){
 	return i;
 }
 
-static void openFATTask(void *p){
-	OpenFATRequest *ofp = *(OpenFATRequest**)p;
-	uintptr_t nameIndex = 0;
-	FAT32DiskPartition *dp = searchFAT32DiskPartition(ofp->fileName, &nameIndex, ofp->nameLength);
-	EXPECT(dp != NULL);
-	FileFunctions ff = INITIAL_FILE_FUNCTIONS(openFAT, readFAT, NULL, NULL, NULL, NULL, sizeOfFAT, closeFAT, NULL);
-	FATFile *file = createFATFile(&ff, dp);
-	EXPECT(file != NULL);
+static int nextLevelDirectory(FATDirEntry *d, const FAT32DiskPartition *dp,
+	const char *name, uintptr_t length){
+	FATFile *ff = searchCreateFATFile(dp, getBeginCluster(d), 1);
+	EXPECT(ff != NULL);
+	acquireReaderLock(ff->rwLock);
+	const uint32_t clusterCount = countClusterByFAT(ff->beginCluster, dp);
+	const uint32_t allocateSize = clusterCount * dp->bootRecord->sectorsPerCluster * dp->sectorSize;
+	FATDirEntry *dirEntry = systemCall_allocateHeap(allocateSize, USER_NON_CACHED_PAGE);
+	if(dirEntry == NULL){
+		releaseReaderWriterLock(ff->rwLock);
+	}
+	EXPECT(dirEntry != NULL);
+	uintptr_t readSize = readByFAT(dp, dirEntry, ff->beginCluster, 0, allocateSize);
+	releaseReaderWriterLock(ff->rwLock);
+	EXPECT(readSize == allocateSize);
+	FATDirEntry *newDirEntry = searchDirectory(dirEntry,
+		allocateSize / sizeof(FATDirEntry), name, length);
+	EXPECT(newDirEntry != NULL);
+	*d = *newDirEntry;
+	systemCall_releaseHeap(dirEntry);
+	addFATFileReference(ff, -1);
+	return 1;
 
-	FATDirEntry *const d = &file->dirEntry;
+	ON_ERROR;
+	ON_ERROR;
+	systemCall_releaseHeap(dirEntry);
+	ON_ERROR;
+	addFATFileReference(ff, -1);
+	ON_ERROR;
+	return 0;
+}
+
+static void openFATTask(void *p){
+	OpenFATRequest *ofr = *(OpenFATRequest**)p;
+	uintptr_t nameIndex = 0;
+	FAT32DiskPartition *dp = searchFAT32DiskPartition(ofr->fileName, &nameIndex, ofr->nameLength);
+	EXPECT(dp != NULL);
+
+	FATDirEntry d;
+	initRootDirEntry(&d, dp->bootRecord->ebr32.rootCluster);
 	int ok = 1;
 	while(ok){
-		nameIndex = skipSlash(ofp->fileName, nameIndex, ofp->nameLength);
-		uintptr_t nextNameIndex = skipNonSlash(ofp->fileName, nameIndex, ofp->nameLength);
+		nameIndex = skipSlash(ofr->fileName, nameIndex, ofr->nameLength);
+		uintptr_t nextNameIndex = skipNonSlash(ofr->fileName, nameIndex, ofr->nameLength);
 		if(nameIndex == nextNameIndex){ // end of string
-			ok = ((d->attribute & (FAT_DIRECTORY | FAT_VOLUME_ID)) == 0 &&
-				d->attribute != FAT_LONG_FILE_NAME); // is a file
+			ok = ((d.attribute & (FAT_DIRECTORY | FAT_VOLUME_ID)) == 0 &&
+				d.attribute != FAT_LONG_FILE_NAME); // is a file
 			break;
 		}
-		if(d->attribute != FAT_DIRECTORY){ // is a directory
+		if(d.attribute != FAT_DIRECTORY){ // is not a directory
 			ok = 0;
 			break;
 		}
-		const uint32_t currentCluster = getBeginCluster(d);
-		uint32_t clusterCount = countClusterByFAT(currentCluster, dp);
-		uintptr_t allocateSize = clusterCount * dp->bootRecord->sectorsPerCluster * dp->sectorSize;
-		FATDirEntry *dirEntry = systemCall_allocateHeap(allocateSize, USER_NON_CACHED_PAGE);
-		if(dirEntry == NULL)
-			break;
-		if(loadClustersByFAT(dirEntry, currentCluster, clusterCount, dp)){
-			FATDirEntry *newDirEntry = searchDirectory(dirEntry, allocateSize / sizeof(FATDirEntry),
-				ofp->fileName + nameIndex, nextNameIndex - nameIndex);
-			if(newDirEntry != NULL)
-				*d = *newDirEntry;
-			else
-				ok = 0;
-		}
-		else
-			ok = 0;
-		systemCall_releaseHeap(dirEntry);
+		ok = nextLevelDirectory(&d, dp, ofr->fileName + nameIndex, nextNameIndex - nameIndex);
 		nameIndex = nextNameIndex;
 	}
 	EXPECT(ok);
 
-	ofp->file = file;
-	addToOpenFileList(ofp->fileManager, &file->ofr);
-	finishIO(&ofp->ior);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS(openFAT, readFAT, NULL, NULL, NULL, NULL, sizeOfFAT, closeFAT, NULL);
+	OpenedFATFile *file = createOpenedFATFile(&ff, dp, &d);
+	EXPECT(file != NULL);
+
+	ofr->file = file;
+	addToOpenFileList(ofr->fileManager, &file->ofr);
+	finishIO(&ofr->ior);
 	systemCall_terminate();
 
+	//deleteOpenedFATFile(file);
 	ON_ERROR;
-	deleteFATFile(file);
 	ON_ERROR;
 	ON_ERROR;
-	// ofp->file = NULL;
-	finishIO(&ofp->ior);
+	// ofr->file = NULL;
+	finishIO(&ofr->ior);
 	printk("open FAT failed\n");
 	systemCall_terminate();
 }
