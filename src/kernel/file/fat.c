@@ -695,7 +695,10 @@ static void openFATTask(void *p){
 	}
 	EXPECT(ok);
 
-	FileFunctions ff = INITIAL_FILE_FUNCTIONS(openFAT, readFAT, NULL, NULL, NULL, NULL, sizeOfFAT, closeFAT, NULL);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.read = readFAT;
+	ff.sizeOf = sizeOfFAT;
+	ff.close = closeFAT;
 	OpenedFATFile *file = createOpenedFATFile(&ff, dp, &d);
 	EXPECT(file != NULL);
 
@@ -721,7 +724,9 @@ void fatService(void){
 	assert(discoverFAT != IO_REQUEST_FAILURE);
 	uintptr_t startLBALow;
 	uintptr_t startLBAHigh;
-	if(addFileSystem(openFAT, "fat", strlen("fat")) != 1){
+	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
+	ff.open = openFAT;
+	if(addFileSystem(&ff, "fat", strlen("fat")) != 1){
 		printk("add file system failure\n");
 	}
 	int i;
@@ -752,8 +757,8 @@ void testFAT(void);
 void testFAT(void){
 	uintptr_t fileHandle;
 	int a;
-	for(a = 10; a > 0; a--){
-		sleep(500);
+	for(a = 3; a > 0; a--){
+		sleep(1000);
 		printk("test open fat...\n");
 		fileHandle = syncOpenFile("fat:C/FDOS/watTCP.cfg");
 		if(fileHandle != IO_REQUEST_FAILURE){

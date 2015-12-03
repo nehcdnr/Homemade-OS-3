@@ -810,7 +810,8 @@ static IORequest *seekWriteAHCI(OpenFileRequest *ofr, const uint8_t *buffer, uin
 }
 */
 static OpenAHCIRequest *createOpenAHCIRequest(AHCIManager *ahciManager, HBAPortIndex diskCode){
-	FileFunctions ff = INITIAL_FILE_FUNCTIONS(NULL, NULL, NULL, NULL, seekReadAHCI, NULL/*seekWriteAHCI*/, NULL, NULL, NULL);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.seekRead = seekReadAHCI;
 	OpenAHCIRequest *NEW(oar);
 	EXPECT(oar != NULL);
 	initOpenFileRequest(&oar->ofr, oar, &ff);

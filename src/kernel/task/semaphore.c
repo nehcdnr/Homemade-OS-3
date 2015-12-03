@@ -33,6 +33,7 @@ static void acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLo
 		cli();
 	}
 	acquireLock(&e->lock);
+	assert(e->pushLockQueue == NULL);
 	if(acquire(e->instance)){
 		releaseLock(&e->lock);
 	}

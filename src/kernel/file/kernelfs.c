@@ -136,8 +136,7 @@ static IORequest *closeKFS(OpenFileRequest *ofr){
 	return &kfr->ior;
 }
 
-static const FileFunctions kernelFileFunctions = INITIAL_FILE_FUNCTIONS(
-	openKFS,
+static const FileFunctions kernelFileFunctions = {
 	readKFS,
 	NULL,
 	seekKFS,
@@ -146,7 +145,7 @@ static const FileFunctions kernelFileFunctions = INITIAL_FILE_FUNCTIONS(
 	sizeOfKFS,
 	closeKFS,
 	isValidKFRequest
-);
+};
 
 static KFRequest *createKFRequest(const BLOBAddress *file){
 	KFRequest *NEW(kfr);
@@ -164,7 +163,9 @@ static KFRequest *createKFRequest(const BLOBAddress *file){
 }
 
 void kernelFileService(void){
-	int ok = addFileSystem(openKFS, "kernelfs", strlen("kernelfs"));
+	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
+	ff.open = openKFS;
+	int ok = addFileSystem(&ff, "kernelfs", strlen("kernelfs"));
 	if(!ok){
 		systemCall_terminate();
 	}

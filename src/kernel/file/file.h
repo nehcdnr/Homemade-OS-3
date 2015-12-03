@@ -32,13 +32,7 @@ void readPartitions(const char *driverName, uintptr_t diskCode,
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 
 // file interface
-typedef struct IORequest IORequest;
-typedef IORequest *OpenFileFunction(const char *fileName, uintptr_t nameLength);
-
-int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t nameLength);
-uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
-
-// if openFile failed, return IO_REQUEST_FAILURE
+// if failed, return IO_REQUEST_FAILURE
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength);
 uintptr_t syncOpenFile(const char *fileName);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength);
@@ -63,11 +57,23 @@ PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uin
 typedef struct SystemCallTable SystemCallTable;
 void initFile(SystemCallTable *s);
 
+
 typedef struct OpenFileRequest OpenFileRequest;
+typedef struct IORequest IORequest;
+
+uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
 typedef struct{
-	//IORequest *(*open)(const char *fileName, uintptr_t nameLength);
-	OpenFileFunction *open;
+	IORequest *(*open)(const char *name, uintptr_t nameLength);
+	IORequest *(*enumerate)(const char *query, uintptr_t queryLength);
+}FileNameFunctions;
+
+#define INITIAL_FILE_NAME_FUNCTIONS \
+	{NULL, NULL}
+
+int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
+
+typedef struct{
 	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
 	IORequest *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
@@ -81,8 +87,8 @@ typedef struct{
 }FileFunctions;
 
 // use macro to check number of arguments
-#define INITIAL_FILE_FUNCTIONS(OPEN, READ, WRITE, SEEK, SEEK_READ, SEEK_WRITE, SIZE_OF, CLOSE, IS_VALID_FILE) \
-	{OPEN, READ, WRITE, SEEK, SEEK_READ, SEEK_WRITE, SIZE_OF, CLOSE, IS_VALID_FILE}
+#define INITIAL_FILE_FUNCTIONS \
+	{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
 typedef struct Task Task;
 struct OpenFileRequest{

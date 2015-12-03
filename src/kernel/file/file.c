@@ -145,7 +145,7 @@ int addDiskPartition(
 
 typedef struct FileSystem{
 	Resource resource;
-	OpenFileFunction *openFile;
+	FileNameFunctions fileNameFunctions;
 	char name[MAX_FILE_SERVICE_NAME_LENGTH];
 }FileSystem;
 
@@ -163,14 +163,14 @@ static int returnFileService(Resource *resource, uintptr_t *returnValues){
 	return 1;
 }
 
-int addFileSystem(OpenFileFunction openFileFunction, const char *name, size_t nameLength){
+int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength){
 	EXPECT(nameLength <= MAX_FILE_SERVICE_NAME_LENGTH);
 	FileSystem *NEW(fs);
 	EXPECT(fs != NULL);
 	initResource(&fs->resource, fs, matchFileSystemName, returnFileService);
 	memset(fs->name, 0, sizeof(fs->name));
 	strncpy(fs->name, name, nameLength);
-	fs->openFile = openFileFunction;
+	fs->fileNameFunctions = *fileNameFunctions;
 	addResource(RESOURCE_FILE_SYSTEM, &fs->resource);
 	return 1;
 	//DELETE(fs);
@@ -273,10 +273,13 @@ void closeAllOpenFileRequest(OpenFileManager *ofm){
 }
 
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
-static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *fileName, uintptr_t nameLength, InterruptParam *p){
+static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *str, uintptr_t strLen, InterruptParam *p){
+	const FileNameFunctions *ff = &fs->fileNameFunctions;
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_OPEN_FILE:
-		return NULL_OR_CALL(fs->openFile)(fileName, nameLength);
+		return NULL_OR_CALL(ff->open)(str, strLen);
+	case SYSCALL_ENUMERATE_FILE:
+		return NULL_OR_CALL(ff->enumerate)(str, strLen);
 	default:
 		return IO_REQUEST_FAILURE;
 	}
@@ -479,7 +482,8 @@ static void FileHandleCommandHandler(InterruptParam *p){
 }
 
 void initFile(SystemCallTable *s){
-	registerSystemCall(s, SYSCALL_OPEN_FILE, FileNameCommandHandler, 0);
+	registerSystemCall(s, SYSCALL_OPEN_FILE, FileNameCommandHandler, -1);
+	registerSystemCall(s, SYSCALL_ENUMERATE_FILE, FileNameCommandHandler, -2);
 	registerSystemCall(s, SYSCALL_CLOSE_FILE, FileHandleCommandHandler, 1);
 	registerSystemCall(s, SYSCALL_READ_FILE, FileHandleCommandHandler, 2);
 	registerSystemCall(s, SYSCALL_WRITE_FILE, FileHandleCommandHandler, 3);
