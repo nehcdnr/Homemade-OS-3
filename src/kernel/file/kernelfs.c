@@ -45,10 +45,6 @@ static void _finishFileIO(KFRequest *kfr, int returnCount, ...){
 #define FINISH_FILE_IO_2(OFR, V0) _finishFileIO(OFR, 1, (V0))
 #define FINISH_FILE_IO_3(OFR, V0, V1) _finishFileIO(OFR, 2, (V0), (V1))
 
-static void cancelOpenFileRequest(__attribute__((__unused__)) IORequest *ior){
-	panic("kernelfs does not support cancellation");
-}
-
 static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 	KFRequest *kfr = ior->instance;
 
@@ -62,34 +58,6 @@ static int finishOpenFileRequest(IORequest *ior, uintptr_t *returnValues){
 		kfr->isReady = 1;
 	}
 	return returnCount;
-}
-
-static KFRequest *createKFRequest(const BLOBAddress *file);
-
-static IORequest *openKFS(const char *fileName, uintptr_t length){
-	void *mappedPage;
-	void *mappedFileName;
-	if(mapBufferToKernel(fileName, length, &mappedPage, &mappedFileName) == 0)
-		return IO_REQUEST_FAILURE;
-
-	const BLOBAddress *file;
-	for(file = blobList; file != blobList + blobCount; file++){
-		if(strncmp(mappedFileName, file->name, length) == 0){
-			break;
-		}
-	}
-	unmapPages(kernelLinear, mappedPage);
-	// file not found
-	if(file == blobList + blobCount)
-		return IO_REQUEST_FAILURE;
-	KFRequest *kfr = createKFRequest(file);
-	if(kfr == NULL)
-		return IO_REQUEST_FAILURE;
-	pendIO(&kfr->ior);
-	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
-	kfr->isReady = 1;
-	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
-	return &kfr->ior;
 }
 
 static IORequest *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize){
@@ -106,6 +74,32 @@ static IORequest *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t buffe
 	unmapPages(kernelLinear, mappedPage);
 	kfr->offset += copySize;
 	FINISH_FILE_IO_2(kfr, copySize);
+	return &kfr->ior;
+}
+
+static IORequest *enumReadKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize){
+	if(bufferSize < sizeof(FileEnumeration))
+		return IO_REQUEST_FAILURE;
+	void *mappedPage;
+	void *mappedBuffer;
+	if(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer) == 0)
+		return IO_REQUEST_FAILURE;
+
+	KFRequest *kfr = ofr->instance;
+	pendIO(&kfr->ior);
+	BLOBAddress *entry = (BLOBAddress*)(kfr->file->begin + kfr->offset);
+	assert((kfr->file->end - (uintptr_t)entry) % sizeof(*entry) == 0);
+	uintptr_t readSize;
+	if(kfr->file->end > (uintptr_t)entry){
+		readSize = sizeof(FileEnumeration);
+		initFileEnumeration(mappedBuffer, entry->name);
+	}
+	else{
+		readSize = 0;
+	}
+	unmapPages(kernelLinear, mappedPage);
+	kfr->offset += sizeof(*entry);
+	FINISH_FILE_IO_2(kfr, readSize);
 	return &kfr->ior;
 }
 
@@ -136,25 +130,14 @@ static IORequest *closeKFS(OpenFileRequest *ofr){
 	return &kfr->ior;
 }
 
-static const FileFunctions kernelFileFunctions = {
-	readKFS,
-	NULL,
-	seekKFS,
-	NULL,
-	NULL,
-	sizeOfKFS,
-	closeKFS,
-	isValidKFRequest
-};
-
-static KFRequest *createKFRequest(const BLOBAddress *file){
+static KFRequest *createKFRequest(const BLOBAddress *file, const FileFunctions *func){
 	KFRequest *NEW(kfr);
 	if(kfr == NULL)
 		return NULL;
-	initIORequest(&kfr->ior, kfr, cancelOpenFileRequest, finishOpenFileRequest);
-	initOpenFileRequest(&kfr->ofr, kfr, &kernelFileFunctions);
+	initIORequest(&kfr->ior, kfr, notSupportCancelIORequest, finishOpenFileRequest);
+	initOpenFileRequest(&kfr->ofr, kfr, func);
 	kfr->file = file;
-	kfr->isReady = 0;
+	kfr->isReady = 1;
 	kfr->isClosing = 0;
 	memset(kfr->lastReturnValues, 0, sizeof(kfr->lastReturnValues));
 	kfr->lastReturnCount = 0;
@@ -162,9 +145,75 @@ static KFRequest *createKFRequest(const BLOBAddress *file){
 	return kfr;
 }
 
+static IORequest *openKFS(const char *fileName, uintptr_t length){
+	void *mappedPage;
+	void *mappedFileName;
+	if(mapBufferToKernel(fileName, length, &mappedPage, &mappedFileName) == 0)
+		return IO_REQUEST_FAILURE;
+
+	const BLOBAddress *file;
+	for(file = blobList; file != blobList + blobCount; file++){
+		if(strncmp(mappedFileName, file->name, length) == 0){
+			break;
+		}
+	}
+	unmapPages(kernelLinear, mappedPage);
+	// file not found
+	if(file == blobList + blobCount)
+		return IO_REQUEST_FAILURE;
+
+	static const FileFunctions func = {
+		readKFS,
+		NULL,
+		seekKFS,
+		NULL,
+		NULL,
+		sizeOfKFS,
+		closeKFS,
+		isValidKFRequest
+	};
+	KFRequest *kfr = createKFRequest(file, &func);
+	if(kfr == NULL)
+		return IO_REQUEST_FAILURE;
+	pendIO(&kfr->ior);
+	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
+	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
+	return &kfr->ior;
+}
+
+static BLOBAddress kfDirectory;
+
+static IORequest *enumerateKFS(__attribute__((__unused__)) const char *fileName, uintptr_t length){
+	if(length != 0)
+		return IO_REQUEST_FAILURE;
+
+	static const FileFunctions func = {
+		enumReadKFS,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		closeKFS,
+		isValidKFRequest
+	};
+	KFRequest *kfr = createKFRequest(&kfDirectory, &func);
+	if(kfr == NULL)
+		return IO_REQUEST_FAILURE;
+	pendIO(&kfr->ior);
+	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
+	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
+	return &kfr->ior;
+}
+
 void kernelFileService(void){
+	kfDirectory.name = "";
+	kfDirectory.begin = (uintptr_t)blobList;
+	kfDirectory.end = (uintptr_t)(blobList + blobCount);
+
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openKFS;
+	ff.enumerate = enumerateKFS;
 	int ok = addFileSystem(&ff, "kernelfs", strlen("kernelfs"));
 	if(!ok){
 		systemCall_terminate();
@@ -173,18 +222,30 @@ void kernelFileService(void){
 		sleep(1000);
 	}
 }
-
+#ifndef NDEBUG
 static void testListKFS(void){
 	int a;
-	printk("list of files: (total %d)\n", blobCount);
-	for(a = 0; a < blobCount; a++){
-		printk("%s %x %x\n", blobList[a].name, blobList[a].begin, blobList[a].end);
-		uintptr_t b;
-		for(b = blobList[a].begin; b < blobList[a].end && b < blobList[a].begin + 10; b++){
-			printk("%c", (*(const char*)b));
+	uintptr_t r, readSize;
+	uintptr_t fileHandle = syncEnumerateFile("kernelfs:");
+	assert(fileHandle != IO_REQUEST_FAILURE);
+	FileEnumeration fe;
+	readSize = sizeof(fe) - 1;
+	r = syncReadFile(fileHandle, &fe, &readSize);
+	assert(r == IO_REQUEST_FAILURE);
+	for(a = 0; 1; a++){
+		readSize = sizeof(fe);
+		r = syncReadFile(fileHandle, &fe, &readSize);
+		assert(r == fileHandle && readSize % sizeof(fe) == 0);
+		if(readSize == 0)
+			break;
+		uintptr_t  i;
+		for(i = 0; i < fe.nameLength; i++){
+			printk("%c", fe.name[i]);
 		}
-		printk("\n");
+		printk(" %d\n", fe.nameLength);
 	}
+	assert(a == blobCount);
+	printk("end of file list: (total %d)\n", a);
 }
 
 void testKFS(void);
@@ -246,3 +307,4 @@ void testKFS(void){
 	printk("testKFS ok\n");
 	systemCall_terminate();
 }
+#endif

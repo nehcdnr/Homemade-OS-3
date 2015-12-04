@@ -36,6 +36,8 @@ uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength);
 uintptr_t syncOpenFile(const char *fileName);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength);
+uintptr_t systemCall_enumerateFile(const char *fileName, uintptr_t fileNameLength);
+uintptr_t syncEnumerateFile(const char * fileName);
 uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t bufferSize);
@@ -49,6 +51,15 @@ uintptr_t systemCall_sizeOfFile(uintptr_t handle);
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
+
+#define MAX_FILE_ENUM_NAME_LENGTH (64)
+typedef struct FileEnumeration{
+	// type, access timestamp ...
+	uint32_t nameLength;
+	char name[MAX_FILE_ENUM_NAME_LENGTH];
+}FileEnumeration;
+
+void initFileEnumeration(FileEnumeration *fileEnum, const char *name);
 
 // call unmapPages(kernelLinear, mappedPage) to release
 int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer);

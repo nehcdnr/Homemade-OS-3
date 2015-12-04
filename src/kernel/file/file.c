@@ -337,6 +337,20 @@ uintptr_t syncOpenFileN(const char *fileName, uintptr_t nameLength){
 	return handle;
 }
 
+uintptr_t systemCall_enumerateFile(const char *fileName, uintptr_t fileNameLength){
+	return systemCall3(SYSCALL_ENUMERATE_FILE, (uintptr_t)fileName, fileNameLength);
+}
+
+uintptr_t syncEnumerateFile(const char * fileName){
+	uintptr_t handle;
+	uintptr_t r = systemCall_enumerateFile(fileName, strlen(fileName));
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, &handle))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}
+
 uintptr_t systemCall_closeFile(uintptr_t handle){
 	return systemCall2(SYSCALL_CLOSE_FILE, handle);
 }
@@ -416,6 +430,11 @@ uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
 		return IO_REQUEST_FAILURE;
 	*size = COMBINE64(sizeLow, sizeHigh);
 	return handle;
+}
+
+void initFileEnumeration(FileEnumeration *fileEnum, const char *name){
+	fileEnum->nameLength = strlen(name);
+	strncpy(fileEnum->name, name, fileEnum->nameLength);
 }
 
 static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
