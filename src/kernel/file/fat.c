@@ -344,7 +344,7 @@ struct FATFileList{
 
 static FATFile *searchCreateFATFile(const FAT32DiskPartition *dp, uint32_t cluster, int refCnt){
 	acquireLock(&fatFileList.lock);
-	FATFile *ff;/*
+	FATFile *ff;
 	for(ff = fatFileList.head; ff != NULL; ff = ff->next){
 		if(ff->beginCluster == cluster && ff->diskPartition == dp)
 			break;
@@ -353,7 +353,7 @@ static FATFile *searchCreateFATFile(const FAT32DiskPartition *dp, uint32_t clust
 		ff->referenceCount += refCnt;
 		releaseLock(&fatFileList.lock);
 		return ff;
-	}*/
+	}
 	NEW(ff);
 	if(ff == NULL){
 		releaseLock(&fatFileList.lock);
@@ -424,6 +424,7 @@ static void deleteOpenedFATFile(OpenedFATFile *f){
 
 typedef struct{
 	uintptr_t nameLength;
+	OpenFileMode mode;
 	OpenedFATFile *file; // NULL if failed to open
 	OpenFileManager *fileManager;
 	IORequest ior;
@@ -439,12 +440,13 @@ static int finishOpenFAT(IORequest *ior, uintptr_t *returnValues){
 
 static void openFATTask(void *p);
 
-static IORequest *openFAT(const char *fileName, uintptr_t nameLength){
+static IORequest *openFAT(const char *fileName, uintptr_t nameLength, OpenFileMode mode){
 	OpenFATRequest *ofr = allocateKernelMemory(sizeof(*ofr) + nameLength);
 	EXPECT(ofr != NULL);
 	initIORequest(&ofr->ior, ofr, notSupportCancelIORequest, finishOpenFAT);
 	strncpy(ofr->fileName, fileName, nameLength);
 	ofr->nameLength = nameLength;
+	ofr->mode = mode;
 	ofr->file = NULL;
 	ofr->fileManager = getOpenFileManager(processorLocalTask());
 	Task *t = createSharedMemoryTask(openFATTask, &ofr, sizeof(ofr), fat32List.mainTask);

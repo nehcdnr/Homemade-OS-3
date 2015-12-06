@@ -32,11 +32,20 @@ void readPartitions(const char *driverName, uintptr_t diskCode,
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
 
 // file interface
+typedef union{
+	uintptr_t value;
+	struct{
+		uintptr_t enumeration: 1;
+		uintptr_t writable: 1;
+	};
+}OpenFileMode;
+
+#define OPEN_FILE_MODE_0 ((OpenFileMode)(uintptr_t)0)
+
 // if failed, return IO_REQUEST_FAILURE
-uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength);
+uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
+uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFile(const char *fileName);
-uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength);
-uintptr_t systemCall_enumerateFile(const char *fileName, uintptr_t fileNameLength);
 uintptr_t syncEnumerateFile(const char * fileName);
 uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
@@ -75,12 +84,11 @@ typedef struct IORequest IORequest;
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
 typedef struct{
-	IORequest *(*open)(const char *name, uintptr_t nameLength);
-	IORequest *(*enumerate)(const char *query, uintptr_t queryLength);
+	IORequest *(*open)(const char *name, uintptr_t nameLength, OpenFileMode openMode);
 }FileNameFunctions;
 
 #define INITIAL_FILE_NAME_FUNCTIONS \
-	{NULL, NULL}
+	{NULL}
 
 int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
 

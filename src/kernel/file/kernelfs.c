@@ -145,11 +145,11 @@ static KFRequest *createKFRequest(const BLOBAddress *file, const FileFunctions *
 	return kfr;
 }
 
-static IORequest *openKFS(const char *fileName, uintptr_t length){
+static const BLOBAddress *mapAndFindByName(const char *fileName, uintptr_t length){
 	void *mappedPage;
 	void *mappedFileName;
 	if(mapBufferToKernel(fileName, length, &mappedPage, &mappedFileName) == 0)
-		return IO_REQUEST_FAILURE;
+		return NULL;
 
 	const BLOBAddress *file;
 	for(file = blobList; file != blobList + blobCount; file++){
@@ -158,46 +158,37 @@ static IORequest *openKFS(const char *fileName, uintptr_t length){
 		}
 	}
 	unmapPages(kernelLinear, mappedPage);
-	// file not found
 	if(file == blobList + blobCount)
-		return IO_REQUEST_FAILURE;
-
-	static const FileFunctions func = {
-		readKFS,
-		NULL,
-		seekKFS,
-		NULL,
-		NULL,
-		sizeOfKFS,
-		closeKFS,
-		isValidKFRequest
-	};
-	KFRequest *kfr = createKFRequest(file, &func);
-	if(kfr == NULL)
-		return IO_REQUEST_FAILURE;
-	pendIO(&kfr->ior);
-	addToOpenFileList(getOpenFileManager(processorLocalTask()), &kfr->ofr);
-	FINISH_FILE_IO_2(kfr, kfr->ofr.handle);
-	return &kfr->ior;
+		return NULL;
+	else return file;
 }
 
 static BLOBAddress kfDirectory;
 
-static IORequest *enumerateKFS(__attribute__((__unused__)) const char *fileName, uintptr_t length){
-	if(length != 0)
+static IORequest *openKFS(const char *fileName, uintptr_t length, OpenFileMode mode){
+	const BLOBAddress *file;
+	if(mode.enumeration == 0){
+		file = mapAndFindByName(fileName, length);
+	}
+	else{
+		file = (length == 0? &kfDirectory: NULL);
+	}
+	if(file == NULL)
 		return IO_REQUEST_FAILURE;
 
-	static const FileFunctions func = {
-		enumReadKFS,
-		NULL,
-		NULL,
-		NULL,
-		NULL,
-		NULL,
-		closeKFS,
-		isValidKFRequest
-	};
-	KFRequest *kfr = createKFRequest(&kfDirectory, &func);
+	static FileFunctions func = INITIAL_FILE_FUNCTIONS;
+	if(mode.enumeration == 0){
+		func.read = readKFS;
+		func.seek = seekKFS;
+		func.sizeOf = sizeOfKFS;
+	}
+	else{
+		func.read = enumReadKFS;
+	}
+	func.close = closeKFS;
+	func.isValidFile = isValidKFRequest;
+
+	KFRequest *kfr = createKFRequest(file, &func);
 	if(kfr == NULL)
 		return IO_REQUEST_FAILURE;
 	pendIO(&kfr->ior);
@@ -213,7 +204,6 @@ void kernelFileService(void){
 
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openKFS;
-	ff.enumerate = enumerateKFS;
 	int ok = addFileSystem(&ff, "kernelfs", strlen("kernelfs"));
 	if(!ok){
 		systemCall_terminate();
@@ -254,10 +244,10 @@ void testKFS(void){
 	testListKFS();
 	// file not exist
 	const char *f1 = "kernelfs:abcdefg.txt", *f2 = "kernelfs:testfile.txt";
-	r = systemCall_openFile(f1, strlen(f1));
+	r = systemCall_openFile(f1, strlen(f1), OPEN_FILE_MODE_0);
 	assert(r == IO_REQUEST_FAILURE);
 	// open file
-	r = systemCall_openFile(f2, strlen(f2));
+	r = systemCall_openFile(f2, strlen(f2), OPEN_FILE_MODE_0);
 	assert(r != IO_REQUEST_FAILURE);
 	uintptr_t file;
 	r2 = systemCall_waitIOReturn(r, 1, &file);

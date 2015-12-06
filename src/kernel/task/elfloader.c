@@ -207,7 +207,7 @@ static void elfLoader(void *arg){
 	struct ELFLoaderParam *p = arg;
 	uintptr_t file;
 	uintptr_t request;
-	file = syncOpenFileN(p->fileName, p->nameLength);
+	file = syncOpenFileN(p->fileName, p->nameLength, OPEN_FILE_MODE_0);
 	EXPECT(file != IO_REQUEST_FAILURE);
 	// ELFHeader32
 	ELFHeader32 elfHeader32;

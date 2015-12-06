@@ -272,14 +272,16 @@ void closeAllOpenFileRequest(OpenFileManager *ofm){
 	}
 }
 
+// arg0 = str; arg1 = strLen
 #define NULL_OR_CALL(F) (F) == NULL? IO_REQUEST_FAILURE: (uintptr_t)(F)
 static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *str, uintptr_t strLen, InterruptParam *p){
 	const FileNameFunctions *ff = &fs->fileNameFunctions;
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_OPEN_FILE:
-		return NULL_OR_CALL(ff->open)(str, strLen);
-	case SYSCALL_ENUMERATE_FILE:
-		return NULL_OR_CALL(ff->enumerate)(str, strLen);
+		{
+			OpenFileMode m = {value: SYSTEM_CALL_ARGUMENT_2(p)};
+			return NULL_OR_CALL(ff->open)(str, strLen, m);
+		}
 	default:
 		return IO_REQUEST_FAILURE;
 	}
@@ -319,36 +321,30 @@ static uintptr_t dispatchFileHandleCommand(const InterruptParam *p){
 }
 #undef NULL_OR_CALL
 
-uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength){
-	return systemCall3(SYSCALL_OPEN_FILE, (uintptr_t)fileName, fileNameLength);
+static_assert(sizeof(OpenFileMode) == sizeof(uintptr_t));
+
+uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength, OpenFileMode openMode){
+	return systemCall4(SYSCALL_OPEN_FILE, (uintptr_t)fileName, fileNameLength, openMode.value);
+}
+
+uintptr_t syncOpenFileN(const char *fileName, uintptr_t nameLength, OpenFileMode openMode){
+	uintptr_t handle;
+	uintptr_t r = systemCall_openFile(fileName, nameLength, openMode);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, &handle))
+		return IO_REQUEST_FAILURE;
+	return handle;
 }
 
 uintptr_t syncOpenFile(const char *fileName){
-	return syncOpenFileN(fileName, strlen(fileName));
-}
-
-uintptr_t syncOpenFileN(const char *fileName, uintptr_t nameLength){
-	uintptr_t handle;
-	uintptr_t r = systemCall_openFile(fileName, nameLength);
-	if(r == IO_REQUEST_FAILURE)
-		return r;
-	if(r != systemCall_waitIOReturn(r, 1, &handle))
-		return IO_REQUEST_FAILURE;
-	return handle;
-}
-
-uintptr_t systemCall_enumerateFile(const char *fileName, uintptr_t fileNameLength){
-	return systemCall3(SYSCALL_ENUMERATE_FILE, (uintptr_t)fileName, fileNameLength);
+	return syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_0);
 }
 
 uintptr_t syncEnumerateFile(const char * fileName){
-	uintptr_t handle;
-	uintptr_t r = systemCall_enumerateFile(fileName, strlen(fileName));
-	if(r == IO_REQUEST_FAILURE)
-		return r;
-	if(r != systemCall_waitIOReturn(r, 1, &handle))
-		return IO_REQUEST_FAILURE;
-	return handle;
+	OpenFileMode m = OPEN_FILE_MODE_0;
+	m.enumeration = 1;
+	return syncOpenFileN(fileName, strlen(fileName), m);
 }
 
 uintptr_t systemCall_closeFile(uintptr_t handle){
@@ -502,7 +498,6 @@ static void FileHandleCommandHandler(InterruptParam *p){
 
 void initFile(SystemCallTable *s){
 	registerSystemCall(s, SYSCALL_OPEN_FILE, FileNameCommandHandler, -1);
-	registerSystemCall(s, SYSCALL_ENUMERATE_FILE, FileNameCommandHandler, -2);
 	registerSystemCall(s, SYSCALL_CLOSE_FILE, FileHandleCommandHandler, 1);
 	registerSystemCall(s, SYSCALL_READ_FILE, FileHandleCommandHandler, 2);
 	registerSystemCall(s, SYSCALL_WRITE_FILE, FileHandleCommandHandler, 3);
