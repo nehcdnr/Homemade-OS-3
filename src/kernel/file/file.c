@@ -186,9 +186,67 @@ uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
 
+static_assert(MEMBER_OFFSET(struct FileIORequest, returnValues) == MEMBER_OFFSET(FileIORequest1, returnValues));
+
+static void cancelFileIORequest(IORequest *ior){
+	struct FileIORequest *r0 = ior->instance;
+	r0->cancelFileIO(r0->instance);
+}
+
+static int acceptFileIORequest(IORequest *ior, uintptr_t *returnValue){
+	struct FileIORequest *r0 = ior->instance;
+	int r = r0->returnCount, i;
+	for(i = 0; i < r; i++){
+		returnValue[i] = r0->returnValues[i];
+	}
+
+	r0->acceptFileIO(r0->instance);
+	return r;
+}
+
+void initFileIO(struct FileIORequest *fior, void *instance, OpenFileRequest *ofr, CancelFileIO *cancel, AcceptFileIO *accept){
+	initIORequest(&fior->ior, fior, cancelFileIORequest, acceptFileIORequest);
+	fior->ofr = ofr;
+	fior->systemCall = 0;
+	fior->instance = instance;
+	fior->cancelFileIO = cancel;
+	fior->acceptFileIO = accept;
+}
+/*
+static void setLastCommand(struct FileIORequest *fior, enum SystemCall fileSystemCall){
+	assert(fior->systemCall == 0);
+	fior->systemCall = fileSystemCall;
+}
+*/
+static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
+	fior->returnCount = returnCount;
+	va_list va;
+	va_start(va, returnCount);
+	int i;
+	for(i = 0; i < returnCount; i++){
+		fior->returnValues[i] = va_arg(va, uintptr_t);
+	}
+	va_end(va);
+
+	finishIO(&fior->ior);
+}
+
+void completeFileIO0(FileIORequest0 *r0){
+	completeFileIO(&r0->fior, 0);
+}
+
+void completeFileIO1(FileIORequest1 *r1, uintptr_t v0){
+	completeFileIO(&r1->fior, 1, v0);
+}
+
+void completeFileIO2(FileIORequest2 *r1, uintptr_t v0, uintptr_t v1){
+	completeFileIO(&r1->fior, 2, v0, v1);
+}
+
 void initOpenFileRequest(OpenFileRequest *ofr, void *instance, /*Task *task, */const FileFunctions *fileFunctions){
 	ofr->instance = instance;
 	ofr->handle = (uintptr_t)&ofr->handle;
+	ofr->isClosing = 0;
 	//ofr->task = task;
 	ofr->fileFunctions = (*fileFunctions);
 	ofr->next = NULL;
@@ -226,12 +284,14 @@ int addOpenFileManagerReference(OpenFileManager *ofm, int n){
 	return refCnt;
 }
 
-static OpenFileRequest *searchOpenFileList(OpenFileManager *ofm, uintptr_t handle){
-	OpenFileRequest *ofr;
+static OpenFileRequest *searchOpenFileList(OpenFileManager *ofm, uintptr_t handle, int setClosing){
 	acquireLock(&ofm->lock);
+	OpenFileRequest *ofr;
 	for(ofr = ofm->openFileList; ofr != NULL; ofr = ofr->next){
-		if(ofr->handle == handle)
+		if(ofr->handle == handle && ofr->isClosing == 0){
+			ofr->isClosing = setClosing;
 			break;
+		}
 	}
 	releaseLock(&ofm->lock);
 	if(ofr == NULL)
@@ -246,6 +306,7 @@ void addToOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr){
 }
 
 void removeFromOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr){
+	assert(ofr->isClosing);
 	acquireLock(&ofm->lock);
 	REMOVE_FROM_DQUEUE(ofr);
 	releaseLock(&ofm->lock);
@@ -289,9 +350,13 @@ static uintptr_t dispatchFileNameCommand(FileSystem *fs, const char *str, uintpt
 
 static uintptr_t dispatchFileHandleCommand(const InterruptParam *p){
 	// TODO: check Address
-	OpenFileRequest *arg = searchOpenFileList(getOpenFileManager(processorLocalTask()), SYSTEM_CALL_ARGUMENT_0(p));
-	if(arg == NULL)
-		arg = searchOpenFileList(globalOpenFileManager, SYSTEM_CALL_ARGUMENT_0(p));
+	int setClosing = (SYSTEM_CALL_NUMBER(p) == SYSCALL_CLOSE_FILE);
+	OpenFileManager *ofm = getOpenFileManager(processorLocalTask());
+	OpenFileRequest *arg = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), setClosing);
+	if(arg == NULL){
+		ofm = globalOpenFileManager;
+		arg = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), setClosing);
+	}
 	if(arg == NULL)
 		return IO_REQUEST_FAILURE;
 	const FileFunctions *f = &arg->fileFunctions;
@@ -300,7 +365,13 @@ static uintptr_t dispatchFileHandleCommand(const InterruptParam *p){
 	}
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_CLOSE_FILE:
-		return NULL_OR_CALL(f->close)(arg);
+		{ // close cannot fail or be cancelled unless file does not exist
+			//removeFromOpenFileList(ofm, arg);
+			uintptr_t ior = NULL_OR_CALL(f->close)(arg);
+			assert(ior != IO_REQUEST_FAILURE);
+			assert(((IORequest*)ior)->cancellable == 0);
+			return ior;
+		}
 	case SYSCALL_READ_FILE:
 		return NULL_OR_CALL(f->read)(arg, (uint8_t*)SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p));
 	case SYSCALL_WRITE_FILE:
@@ -383,6 +454,16 @@ uintptr_t systemCall_seekFile(uintptr_t handle, uint64_t position){
 	return systemCall4(SYSCALL_SEEK_FILE, handle, LOW64(position), HIGH64(position));
 }
 
+uintptr_t syncSeekFile(uintptr_t handle, uint64_t position){
+	uintptr_t r;
+	r = systemCall_seekFile(handle, position);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIO(r))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}
+
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize){
 	return systemCall6(SYSCALL_SEEK_READ_FILE, handle, (uintptr_t)buffer,
 		LOW64(position), HIGH64(position), bufferSize);
@@ -401,16 +482,6 @@ uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, ui
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize){
 	return systemCall6(SYSCALL_SEEK_READ_FILE, handle, (uintptr_t)buffer,
 		LOW64(position), HIGH64(position), bufferSize);
-}
-
-uintptr_t syncSeekFile(uintptr_t handle, uint64_t position){
-	uintptr_t r;
-	r = systemCall_seekFile(handle, position);
-	if(r == IO_REQUEST_FAILURE)
-		return r;
-	if(r != systemCall_waitIO(r))
-		return IO_REQUEST_FAILURE;
-	return handle;
 }
 
 uintptr_t systemCall_sizeOfFile(uintptr_t handle){

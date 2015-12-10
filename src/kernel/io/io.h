@@ -1,3 +1,6 @@
+#ifndef IO_H_INCLUDED
+#define IO_H_INCLUDED
+
 #include"interrupt/handler.h"
 
 typedef struct IORequest IORequest;
@@ -130,3 +133,5 @@ void ahciDriver(void);
 // return 0 if fail
 // return 1 if the io request is issued
 uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite);
+
+#endif

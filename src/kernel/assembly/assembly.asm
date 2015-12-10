@@ -9,6 +9,14 @@ xchg8:
 	xchg [edx], al
 	ret
 
+global xchg32
+xchg32:
+	xor eax, eax
+	mov edx, [esp + 4]
+	mov eax, [esp + 8]
+	xchg [edx], eax
+	ret
+
 global lock_add32
 lock_add32:
 	mov edx, [esp + 4]

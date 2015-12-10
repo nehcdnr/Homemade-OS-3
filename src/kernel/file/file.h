@@ -1,5 +1,6 @@
 #include<std.h>
 #include"memory/memory.h"
+#include"io/io.h"
 
 // disk driver
 
@@ -64,7 +65,7 @@ uintptr_t syncCloseFile(uintptr_t handle);
 #define MAX_FILE_ENUM_NAME_LENGTH (64)
 typedef struct FileEnumeration{
 	// type, access timestamp ...
-	uint32_t nameLength;
+	uintptr_t  nameLength;
 	char name[MAX_FILE_ENUM_NAME_LENGTH];
 }FileEnumeration;
 
@@ -79,7 +80,6 @@ void initFile(SystemCallTable *s);
 
 
 typedef struct OpenFileRequest OpenFileRequest;
-typedef struct IORequest IORequest;
 
 uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
@@ -91,6 +91,49 @@ typedef struct{
 	{NULL}
 
 int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
+
+// file IO common structure
+
+typedef void CancelFileIO(void *instance);
+typedef void AcceptFileIO(void *instance);
+
+struct FileIORequest{
+	IORequest ior;
+	void *instance;
+	OpenFileRequest *ofr;
+	uintptr_t systemCall;
+	CancelFileIO *cancelFileIO;
+	AcceptFileIO *acceptFileIO;
+	int returnCount;
+	uintptr_t returnValues[0];
+};
+
+typedef struct{
+	struct FileIORequest fior;
+	//uintptr_t returnValues[0];
+}FileIORequest0;
+
+typedef struct{
+	struct FileIORequest fior;
+	uintptr_t returnValues[1];
+}FileIORequest1;
+
+typedef struct{
+	struct FileIORequest fior;
+	uintptr_t returnValues[2];
+}FileIORequest2;
+
+void initFileIO(
+	struct FileIORequest *r0, void *instance,
+	OpenFileRequest *ofr, CancelFileIO *cancel, AcceptFileIO *accept
+);
+
+#define INIT_FILE_IO(FIOR, INSTANCE, OFR, CANCEL, ACCEPT) \
+	initFileIO(&(FIOR)->fior, (INSTANCE), (OFR), (CANCEL), (ACCEPT));
+
+void completeFileIO0(FileIORequest0 *r0);
+void completeFileIO1(FileIORequest1 *r1, uintptr_t v0);
+void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
 
 typedef struct{
 	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
@@ -109,14 +152,15 @@ typedef struct{
 #define INITIAL_FILE_FUNCTIONS \
 	{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
 
-typedef struct Task Task;
 struct OpenFileRequest{
 	void *instance;
 	uintptr_t handle;
+	uint32_t isClosing; // atomic read/write 32
 	//Task *task;
 	FileFunctions fileFunctions;
 	OpenFileRequest *next, **prev;
 };
+
 void initOpenFileRequest(
 	OpenFileRequest *ofr,
 	void *instance,
@@ -125,12 +169,14 @@ void initOpenFileRequest(
 );
 
 typedef struct OpenFileManager OpenFileManager;
+
 OpenFileManager *createOpenFileManager(void);
 void deleteOpenFileManager(OpenFileManager *ofm);
 int addOpenFileManagerReference(OpenFileManager *ofm, int n);
 void addToOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr);
 void removeFromOpenFileList(OpenFileManager *ofm, OpenFileRequest *ofr);
 uintptr_t getFileHandle(OpenFileRequest *ofr);
+// assume no pending IO requests
 void closeAllOpenFileRequest(OpenFileManager *ofm);
 
 extern OpenFileManager *globalOpenFileManager; // see taskmanager.c
