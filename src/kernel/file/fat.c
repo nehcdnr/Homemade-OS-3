@@ -447,82 +447,75 @@ static void deleteOpenedFATFile(OpenedFATFile *f){
 typedef struct{
 	uintptr_t nameLength;
 	OpenFileMode mode;
-	OpenedFATFile *file; // NULL if failed to open
 	OpenFileManager *fileManager;
-	IORequest ior;
+	FileIORequest1 fior;
 	char fileName[];
 }OpenFATRequest;
 
-static int finishOpenFAT(IORequest *ior, uintptr_t *returnValues){
-	OpenFATRequest *ofr = ior->instance;
-	returnValues[0] = (ofr->file == NULL? IO_REQUEST_FAILURE: getFileHandle(&ofr->file->ofr));
+static void acceptOpenFAT(void *instance){
+	OpenFATRequest *ofr = instance;
 	DELETE(ofr);
-	return 1;
 }
 
 static void openFATTask(void *p);
 
-static IORequest *openFAT(const char *fileName, uintptr_t nameLength, OpenFileMode mode){
+static FileIORequest1 *openFAT(const char *fileName, uintptr_t nameLength, OpenFileMode mode){
 	OpenFATRequest *ofr = allocateKernelMemory(sizeof(*ofr) + nameLength);
 	EXPECT(ofr != NULL);
-	initIORequest(&ofr->ior, ofr, notSupportCancelIORequest, finishOpenFAT);
+	INIT_FILE_IO(&ofr->fior, ofr, notSupportCancelFileIO, acceptOpenFAT);
 	strncpy(ofr->fileName, fileName, nameLength);
 	ofr->nameLength = nameLength;
 	ofr->mode = mode;
-	ofr->file = NULL;
 	ofr->fileManager = getOpenFileManager(processorLocalTask());
 	Task *t = createSharedMemoryTask(openFATTask, &ofr, sizeof(ofr), fat32List.mainTask);
 	EXPECT(t != NULL);
-	pendIO(&ofr->ior);
+	pendIO(&ofr->fior.fior.ior);
 	resume(t);
-	return &ofr->ior;
+	return &ofr->fior;
 	// delete task
 	ON_ERROR;
 	ON_ERROR;
-	return IO_REQUEST_FAILURE;
+	return NULL;
 }
 
 // readFAT
 
 typedef struct{
-	uintptr_t inputRWSize, outputRWSize;
+	uintptr_t inputRWSize;
 	uintptr_t bufferOffset;
 	PhysicalAddressArray *pa;
 	OpenedFATFile *file;
-	IORequest ior;
+	FileIORequest1 fior;
 }RWFATRequest;
 
-static int finishRWFAT(IORequest* ior, uintptr_t *returnValues){
-	RWFATRequest *f = ior->instance;
-	returnValues[0] = f->outputRWSize;
+static void acceptRWFAT(void* instance){
+	RWFATRequest *f = instance;
 	deletePhysicalAddressArray(f->pa);
 	DELETE(f);
-	return 1;
 }
 
 static void rwFATTask(void *rwfrPtr);
 
-static IORequest *readFAT(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t readSize){
+static FileIORequest1 *readFAT(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t readSize){
 	RWFATRequest *NEW(rwfr);
 	EXPECT(rwfr != NULL);
-	initIORequest(&rwfr->ior, rwfr, notSupportCancelIORequest, finishRWFAT);
+	INIT_FILE_IO(&rwfr->fior, rwfr, notSupportCancelFileIO, acceptRWFAT);
 	rwfr->file = ofr->instance;
 	rwfr->inputRWSize = readSize;
-	rwfr->outputRWSize = 0;
 	rwfr->pa = reserveBufferPages(buffer, readSize, &rwfr->bufferOffset);
 	EXPECT(rwfr->pa != NULL);
 	Task *t = createSharedMemoryTask(rwFATTask, &rwfr, sizeof(rwfr), fat32List.mainTask);
 	EXPECT(t != NULL);
-	pendIO(&rwfr->ior);
+	pendIO(&rwfr->fior.fior.ior);
 	resume(t);
-	return &rwfr->ior;
+	return &rwfr->fior;
 	// delete task
 	ON_ERROR;
 	deletePhysicalAddressArray(rwfr->pa);
 	ON_ERROR;
 	DELETE(rwfr);
 	ON_ERROR;
-	return IO_REQUEST_FAILURE;
+	return NULL;
 }
 
 static uintptr_t readByFAT(const FAT32DiskPartition *dp, void *buffer, uint32_t beginCluster,
@@ -567,9 +560,10 @@ static void rwFATTask(void *rwfrPtr){
 	EXPECT(bufferPage != NULL);
 	void *buffer = (void*)(((uintptr_t)bufferPage) + rwfr->bufferOffset);
 	acquireReaderLock(f->shared->rwLock);
+	uintptr_t outputRWSize = 0;
 	// IMPROVE: f->offset is not locked
 	if(f->mode.enumeration){
-		rwfr->outputRWSize = 0;
+		outputRWSize = 0;
 		if(rwfr->inputRWSize >= sizeof(FileEnumeration)){
 			FileEnumeration *fileEnum = buffer;
 			while(1){
@@ -585,55 +579,49 @@ static void rwFATTask(void *rwfrPtr){
 					continue;
 				assert(sizeof(fileEnum->name) >= sizeof(dir.fileName));
 				fileEnum->nameLength = getFileName(&dir, fileEnum->name);
-				rwfr->outputRWSize = sizeof(*fileEnum);
+				outputRWSize = sizeof(*fileEnum);
 				break;
 			}
 		}
 	}
 	else{
 		uint32_t readFileSize = MIN(rwfr->inputRWSize, f->dirEntry.fileSize - f->offset);
-		rwfr->outputRWSize = readByFAT(f->shared->diskPartition,
+		outputRWSize = readByFAT(f->shared->diskPartition,
 			buffer, f->shared->beginCluster, f->offset, readFileSize);
-		f->offset += rwfr->outputRWSize;
+		f->offset += outputRWSize;
 	}
 	releaseReaderWriterLock(f->shared->rwLock);
 
 	unmapPages(lm, bufferPage);
-	finishIO(&rwfr->ior);
+	completeFileIO1(&rwfr->fior, outputRWSize);
 	systemCall_terminate();
 
 	//unmapPages(lm, bufferPage2);
 	ON_ERROR;
-	finishIO(&rwfr->ior);
+	completeFileIO1(&rwfr->fior, 0);
 	systemCall_terminate();
 }
 
 // sizeOfFAT
 
 typedef struct{
-	uint32_t sizeOfFile;
-	IORequest ior;
+	FileIORequest2 fior;
 }SizeOfFATRequest;
 
-static int finishSizeOfFAT(IORequest *ior, uintptr_t *returnValues){
-	SizeOfFATRequest *sofr = ior->instance;
-	returnValues[0] = sofr->sizeOfFile;
-	returnValues[1] = 0;
+static void acceptSizeOfFAT(void *instance){
+	SizeOfFATRequest *sofr = instance;
 	DELETE(sofr);
-	return 2;
 }
 
-static IORequest *sizeOfFAT(OpenFileRequest *ofr){
+static FileIORequest2 *sizeOfFAT(OpenFileRequest *ofr){
 	OpenedFATFile *f = ofr->instance;
 	SizeOfFATRequest *NEW(sofr);
-	if(sofr == NULL){
-		return IO_REQUEST_FAILURE;
-	}
-	initIORequest(&sofr->ior, sofr, notSupportCancelIORequest, finishSizeOfFAT);
-	sofr->sizeOfFile = f->dirEntry.fileSize;
-	pendIO(&sofr->ior);
-	finishIO(&sofr->ior);
-	return &sofr->ior;
+	if(sofr == NULL)
+		return NULL;
+	INIT_FILE_IO(&sofr->fior, sofr, notSupportCancelFileIO, acceptSizeOfFAT);
+	pendIO(&sofr->fior.fior.ior); // TODO:
+	completeFileIO64(&sofr->fior, f->dirEntry.fileSize);
+	return &sofr->fior;
 }
 
 // closeFAT
@@ -641,28 +629,25 @@ static IORequest *sizeOfFAT(OpenFileRequest *ofr){
 typedef struct{
 	OpenedFATFile *file;
 	OpenFileManager *fileManager;
-	IORequest ior;
+	FileIORequest0 fior;
 }CloseFATRequest;
 
-static int finishCloseFAT(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
-	CloseFATRequest *cfr = ior->instance;
-	//TODO: wait until all IO requests finish
-	removeFromOpenFileList(cfr->fileManager, &cfr->file->ofr);
+static void acceptCloseFAT(void *instance){
+	CloseFATRequest *cfr = instance;
 	deleteOpenedFATFile(cfr->file);
 	DELETE(cfr);
-	return 0;
 }
 
-static IORequest *closeFAT(OpenFileRequest *ofr){
+static FileIORequest0 *closeFAT(OpenFileRequest *ofr){
 	OpenedFATFile *f = ofr->instance;
 	// TODO: rwlock. if there are pending io request, wait until they finish
 	CloseFATRequest *NEW(cfr);
-	initIORequest(&cfr->ior, cfr, notSupportCancelIORequest, finishCloseFAT);
+	INIT_FILE_IO(&cfr->fior, cfr, notSupportCancelFileIO, acceptCloseFAT);
 	cfr->file = f;
 	cfr->fileManager = getOpenFileManager(processorLocalTask());
-	pendIO(&cfr->ior);
-	finishIO(&cfr->ior);
-	return &cfr->ior;
+	pendIO(&cfr->fior.fior.ior);
+	completeFileIO0(&cfr->fior);
+	return &cfr->fior;
 }
 
 static int skipSlash(const char *s, uintptr_t i, uintptr_t len){
@@ -742,9 +727,8 @@ static void openFATTask(void *p){
 	OpenedFATFile *file = createOpenedFATFile(&ff, ofr->mode, dp, &d);
 	EXPECT(file != NULL);
 
-	ofr->file = file;
 	addToOpenFileList(ofr->fileManager, &file->ofr);
-	finishIO(&ofr->ior);
+	completeFileIO1(&ofr->fior, getFileHandle(&file->ofr));
 	systemCall_terminate();
 
 	//deleteOpenedFATFile(file);
@@ -752,7 +736,7 @@ static void openFATTask(void *p){
 	ON_ERROR;
 	ON_ERROR;
 	// ofr->file = NULL;
-	finishIO(&ofr->ior);
+	completeFileIO1(&ofr->fior, IO_REQUEST_FAILURE);
 	printk("open FAT failed\n");
 	systemCall_terminate();
 }

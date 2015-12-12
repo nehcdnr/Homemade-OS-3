@@ -31,6 +31,7 @@ void readPartitions(const char *driverName, uintptr_t diskCode,
 	uint64_t lba, uint64_t sectorCount, uintptr_t sectorSize);
 
 uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
+uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
 
 // file interface
 typedef union{
@@ -69,6 +70,8 @@ typedef struct FileEnumeration{
 	char name[MAX_FILE_ENUM_NAME_LENGTH];
 }FileEnumeration;
 
+// file service functions
+
 void initFileEnumeration(FileEnumeration *fileEnum, const char *name);
 
 // call unmapPages(kernelLinear, mappedPage) to release
@@ -78,29 +81,17 @@ PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uin
 typedef struct SystemCallTable SystemCallTable;
 void initFile(SystemCallTable *s);
 
-
-typedef struct OpenFileRequest OpenFileRequest;
-
-uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
-
-typedef struct{
-	IORequest *(*open)(const char *name, uintptr_t nameLength, OpenFileMode openMode);
-}FileNameFunctions;
-
-#define INITIAL_FILE_NAME_FUNCTIONS \
-	{NULL}
-
-int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
-
 // file IO common structure
 
 typedef void CancelFileIO(void *instance);
 typedef void AcceptFileIO(void *instance);
 
+void notSupportCancelFileIO(void *instance);
+
 struct FileIORequest{
 	IORequest ior;
 	void *instance;
-	OpenFileRequest *ofr;
+	// OpenFileRequest *ofr;
 	uintptr_t systemCall;
 	CancelFileIO *cancelFileIO;
 	AcceptFileIO *acceptFileIO;
@@ -125,32 +116,55 @@ typedef struct{
 
 void initFileIO(
 	struct FileIORequest *r0, void *instance,
-	OpenFileRequest *ofr, CancelFileIO *cancel, AcceptFileIO *accept
+	/*OpenFileRequest *ofr, */CancelFileIO *cancel, AcceptFileIO *accept
 );
 
-#define INIT_FILE_IO(FIOR, INSTANCE, OFR, CANCEL, ACCEPT) \
-	initFileIO(&(FIOR)->fior, (INSTANCE), (OFR), (CANCEL), (ACCEPT));
+#define INIT_FILE_IO(FIOR, INSTANCE, CANCEL, ACCEPT) \
+	initFileIO(&((FIOR)->fior), (INSTANCE), (CANCEL), (ACCEPT))
 
 void completeFileIO0(FileIORequest0 *r0);
 void completeFileIO1(FileIORequest1 *r1, uintptr_t v0);
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
+void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
+
+typedef struct OpenFileRequest OpenFileRequest;
 
 typedef struct{
-	IORequest *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
-	IORequest *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
-	IORequest *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
-	IORequest *(*seekRead)(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-	IORequest *(*seekWrite)(OpenFileRequest *ofr, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-	IORequest *(*sizeOf)(OpenFileRequest *ofr);
-	IORequest *(*close)(OpenFileRequest *ofr);
+	FileIORequest1 *(*open)(const char *name, uintptr_t nameLength, OpenFileMode openMode);
+}FileNameFunctions;
+
+FileIORequest1 *dummyOpen(const char *name, uintptr_t nameLength, OpenFileMode openMode);
+
+#define INITIAL_FILE_NAME_FUNCTIONS {dummyOpen}
+
+int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
+
+typedef struct{
+	FileIORequest1 *(*read)(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
+	FileIORequest1 *(*write)(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
+	FileIORequest0 *(*seek)(OpenFileRequest *ofr, uint64_t position/*, whence*/);
+	FileIORequest1 *(*seekRead)(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+	FileIORequest1 *(*seekWrite)(OpenFileRequest *ofr, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+	FileIORequest2 *(*sizeOf)(OpenFileRequest *ofr);
+	FileIORequest0 *(*close)(OpenFileRequest *ofr);
 	// If the argument is not valid, return 0.
 	// Otherwise, the argument of isValidFile will be passed to the above functions
 	int (*isValidFile)(OpenFileRequest *ofr);
 }FileFunctions;
 
+// always return NULL
+FileIORequest1 *dummyRead(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize);
+FileIORequest1 *dummyWrite(OpenFileRequest *ofr, const uint8_t *buffer, uintptr_t bufferSize);
+FileIORequest0 *dummySeek(OpenFileRequest *ofr, uint64_t position);
+FileIORequest1 *dummySeekRead(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+FileIORequest1 *dummySeekWrite(OpenFileRequest *ofr, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+FileIORequest2 *dummySizeOf(OpenFileRequest *ofr);
+FileIORequest0 *dummyClose(OpenFileRequest *ofr);
+int dummyIsValidFile(OpenFileRequest *ofr);
+
 // use macro to check number of arguments
 #define INITIAL_FILE_FUNCTIONS \
-	{NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL}
+	{dummyRead, dummyWrite, dummySeek, dummySeekRead, dummySeekWrite, dummySizeOf, dummyClose, dummyIsValidFile}
 
 struct OpenFileRequest{
 	void *instance;

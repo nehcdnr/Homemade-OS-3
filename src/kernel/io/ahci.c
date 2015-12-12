@@ -443,7 +443,7 @@ static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 // system call
 typedef struct DiskRequest DiskRequest;
 struct DiskRequest{
-	IORequest this;
+	FileIORequest1 fior;
 	Spinlock *lock;
 	enum ATACommand command;
 	LinearMemoryManager *memoryManager;
@@ -476,18 +476,16 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static int finishDiskRequest(IORequest *ior, uintptr_t *returnValues){
-	DiskRequest *dr = ior->instance;
-	returnValues[0] = dr->sectorCount * dr->ahci->desc.sectorSize;
+static void finishDiskRequest(void *instance){
+	DiskRequest *dr = instance;
 	// see createDiskRequest
 	// assume the memoryManager is not deleted until the IORequest finishes
 	releaseReservedPage(dr->memoryManager, dr->buffer);
 	DELETE(dr);
-	return 1;
 }
 
-static void cancelDiskRequest(IORequest *ior){
-	DiskRequest *dr = ior->instance;
+static void cancelDiskRequest(void *instance){
+	DiskRequest *dr = instance;
 	acquireLock(dr->lock);
 	REMOVE_FROM_DQUEUE(dr);
 	releaseLock(dr->lock);
@@ -504,7 +502,7 @@ static DiskRequest *createDiskRequest(
 	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	initIORequest(&dr->this, dr, cancelDiskRequest, finishDiskRequest);
+	INIT_FILE_IO(&dr->fior, dr, cancelDiskRequest, finishDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->memoryManager = lm;
@@ -517,6 +515,7 @@ static DiskRequest *createDiskRequest(
 	dr->prev = NULL;
 	dr->next = NULL;
 	return dr;
+	//DELETE(dr);
 	ON_ERROR;
 	releaseReservedPage(lm, buffer);
 	ON_ERROR;
@@ -587,7 +586,7 @@ static void AHCIHandler(InterruptParam *param){
 		if(dr == NULL)
 			printk("warning: AHCI driver received unexpected interrupt\n");
 		else{
-			finishIO(&dr->this);
+			completeFileIO1(&dr->fior, dr->sectorCount * dr->ahci->desc.sectorSize);
 		}
 		if(servePortQueue(arg, p) == 0){
 			panic("servePortQueue == 0"); // TODO: how to handle?
@@ -648,7 +647,7 @@ static HBAPortIndex toDiskCode(int a, int p){
 	return i;
 }
 
-static IORequest *ahciService(
+static DiskRequest *ahciService(
 	AHCIManager *am,
 	LinearMemoryManager *lm,
 	void *linearBuffer,
@@ -668,7 +667,7 @@ static IORequest *ahciService(
 		hba, index.portIndex, isWrite
 	);
 	EXPECT(dr != NULL);
-	pendIO(&dr->this);
+	pendIO(&dr->fior.fior.ior);
 	acquireLock(dr->lock);
 	addToPortQueue(dr, /*hba, */index.portIndex);
 	if(servePortQueue(hba, index.portIndex) == 0){
@@ -676,7 +675,7 @@ static IORequest *ahciService(
 		// TODO: how to handle?
 	}
 	releaseLock(dr->lock);
-	return &dr->this;
+	return dr;
 	// destroy(dr);
 	ON_ERROR;
 	ON_ERROR;
@@ -689,11 +688,13 @@ static int initDiskDescription(struct DiskDescription *d, AHCIManager *ahciManag
 	uint16_t *buffer = systemCall_allocateHeap(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
-	uintptr_t ior = (uintptr_t)ahciService(ahciManager,
-		getTaskLinearMemory(processorLocalTask()), buffer, 0, 0, i, 0, 1);
-	EXPECT(ior != IO_REQUEST_FAILURE);
-	uintptr_t waitIOR = systemCall_waitIO(ior);
-	assert(waitIOR == ior);
+	DiskRequest *dr = ahciService(
+		ahciManager, getTaskLinearMemory(processorLocalTask()), buffer,
+		0, 0, i, 0, 1
+	);
+	EXPECT(dr != NULL);
+	uintptr_t waitIOR = systemCall_waitIO((uintptr_t)&dr->fior);
+	assert(waitIOR == (uintptr_t)&dr->fior);
 	// the driver requires 48-bit address
 	const uint16_t buffer83 = buffer[83];
 	EXPECT(buffer83 & (1 << 10));
@@ -791,15 +792,15 @@ typedef struct{
 	HBAPortIndex diskCode;
 }OpenAHCIRequest;
 
-static IORequest *seekReadAHCI(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
+static FileIORequest1 *seekReadAHCI(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
 	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
 	OpenAHCIRequest *oar = ofr->instance;
-	IORequest *ior = ahciService(oar->manager,
+	DiskRequest *dr = ahciService(oar->manager,
 		getTaskLinearMemory(processorLocalTask()), buffer, position, bufferSize,
 		oar->diskCode, 0, 0 // isWrite, isIdentify
 	);
-	EXPECT(ior != NULL);
-	return ior;
+	EXPECT(dr != NULL);
+	return &dr->fior;
 	ON_ERROR;
 	ON_ERROR;
 	return IO_REQUEST_FAILURE;
