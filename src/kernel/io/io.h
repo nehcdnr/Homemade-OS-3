@@ -4,29 +4,29 @@
 #include"interrupt/handler.h"
 
 typedef struct IORequest IORequest;
-typedef void CancelIORequest(IORequest*);
-typedef int FinishIORequest(IORequest*, uintptr_t*);
+typedef void CancelIO(void *instance);
+typedef int AcceptIO(void *instance, uintptr_t *returnValues);
 typedef struct Task Task;
 struct IORequest{
 	void *instance;
 	// for Task.pendingIOList; see taskmanager.c
 	IORequest **prev, *next;
 	Task *task;
-	// the request can be pending or finished
-	// IORequest should be deleted in this function
-	CancelIORequest *cancel;
+	// the request can be pending or completed
+	// instance and IORequest should be deleted in this function
+	CancelIO *cancel;
 	int cancellable;
 	// return number of elements in returnValues
-	// IORequest should be deleted in this function
-	FinishIORequest *finish;
+	// instance and IORequest should be deleted in this function
+	AcceptIO *accept;
 	// in the above 3 functions and initIORequest,
-	// initIORequest(), cancel() and finish() are always invoked by its own task;
-	// handle() may be invoked by different task.
-	// handle() and cancel() may run concurrently.
+	// initIORequest(), cancel() and accept() are always invoked by its own task;
+	// IO may be handled by different task.
+	// handling and cancel() may run concurrently.
 };
 void pendIO(IORequest *ior);
 IORequest *waitIO(Task *t, IORequest *ioNumber);
-void finishIO(IORequest *ior); // IORequestHandler
+void completeIO(IORequest *ior); // IORequestHandler
 
 // call with UINTPTR_NULL to wait for any I/O request
 // IMPROVE: struct IORequestHandle{uintptr_t value;};
@@ -36,14 +36,14 @@ int systemCall_cancelIO(uintptr_t io);
 
 void setCancellable(IORequest *ior, int value);
 
-CancelIORequest notSupportCancelIORequest;
+CancelIO notSupportCancelIO;
 
 void initIORequest(
-	IORequest *this,
+	IORequest *ior,
 	void *instance,
 	//Task* t,
-	CancelIORequest *cancelIORequest,
-	FinishIORequest *finishIORequest
+	CancelIO *cancelIO,
+	AcceptIO *acceptIO
 );
 
 #define IO_REQUEST_FAILURE ((uintptr_t)0)

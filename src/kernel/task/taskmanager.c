@@ -82,8 +82,8 @@ typedef struct Task{
 
 	// blocking
 	Spinlock ioListLock;
-	Semaphore *ioSemaphore; // length of finishedIOLIst
-	IORequest *pendingIOList, *finishedIOList;
+	Semaphore *ioSemaphore; // length of completedIOList
+	IORequest *pendingIOList, *completedIOList;
 
 	struct Task *next, *prev;
 }Task;
@@ -319,7 +319,7 @@ static Task *createTask(
 	EXPECT(t->ioSemaphore != NULL);
 	t->ioListLock = initialSpinlock;
 	t->pendingIOList = NULL;
-	t->finishedIOList = NULL;
+	t->completedIOList = NULL;
 	t->taskMemory = taskMemory;
 	addTaskMemoryReference(taskMemory, 1);
 	t->openFileManager = openFileManager;
@@ -507,7 +507,7 @@ static void cancelAllIORequests(void){
 	// cancel or wait all IORequest
 	while(1){
 		acquireLock(&t->ioListLock);
-		IORequest *ior = (t->pendingIOList != NULL? t->pendingIOList: t->finishedIOList);
+		IORequest *ior = (t->pendingIOList != NULL? t->pendingIOList: t->completedIOList);
 		releaseLock(&t->ioListLock);
 		if(ior == NULL)
 			break;
@@ -516,7 +516,7 @@ static void cancelAllIORequests(void){
 		if(ior != waitIO(t, ior))
 			panic("cannot cancel All IO requests");
 		uintptr_t returnValues[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
-		ior->finish(ior, returnValues);
+		ior->accept(ior->instance, returnValues);
 	}
 }
 
@@ -679,12 +679,12 @@ void pendIO(IORequest *ior/*, int cancellable*/){
 	releaseLock(&t->ioListLock);
 }
 
-void finishIO(IORequest *ior){
+void completeIO(IORequest *ior){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
 	assert(IS_IN_DQUEUE(ior) != 0);
 	REMOVE_FROM_DQUEUE(ior); // t->pendingIOList
-	ADD_TO_DQUEUE(ior, &(t->finishedIOList));
+	ADD_TO_DQUEUE(ior, &(t->completedIOList));
 	ior->cancellable = 0;
 	releaseLock(&t->ioListLock);
 	releaseSemaphore(t->ioSemaphore);
@@ -697,7 +697,7 @@ static int searchIOList(Task *t, IORequest *ior){
 	for(i = t->pendingIOList; found == 0 && i != NULL; i = i->next){
 		found += (i == ior);
 	}
-	for(i = t->finishedIOList; found == 0 && i != NULL; i = i->next){
+	for(i = t->completedIOList; found == 0 && i != NULL; i = i->next){
 		found += (i == ior);
 	}
 	releaseLock(&t->ioListLock);
@@ -714,7 +714,7 @@ IORequest *waitIO(Task *t, IORequest *expected){
 	while(1){
 		IORequest *ior = NULL;
 		acquireLock(&t->ioListLock);
-		for(ior = t->finishedIOList; ior != NULL; ior = ior->next){
+		for(ior = t->completedIOList; ior != NULL; ior = ior->next){
 			if(expected == NULL || expected == ior){
 				REMOVE_FROM_DQUEUE(ior);
 				break;
@@ -739,7 +739,7 @@ static void waitIOHandler(InterruptParam *p){
 	ior = waitIO(t, ior);
 	uintptr_t rv[SYSTEM_CALL_MAX_RETURN_COUNT];
 	rv[0] = (uintptr_t)ior;
-	int returnCount = ior->finish(ior, rv + 1);
+	int returnCount = ior->accept(ior->instance, rv + 1);
 	assert(returnCount + 1 <= SYSTEM_CALL_MAX_RETURN_COUNT);
 	copyReturnValues(p, rv, returnCount + 1);
 }
@@ -782,7 +782,7 @@ static int tryToCancelIO(Task *t, IORequest *ior){
 	}
 	releaseLock(&t->ioListLock);
 	if(ok){
-		ior->cancel(ior);
+		ior->cancel(ior->instance);
 	}
 	return ok;
 }
@@ -808,26 +808,26 @@ void setCancellable(IORequest *ior, int value){
 	releaseLock(&ior->task->ioListLock);
 }
 
-void notSupportCancelIORequest(IORequest *r){
-	printk("task=%x; instance=%x\n",r->task, r->instance);
+void notSupportCancelIO(void *instance){
+	printk("instance=%x\n", processorLocalTask(), instance);
 	panic("notSupportCancelIORequest");
 }
 
 void initIORequest(
-	IORequest *this,
+	IORequest *ior,
 	void *instance,
 	/*HandleIORequest h,
 	Task *t,*/
-	CancelIORequest *cancelIORequest,
-	FinishIORequest *finishIORequest
+	CancelIO *cancelIO,
+	AcceptIO *acceptIO
 ){
-	this->instance = instance;
-	this->prev = NULL;
-	this->next = NULL;
-	this->task = processorLocalTask();
-	this->cancel = cancelIORequest;
-	this->cancellable = 0; // not support cancellation by default
-	this->finish = finishIORequest;
+	ior->instance = instance;
+	ior->prev = NULL;
+	ior->next = NULL;
+	ior->task = processorLocalTask();
+	ior->cancel = cancelIO;
+	ior->cancellable = 0; // not support cancellation by default
+	ior->accept = acceptIO;
 }
 
 static void allocateHeapHandler(InterruptParam *p){

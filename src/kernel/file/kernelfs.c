@@ -9,7 +9,7 @@
 #include<blob.h>
 
 typedef struct{
-	OpenFileRequest ofr;
+	OpenedFile of;
 	const BLOBAddress *blob;
 	uintptr_t offset;
 }OpenedBLOBFile;
@@ -19,7 +19,7 @@ typedef struct{
 	FileIORequest0 r0;
 }CloseKFRequest;
 
-static void acceptCloseKFRequest(void *instance){
+static void acceptCloseKF(void *instance){
 	CloseKFRequest *kfr = instance;
 	DELETE(kfr->file);
 	DELETE(kfr);
@@ -29,12 +29,12 @@ static void acceptKFRequest(void *instance){
 	DELETE(instance);
 }
 
-static FileIORequest1 *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize){
+static FileIORequest1 *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	void *mappedPage;
 	void *mappedBuffer;
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
-	OpenedBLOBFile *f = ofr->instance;
+	OpenedBLOBFile *f = of->instance;
 	FileIORequest1 *NEW(fior1);
 	EXPECT(fior1 != NULL);
 	INIT_FILE_IO(fior1, fior1, notSupportCancelFileIO, acceptKFRequest);
@@ -54,14 +54,14 @@ static FileIORequest1 *readKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t 
 	return NULL;
 }
 
-static FileIORequest1 *enumReadKFS(OpenFileRequest *ofr, uint8_t *buffer, uintptr_t bufferSize){
+static FileIORequest1 *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	if(bufferSize < sizeof(FileEnumeration))
 		return IO_REQUEST_FAILURE;
 	void *mappedPage;
 	void *mappedBuffer;
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
-	OpenedBLOBFile *f = ofr->instance;
+	OpenedBLOBFile *f = of->instance;
 	FileIORequest1 *NEW(fior1);
 	EXPECT(fior1 != NULL);
 	INIT_FILE_IO(fior1, fior1, notSupportCancelFileIO, acceptKFRequest);
@@ -89,8 +89,8 @@ static FileIORequest1 *enumReadKFS(OpenFileRequest *ofr, uint8_t *buffer, uintpt
 
 }
 
-static FileIORequest0 *seekKFS(OpenFileRequest *ofr, uint64_t position){
-	OpenedBLOBFile *f = ofr->instance;
+static FileIORequest0 *seekKFS(OpenedFile *of, uint64_t position){
+	OpenedBLOBFile *f = of->instance;
 	FileIORequest0 *NEW(fior0);
 	EXPECT(fior0 != NULL);
 	INIT_FILE_IO(fior0, fior0, notSupportCancelFileIO, acceptKFRequest);
@@ -106,8 +106,8 @@ static FileIORequest0 *seekKFS(OpenFileRequest *ofr, uint64_t position){
 	return NULL;
 }
 
-static FileIORequest2 *sizeOfKFS(OpenFileRequest *ofr){
-	OpenedBLOBFile *f = ofr->instance;
+static FileIORequest2 *sizeOfKFS(OpenedFile *of){
+	OpenedBLOBFile *f = of->instance;
 	FileIORequest2 *NEW(fior2);
 	EXPECT(fior2 != NULL);
 	INIT_FILE_IO(fior2, fior2, notSupportCancelFileIO, acceptKFRequest);
@@ -119,11 +119,11 @@ static FileIORequest2 *sizeOfKFS(OpenFileRequest *ofr){
 	return NULL;
 }
 
-static FileIORequest0 *closeKFS(OpenFileRequest *ofr){
+static FileIORequest0 *closeKFS(OpenedFile *of){
 	CloseKFRequest *NEW(fior);
 	EXPECT(fior != NULL);
-	INIT_FILE_IO(&fior->r0, fior, notSupportCancelFileIO, acceptCloseKFRequest);
-	fior->file = ofr->instance;
+	INIT_FILE_IO(&fior->r0, fior, notSupportCancelFileIO, acceptCloseKF);
+	fior->file = of->instance;
 	pendIO(&fior->r0.fior.ior);
 	completeFileIO0(&fior->r0);
 	return &fior->r0;
@@ -135,7 +135,7 @@ static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob, const FileF
 	OpenedBLOBFile *NEW(f);
 	if(f == NULL)
 		return NULL;
-	initOpenFileRequest(&f->ofr, f, func);
+	initOpenedFile(&f->of, f, func);
 	f->blob = blob;
 	f->offset = 0;
 	return f;
@@ -161,7 +161,7 @@ static const BLOBAddress *mapAndFindByName(const char *fileName, uintptr_t lengt
 
 static BLOBAddress kfDirectory;
 
-static FileIORequest1 *openKFS(const char *fileName, uintptr_t length, OpenFileMode mode){
+static OpenFileRequest *openKFS(const char *fileName, uintptr_t length, OpenFileMode mode){
 	const BLOBAddress *blobAddress;
 	if(mode.enumeration == 0){
 		blobAddress = mapAndFindByName(fileName, length);
@@ -185,13 +185,12 @@ static FileIORequest1 *openKFS(const char *fileName, uintptr_t length, OpenFileM
 	// see acceptClose
 	OpenedBLOBFile *f = createOpenedBLOBFile(blobAddress, &func);
 	EXPECT(f != NULL);
-	FileIORequest1 *NEW(fior);
+	OpenFileRequest *NEW(fior);
 	EXPECT(fior != NULL);
-	INIT_FILE_IO(fior, fior, notSupportCancelFileIO, acceptKFRequest);
+	initOpenFileIO(fior, fior, notSupportCancelFileIO, acceptKFRequest);
 
-	pendIO(&fior->fior.ior);
-	addToOpenFileList(getOpenFileManager(processorLocalTask()), &f->ofr);
-	completeFileIO1(fior, getFileHandle(&f->ofr));
+	pendIO(&fior->ofior.ior);
+	completeOpenFile(fior, &f->of);
 	return fior;
 	//DELETE(fior1)
 	ON_ERROR;
@@ -270,7 +269,7 @@ void testKFS(void){
 		// read file
 		r = systemCall_readFile(file, x, 11);
 		assert(r != IO_REQUEST_FAILURE);
-		// last operation is not finished
+		// last operation is not accepted
 		// r2 = systemCall_readFile(file, x, 11);
 		// assert(r2 == IO_REQUEST_FAILURE);
 		uintptr_t readCount = 10000;
@@ -286,7 +285,7 @@ void testKFS(void){
 	// close
 	r = systemCall_closeFile(file);
 	assert(r != IO_REQUEST_FAILURE);
-	// last operation is not finished
+	// close again
 	r2 = systemCall_closeFile(file);
 	assert(r2 == IO_REQUEST_FAILURE);
 	r2 = systemCall_waitIO(r);

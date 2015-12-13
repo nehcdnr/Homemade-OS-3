@@ -10,7 +10,7 @@
 #include"assembly/assembly.h"
 
 typedef struct TimerEvent{
-	IORequest this;
+	IORequest ior;
 	uint64_t countDownTicks;
 	// period = 0 for one-shot timer
 	uint64_t tickPeriod;
@@ -24,8 +24,8 @@ struct TimerEventList{
 	TimerEvent *head;
 };
 
-static void cancelTimerEvent(IORequest *ior){
-	TimerEvent *te = ior->instance;
+static void cancelTimerEvent(void *instance){
+	TimerEvent *te = instance;
 	acquireLock(te->lock);
 	if(IS_IN_DQUEUE(te)){ // not expire
 		REMOVE_FROM_DQUEUE(te);
@@ -34,15 +34,15 @@ static void cancelTimerEvent(IORequest *ior){
 	DELETE(te);
 }
 
-static int finishTimerEvent(IORequest *ior, __attribute__((__unused__)) uintptr_t *returnValues){
-	TimerEvent *te = ior->instance;
+static int acceptTimerEvent(void *instance, __attribute__((__unused__)) uintptr_t *returnValues){
+	TimerEvent *te = instance;
 	if(te->tickPeriod == 0){ // not periodic
 		DELETE(te);
 	}
 	else{
 		acquireLock(te->lock);
-		setCancellable(ior, 1);
-		pendIO(ior);
+		setCancellable(&te->ior, 1);
+		pendIO(&te->ior);
 		te->isSentToTask = 0;
 		releaseLock(te->lock);
 	}
@@ -54,7 +54,7 @@ static TimerEvent *createTimerEvent(uint64_t periodTicks){
 	if(te == NULL){
 		return NULL;
 	}
-	initIORequest(&te->this, te, cancelTimerEvent, finishTimerEvent);
+	initIORequest(&te->ior, te, cancelTimerEvent, acceptTimerEvent);
 	te->countDownTicks = 0;
 	te->tickPeriod = periodTicks;
 	te->isSentToTask = 0;
@@ -82,7 +82,7 @@ static void setAlarmHandler(InterruptParam *p){
 		tick = 1;
 	TimerEvent *te = createTimerEvent((isPeriodic? tick: 0));
 	EXPECT(te != NULL);
-	IORequest *ior = &te->this;
+	IORequest *ior = &te->ior;
 	setCancellable(ior, 1);
 	pendIO(ior);
 	addTimerEvent(processorLocalTimer(), tick, te);
@@ -122,7 +122,7 @@ static void handleTimerEvents(TimerEventList *tel){
 		if(curr->isSentToTask == 0){
 			curr->isSentToTask = 1;
 			curr->countDownTicks = curr->tickPeriod;
-			finishIO(&curr->this);
+			completeIO(&curr->ior);
 		}
 #ifndef NDEBUG
 		else{

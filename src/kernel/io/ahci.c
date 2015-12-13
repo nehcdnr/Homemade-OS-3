@@ -476,10 +476,10 @@ static int sendDiskRequest(DiskRequest *dr){
 	}
 }
 
-static void finishDiskRequest(void *instance){
+static void acceptDiskRequest(void *instance){
 	DiskRequest *dr = instance;
 	// see createDiskRequest
-	// assume the memoryManager is not deleted until the IORequest finishes
+	// assume the memoryManager is not deleted until accepted
 	releaseReservedPage(dr->memoryManager, dr->buffer);
 	DELETE(dr);
 }
@@ -502,7 +502,7 @@ static DiskRequest *createDiskRequest(
 	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	INIT_FILE_IO(&dr->fior, dr, cancelDiskRequest, finishDiskRequest);
+	INIT_FILE_IO(&dr->fior, dr, cancelDiskRequest, acceptDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->memoryManager = lm;
@@ -787,14 +787,14 @@ static HBAPortIndex stringToDiskCode(const char *s, uintptr_t len){
 */
 // file interface
 typedef struct{
-	OpenFileRequest ofr;
+	OpenedFile of;
 	AHCIManager *manager;
 	HBAPortIndex diskCode;
 }OpenAHCIRequest;
 
-static FileIORequest1 *seekReadAHCI(OpenFileRequest *ofr, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
+static FileIORequest1 *seekReadAHCI(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
 	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
-	OpenAHCIRequest *oar = ofr->instance;
+	OpenAHCIRequest *oar = of->instance;
 	DiskRequest *dr = ahciService(oar->manager,
 		getTaskLinearMemory(processorLocalTask()), buffer, position, bufferSize,
 		oar->diskCode, 0, 0 // isWrite, isIdentify
@@ -815,7 +815,7 @@ static OpenAHCIRequest *createOpenAHCIRequest(AHCIManager *ahciManager, HBAPortI
 	ff.seekRead = seekReadAHCI;
 	OpenAHCIRequest *NEW(oar);
 	EXPECT(oar != NULL);
-	initOpenFileRequest(&oar->ofr, oar, &ff);
+	initOpenedFile(&oar->of, oar, &ff);
 	oar->manager = ahciManager;
 	oar->diskCode = diskCode;
 	return oar;
@@ -844,8 +844,8 @@ void ahciDriver(void){
 				continue;
 			}
 			OpenAHCIRequest *oar = createOpenAHCIRequest(&ahciManager, diskCode);
-			addToOpenFileList(globalOpenFileManager, &oar->ofr); // TODO: remove file when driver is unloaded
-			readPartitions("ahci", getFileHandle(&oar->ofr), 0,
+			addToOpenFileList(globalOpenFileManager, &oar->of); // TODO: remove file when driver is unloaded
+			readPartitions("ahci", getFileHandle(&oar->of), 0,
 			arg->desc.sectorCount, arg->desc.sectorSize);
 		}
 	}
