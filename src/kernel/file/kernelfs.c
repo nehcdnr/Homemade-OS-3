@@ -14,15 +14,9 @@ typedef struct{
 	uintptr_t offset;
 }OpenedBLOBFile;
 
-typedef struct{
-	OpenedBLOBFile *file;
-	FileIORequest0 r0;
-}CloseKFRequest;
-
 static void acceptCloseKF(void *instance){
-	CloseKFRequest *kfr = instance;
-	DELETE(kfr->file);
-	DELETE(kfr);
+	OpenedBLOBFile *f = instance;
+	DELETE(f);
 }
 
 static void acceptKFRequest(void *instance){
@@ -119,16 +113,11 @@ static FileIORequest2 *sizeOfKFS(OpenedFile *of){
 	return NULL;
 }
 
-static FileIORequest0 *closeKFS(OpenedFile *of){
-	CloseKFRequest *NEW(fior);
-	EXPECT(fior != NULL);
-	INIT_FILE_IO(&fior->r0, fior, notSupportCancelFileIO, acceptCloseKF);
-	fior->file = of->instance;
-	pendIO(&fior->r0.fior.ior);
-	completeFileIO0(&fior->r0);
-	return &fior->r0;
-	ON_ERROR;
-	return NULL;
+static CloseFileRequest *closeKFS(OpenedFile *of){
+	CloseFileRequest *cfr = setCloseFileIO(of, of->instance, acceptCloseKF);
+	pendIO(&cfr->cfior.ior);
+	completeCloseFile(cfr);
+	return cfr;
 }
 
 static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob, const FileFunctions *func){

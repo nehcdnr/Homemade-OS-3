@@ -121,28 +121,35 @@ typedef struct{
 	uintptr_t returnValues[1];
 }OpenFileRequest;
 
+typedef struct OpenedFile OpenedFile;
+
+typedef struct{
+	OpenedFile *file;
+	struct FileIORequest cfior;
+	//uintptr_t returnValues[0];
+}CloseFileRequest;
+
 void initFileIO(
 	struct FileIORequest *r0, void *instance,
 	/*OpenFileRequest *ofr, */CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
 );
+
+#define INIT_FILE_IO(FIOR, INSTANCE, CANCEL, ACCEPT) \
+	initFileIO(&((FIOR)->fior), (INSTANCE), (CANCEL), (ACCEPT))
 
 void initOpenFileIO(
 	OpenFileRequest *ofr, void *instance,
 	CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
 );
 
-#define INIT_FILE_IO(FIOR, INSTANCE, CANCEL, ACCEPT) \
-	initFileIO(&((FIOR)->fior), (INSTANCE), (CANCEL), (ACCEPT))
-
-typedef struct OpenedFile OpenedFile;
+CloseFileRequest *setCloseFileIO(OpenedFile *of, void *instance, AcceptFileIO *acceptFileIO);
 
 void completeFileIO0(FileIORequest0 *r0);
 void completeFileIO1(FileIORequest1 *r1, uintptr_t v0);
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
 void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
 void completeOpenFile(OpenFileRequest *r1, OpenedFile *of);
-// TODO: completeCloseFile
-
+void completeCloseFile(CloseFileRequest* r0);
 
 typedef struct{
 	OpenFileRequest *(*open)(const char *name, uintptr_t nameLength, OpenFileMode openMode);
@@ -161,7 +168,7 @@ typedef struct{
 	FileIORequest1 *(*seekRead)(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	FileIORequest1 *(*seekWrite)(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	FileIORequest2 *(*sizeOf)(OpenedFile *of);
-	FileIORequest0 *(*close)(OpenedFile *of);
+	CloseFileRequest *(*close)(OpenedFile *of);
 }FileFunctions;
 
 // always return NULL
@@ -171,11 +178,13 @@ FileIORequest0 *dummySeek(OpenedFile *of, uint64_t position);
 FileIORequest1 *dummySeekRead(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 FileIORequest1 *dummySeekWrite(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 FileIORequest2 *dummySizeOf(OpenedFile *of);
-FileIORequest0 *dummyClose(OpenedFile *of);
+CloseFileRequest *dummyClose(OpenedFile *of);
 
 // use macro to check number of arguments
 #define INITIAL_FILE_FUNCTIONS \
 	{dummyRead, dummyWrite, dummySeek, dummySeekRead, dummySeekWrite, dummySizeOf, dummyClose}
+
+typedef struct OpenFileManager OpenFileManager;
 
 struct OpenedFile{
 	void *instance;
@@ -185,6 +194,8 @@ struct OpenedFile{
 	Spinlock lock;
 	uint32_t isClosing; // atomic read/write 32
 	uint32_t ioCount;
+	CloseFileRequest cfr;
+	OpenFileManager *fileManager;
 	//Task *task;
 	OpenedFile *next, **prev;
 };
@@ -196,13 +207,11 @@ void initOpenedFile(
 	const FileFunctions *fileFunctions
 );
 
-typedef struct OpenFileManager OpenFileManager;
-
 OpenFileManager *createOpenFileManager(void);
 void deleteOpenFileManager(OpenFileManager *ofm);
 int addOpenFileManagerReference(OpenFileManager *ofm, int n);
 void addToOpenFileList(OpenFileManager *ofm, OpenedFile *ofr);
-void removeFromOpenFileList(OpenFileManager *ofm, OpenedFile *of);
+void removeFromOpenFileList(OpenedFile *of);
 uintptr_t getFileHandle(OpenedFile *of);
 // assume no pending IO requests
 void closeAllOpenFileRequest(OpenFileManager *ofm);

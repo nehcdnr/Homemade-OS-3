@@ -626,28 +626,18 @@ static FileIORequest2 *sizeOfFAT(OpenedFile *of){
 
 // closeFAT
 
-typedef struct{
-	OpenedFATFile *file;
-	OpenFileManager *fileManager;
-	FileIORequest0 fior;
-}CloseFATRequest;
-
 static void acceptCloseFAT(void *instance){
-	CloseFATRequest *cfr = instance;
-	deleteOpenedFATFile(cfr->file);
-	DELETE(cfr);
+	OpenedFATFile *f = instance;
+	deleteOpenedFATFile(f);
 }
 
-static FileIORequest0 *closeFAT(OpenedFile *of){
+static CloseFileRequest *closeFAT(OpenedFile *of){
 	OpenedFATFile *f = of->instance;
 	// TODO: rwlock. if there are pending io request, wait until they complete
-	CloseFATRequest *NEW(cfr);
-	INIT_FILE_IO(&cfr->fior, cfr, notSupportCancelFileIO, acceptCloseFAT);
-	cfr->file = f;
-	cfr->fileManager = getOpenFileManager(processorLocalTask());
-	pendIO(&cfr->fior.fior.ior);
-	completeFileIO0(&cfr->fior);
-	return &cfr->fior;
+	CloseFileRequest *cfr = setCloseFileIO(of, f, acceptCloseFAT);
+	pendIO(&cfr->cfior.ior);
+	completeCloseFile(cfr);
+	return cfr;
 }
 
 static int skipSlash(const char *s, uintptr_t i, uintptr_t len){
@@ -734,9 +724,8 @@ static void openFATTask(void *p){
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	// ofr->file = NULL;
 	completeOpenFile(&ofr->fior, NULL);
-	printk("open FAT failed\n");
+	//printk("open FAT failed\n");
 	systemCall_terminate();
 }
 
