@@ -109,6 +109,18 @@ static int printCharacter(int c){
 	return printString(t, 1);
 }
 
+uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c){
+	while(i < len && s[i] != c)
+		i++;
+	return i;
+}
+
+uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c){
+	while(i < len && s[i] == c)
+		i++;
+	return i;
+}
+
 int printk(const char* format, ...){
 	int printCount = 0;
 	va_list argList;

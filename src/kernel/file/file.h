@@ -86,6 +86,7 @@ void initFile(SystemCallTable *s);
 
 typedef void CancelFileIO(void *instance);
 typedef void AcceptFileIO(void *instance);
+typedef struct OpenedFile OpenedFile;
 
 void notSupportCancelFileIO(void *instance);
 
@@ -93,9 +94,9 @@ struct FileIORequest{
 	IORequest ior;
 	void *instance;
 	// OpenFileRequest *ofr;
-	uintptr_t systemCall;
 	CancelFileIO *cancelFileIO;
 	AcceptFileIO *acceptFileIO;
+	OpenedFile *file;
 	int returnCount;
 	uintptr_t returnValues[0];
 };
@@ -121,21 +122,21 @@ typedef struct{
 	uintptr_t returnValues[1];
 }OpenFileRequest;
 
-typedef struct OpenedFile OpenedFile;
-
 typedef struct{
-	OpenedFile *file;
 	struct FileIORequest cfior;
 	//uintptr_t returnValues[0];
 }CloseFileRequest;
 
+// XXX: access a file without open/close
+#define NULL_OPENED_FILE ((OpenedFile*)NULL)
+
 void initFileIO(
 	struct FileIORequest *r0, void *instance,
-	/*OpenFileRequest *ofr, */CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
+	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
 );
 
-#define INIT_FILE_IO(FIOR, INSTANCE, CANCEL, ACCEPT) \
-	initFileIO(&((FIOR)->fior), (INSTANCE), (CANCEL), (ACCEPT))
+#define INIT_FILE_IO(FIOR, INSTANCE, FILE, CANCEL, ACCEPT) \
+	initFileIO(&((FIOR)->fior), (INSTANCE), (FILE), (CANCEL), (ACCEPT))
 
 void initOpenFileIO(
 	OpenFileRequest *ofr, void *instance,

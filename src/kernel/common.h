@@ -53,6 +53,8 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define HIGH64(V) ((((uint64_t)(V)) >> 32) & 0xffffffff)
 #define COMBINE64(L,H) ((uint64_t)(L) + ((uint64_t)(H) << 32))
 
+uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c);
+uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 // return type of ternary operator is the 1st value
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))

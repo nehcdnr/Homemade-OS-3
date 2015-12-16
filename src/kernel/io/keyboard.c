@@ -10,7 +10,7 @@
 #include"fifo.h"
 
 static void mouseInput(uint8_t newData){
-	static int state = 0;
+	static int  state = 0;
 	static uint8_t prev0, data[3];
 	if(state == 0 && (newData & (1<<3)) == 0){ // lost mouse data
 		return;

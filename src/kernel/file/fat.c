@@ -499,7 +499,7 @@ static void rwFATTask(void *rwfrPtr);
 static FileIORequest1 *readFAT(OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
 	RWFATRequest *NEW(rwfr);
 	EXPECT(rwfr != NULL);
-	INIT_FILE_IO(&rwfr->fior, rwfr, notSupportCancelFileIO, acceptRWFAT);
+	INIT_FILE_IO(&rwfr->fior, rwfr, of, notSupportCancelFileIO, acceptRWFAT);
 	rwfr->file = of->instance;
 	rwfr->inputRWSize = readSize;
 	rwfr->pa = reserveBufferPages(buffer, readSize, &rwfr->bufferOffset);
@@ -618,7 +618,7 @@ static FileIORequest2 *sizeOfFAT(OpenedFile *of){
 	SizeOfFATRequest *NEW(sofr);
 	if(sofr == NULL)
 		return NULL;
-	INIT_FILE_IO(&sofr->fior, sofr, notSupportCancelFileIO, acceptSizeOfFAT);
+	INIT_FILE_IO(&sofr->fior, sofr, of, notSupportCancelFileIO, acceptSizeOfFAT);
 	pendIO(&sofr->fior.fior.ior); // TODO:
 	completeFileIO64(&sofr->fior, f->dirEntry.fileSize);
 	return &sofr->fior;
@@ -638,17 +638,6 @@ static CloseFileRequest *closeFAT(OpenedFile *of){
 	pendIO(&cfr->cfior.ior);
 	completeCloseFile(cfr);
 	return cfr;
-}
-
-static int skipSlash(const char *s, uintptr_t i, uintptr_t len){
-	while(i < len && s[i] == '/')
-		i++;
-	return i;
-}
-static int skipNonSlash(const char *s, uintptr_t i, uintptr_t len){
-	while(i < len && s[i] != '/')
-		i++;
-	return i;
 }
 
 static int nextLevelDirectory(FATDirEntry *d, const FAT32DiskPartition *dp,
@@ -693,8 +682,8 @@ static void openFATTask(void *p){
 	initRootDirEntry(&d, dp->bootRecord->ebr32.rootCluster);
 	int ok = 1;
 	while(ok){
-		nameIndex = skipSlash(ofr->fileName, nameIndex, ofr->nameLength);
-		uintptr_t nextNameIndex = skipNonSlash(ofr->fileName, nameIndex, ofr->nameLength);
+		nameIndex = indexOfNot(ofr->fileName, nameIndex , ofr->nameLength, '/');
+		uintptr_t nextNameIndex = indexOf(ofr->fileName, nameIndex, ofr->nameLength, '/');
 		if(nameIndex == nextNameIndex){ // end of string
 			ok = ((d.attribute & (FAT_VOLUME_ID)) == 0 &&
 				d.attribute != FAT_LONG_FILE_NAME); // is a file or directory
@@ -724,7 +713,7 @@ static void openFATTask(void *p){
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	completeOpenFile(&ofr->fior, NULL);
+	completeOpenFile(&ofr->fior, NULL_OPENED_FILE);
 	//printk("open FAT failed\n");
 	systemCall_terminate();
 }

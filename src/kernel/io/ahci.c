@@ -494,7 +494,7 @@ static void cancelDiskRequest(void *instance){
 }
 
 static DiskRequest *createDiskRequest(
-	enum ATACommand cmd, LinearMemoryManager *lm,
+	enum ATACommand cmd, LinearMemoryManager *lm, OpenedFile *of,
 	void *linearBuffer, uint64_t lba, uint32_t sectorCount,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
@@ -502,7 +502,7 @@ static DiskRequest *createDiskRequest(
 	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	INIT_FILE_IO(&dr->fior, dr, cancelDiskRequest, acceptDiskRequest);
+	INIT_FILE_IO(&dr->fior, dr, of, cancelDiskRequest, acceptDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->memoryManager = lm;
@@ -649,6 +649,7 @@ static HBAPortIndex toDiskCode(int a, int p){
 
 static DiskRequest *ahciService(
 	AHCIManager *am,
+	OpenedFile *of,
 	LinearMemoryManager *lm,
 	void *linearBuffer,
 	uint64_t lba,
@@ -663,7 +664,7 @@ static DiskRequest *ahciService(
 	EXPECT(bufferSize <= PAGE_SIZE); // TODO: allow multiple pages/physical regions
 	DiskRequest *dr = createDiskRequest(
 		(isIdentify? IDENTIFY_DEVICE: (isWrite? DMA_WRITE_EXT: DMA_READ_EXT)),
-		lm, linearBuffer, lba, bufferSize / hba->desc.sectorSize,
+		lm, of, linearBuffer, lba, bufferSize / hba->desc.sectorSize,
 		hba, index.portIndex, isWrite
 	);
 	EXPECT(dr != NULL);
@@ -689,7 +690,7 @@ static int initDiskDescription(struct DiskDescription *d, AHCIManager *ahciManag
 	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
 	DiskRequest *dr = ahciService(
-		ahciManager, getTaskLinearMemory(processorLocalTask()), buffer,
+		ahciManager, NULL_OPENED_FILE, getTaskLinearMemory(processorLocalTask()), buffer,
 		0, 0, i, 0, 1
 	);
 	EXPECT(dr != NULL);
@@ -795,7 +796,7 @@ typedef struct{
 static FileIORequest1 *seekReadAHCI(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
 	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
 	OpenAHCIRequest *oar = of->instance;
-	DiskRequest *dr = ahciService(oar->manager,
+	DiskRequest *dr = ahciService(oar->manager, &oar->of,
 		getTaskLinearMemory(processorLocalTask()), buffer, position, bufferSize,
 		oar->diskCode, 0, 0 // isWrite, isIdentify
 	);
