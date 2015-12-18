@@ -59,7 +59,10 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))
 
+int sprintf(char *str, const char *format, ...);
 int printk(const char *format, ...);
+uintptr_t parseHexadecimal(const char *s, uintptr_t length);
+
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
 #define MEMBER_OFFSET(T, M) ((size_t)&(((T*)0)->M))
 //#define ASSIGN_TO_CONST(A, B) ((*(typeof(A)*)&(A)) = (B))

@@ -324,7 +324,7 @@ static FAT32DiskPartition *searchFAT32DiskPartition(const char *fileName, uintpt
 	FAT32DiskPartition *f;
 	acquireLock(&fat32List.lock);
 	for(f = fat32List.head; f != NULL; f = f->next){
-		if(f->partitionName == fileName[0])
+		if(toupper(f->partitionName) == toupper(fileName[0]))
 			break;
 	}
 	releaseLock(&fat32List.lock);

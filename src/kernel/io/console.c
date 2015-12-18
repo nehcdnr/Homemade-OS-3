@@ -3,6 +3,7 @@
 #include"io.h"
 #include"keyboard.h"
 #include"memory/memory.h"
+#include"file/file.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"assembly/assembly.h"
@@ -162,6 +163,106 @@ void initKernelConsole(void){
 	}
 }
 
+// command line
+
+// return pointer to first non-space, set cmdLine to end of non-space
+static const char *nextArgument(const char **cmdLine, uintptr_t *length){
+	uintptr_t i = indexOfNot(*cmdLine, 0, *length, ' ');
+	(*cmdLine) += i;
+	(*length) -= i;
+	i = indexOf(*cmdLine, 0, *length, ' ');
+	const char *prevCmdLine = *cmdLine;
+	(*cmdLine) += i;
+	(*length) -= i;
+	return prevCmdLine;
+}
+
+static uintptr_t nextHexadecimal(const char **cmdLine, uintptr_t *length){
+	const char *arg;
+	arg = nextArgument(cmdLine, length);
+	if(*cmdLine == NULL)
+		return 0;
+	uintptr_t v = parseHexadecimal(arg, (*cmdLine) - arg);
+	return v;
+}
+
+static uintptr_t openCommand(const char *cmdLine, uintptr_t length){
+	const char *arg;
+	arg = nextArgument(&cmdLine, &length);
+	if(cmdLine == NULL)
+		return UINTPTR_NULL;
+	unsigned a;
+//TODO: shift key
+for(a=0;arg + a != cmdLine;a++){
+	if(arg[a]==';')((char*)arg)[a]=':';
+}
+	printString(arg, cmdLine - arg);
+	printk("\n");
+	uintptr_t file = syncOpenFileN(arg, cmdLine - arg, OPEN_FILE_MODE_0);
+	return file;
+}
+
+static uintptr_t readCommand(const char *cmdLine, uintptr_t length){
+	uintptr_t handle = nextHexadecimal(&cmdLine, &length);
+	EXPECT(cmdLine != NULL);
+	uint8_t *buffer = systemCall_allocateHeap(4096, USER_WRITABLE_PAGE);
+	EXPECT(buffer != NULL);
+	uintptr_t totalReadSize = 0;
+	while(1){
+		uintptr_t readSize = 4096, r, i;
+		r = syncReadFile(handle, buffer, &readSize);
+		if(r == IO_REQUEST_FAILURE || readSize == 0)
+			break;
+		totalReadSize += readSize;
+		for(i = 0; i < readSize; i++)
+			printk("%c", buffer[i]);
+	}
+	systemCall_releaseHeap(buffer);
+	return totalReadSize;
+	// systemCall_releaseHeap(buffer);
+	ON_ERROR;
+	ON_ERROR;
+	return UINTPTR_NULL;
+}
+
+static uintptr_t closeCommand(const char *cmdLine, uintptr_t length){
+	uintptr_t handle = nextHexadecimal(&cmdLine, &length);
+	if(cmdLine == NULL)
+		return 0;
+	return syncCloseFile(handle);
+}
+
+static void parseCommand(const char *cmdLine, uintptr_t length){
+	const struct{
+		const char *string;
+		uintptr_t (*handle)(const char*, uintptr_t);
+	}cmdList[] = {
+		{"open", openCommand},
+		{"read", readCommand},
+		{"close", closeCommand}
+	};
+
+	const char *arg = nextArgument(&cmdLine, &length);
+	if(cmdLine == NULL)
+		return;
+	uintptr_t argLen = (cmdLine - arg);
+
+	unsigned i;
+	for(i = 0; i < LENGTH_OF(cmdList); i++){
+		if(
+			argLen == (unsigned)strlen(cmdList[i].string) &&
+			strncmp(arg, cmdList[i].string, argLen) == 0
+		){
+			int r = cmdList[i].handle(cmdLine, length);
+			printk("\nreturn value = %d (0x%x)\n", r, r);
+			return;
+		}
+	}
+	printk("command not found: ");
+	printString(arg, argLen);
+	printk("\n");
+}
+
 static void printConsoleHandler(InterruptParam *p){
 	//ConsoleDisplay *cd = (ConsoleDisplay*)p->argument;
 	const char *string = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
@@ -183,6 +284,8 @@ static int backspaceHandler(int index){
 static int enterHandler(char *cmdLine, int index){
 	cmdLine[index] = '\n';
 	printString("\n", 1);
+
+	parseCommand(cmdLine, index);
 	return 0;
 }
 

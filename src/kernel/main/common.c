@@ -73,41 +73,33 @@ int toupper(int c){
 
 int printString(const char *s, size_t length);
 
-#define printUnsigned(FUNC, BASE, BUFSIZE) \
-static int FUNC(unsigned n){\
-	char s[(BUFSIZE)];\
-	int a;\
-	a = (BUFSIZE) - 1;\
-	s[a]='\0';\
-	do{\
-		unsigned b = n % (BASE);\
-		n /= (BASE);\
-		a--;\
-		s[a] = (b >= 10? b - 10 + 'a': b + '0');\
-	}while(n != 0 && a > 0);\
-	return printString(s + a, BUFSIZE - 1 - a);\
-}
-
-printUnsigned(printDecimal, 10, 12);
-printUnsigned(printBinary, 2, 36);
-printUnsigned(printHexadecimal, 16, 12);
-
-static int printSigned(int n){
-	int printMinus = 0;
-	if(n < 0){
-		printString("-", 1);
-		printMinus = 1;
-		n = -n;
+static int unsignedToString(char *str, unsigned number, int base){
+	int i = 0;
+	unsigned n2 = number;
+	do{
+		n2 = n2 / base;
+		i++;
+	}while(n2 != 0);
+	n2 = number;
+	int len = i;
+	for(i--; i >= 0; i--){
+		int c = n2 % base;
+		str[i] = (c < 10? c + '0': c - 10 + 'a');
+		n2 /= base;
 	}
-	return printMinus + printDecimal((unsigned)n);
+	return len;
 }
 
-static int printCharacter(int c){
-	char t[4];
-	t[0] = (char)c;
-	t[1] = '\0';
-	return printString(t, 1);
+static int signedToString(char *str, int number, int base){
+	int printMinus = 0;
+	if(number < 0){
+		str[0] = '-';
+		printMinus = 1;
+		number = -number;
+	}
+	return printMinus + unsignedToString(str + printMinus, (unsigned)number, base);
 }
+
 
 uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c){
 	while(i < len && s[i] != c)
@@ -121,60 +113,172 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c){
 	return i;
 }
 
+// if we
+#define PRINT_BUFFER_SIZE (sizeof(uintptr_t) * 8 + 4)
+
+struct PrintfArg{
+	int width;
+	char pad0;
+	char lCount;
+	char base;
+	char format;
+	union{
+		char c;
+		int i;
+		unsigned u;
+		char *s;
+		long long int lli;
+		unsigned long long int llu;
+	};
+};
+
+#define LLD ((('l' << 8) + 'l') << 8) + 'd')
+#define LLU ((('l' << 8) + 'l') << 8) + 'u')
+
+static const char *parsePrintfArg(struct PrintfArg*pa, const char *format){
+	pa->width = 0;
+	pa->pad0 = 0;
+	pa->lCount = 0;
+	pa->base = 0;
+	if(*format != '%'){
+		pa->format = '\0';
+		pa->c = *format;
+		return format + (*format != '\0'? 1: 0);
+	}
+	format++;
+	while(*format == '0'){
+		pa->pad0 = 1;
+		format++;
+	}
+	while(*format >= '0' && *format <= '9'){
+		pa->width = pa->width * 10 + (*format - '0');
+		format++;
+	}
+	while(*format == 'l'){
+		pa->lCount++;
+		format++;
+	}
+	switch(*format){
+	case 'b':
+		pa->base = 2;
+		break;
+	case 'o':
+		pa->base = 8;
+		break;
+	case 'u':
+		pa->base = 10;
+		break;
+	case 'x':
+		pa->base = 16;
+		break;
+	case 'd':
+		pa->base = 10;
+		break;
+	}
+	pa->format = *format;
+	return format + (*format != '\0'? 1: 0);
+}
+
+#define SET_PRINTF_ARG(A, VA_LIST)\
+do{\
+	switch((A)->format){\
+	case 'c':\
+		/*char is promoted to int when passed through*/\
+		(A)->c = (char)va_arg((VA_LIST), int);\
+		break;\
+	case 's':\
+		(A)->s = va_arg((VA_LIST), char*);\
+		break;\
+	case 'd':\
+		if((A)->lCount >=2)\
+			(A)->lli = va_arg((VA_LIST), long long);\
+		else\
+			(A)->i = va_arg((VA_LIST), int);\
+		break;\
+	case 'b':\
+	case 'o':\
+	case 'u':\
+	case 'x':\
+		if((A)->lCount >=2)\
+			(A)->llu = va_arg((VA_LIST), unsigned long long);\
+		else\
+			(A)->u = va_arg((VA_LIST), int);\
+		break;\
+	}\
+}while(0)
+
+// *bufferPtr is at least PRINT_BUFFER_SIZE
+static int outputPrintfArg(char **bufferPtr, const struct PrintfArg *pa){
+	char *buffer = *bufferPtr;
+	int bufferLength;
+	switch(pa->format){
+	case '%':
+		buffer[0] = '%';
+		bufferLength = 1;
+		break;
+	case 's':
+		buffer = *bufferPtr = pa->s;
+		bufferLength = strlen(buffer);
+		break;
+	case 'd':
+		bufferLength = signedToString(buffer, pa->i, (int)pa->base);
+		break;
+	case 'b':
+	case 'o':
+	case 'u':
+	case 'x':
+		bufferLength = unsignedToString(buffer, pa->u, (int)pa->base);
+		break;
+	case 'c':
+	default:
+		buffer[0] = pa->c;
+		bufferLength = 1;
+	}
+	return bufferLength;
+}
+
+int sprintf(char *str, const char *format, ...){
+	int printCount = 0;
+	va_list argList;
+	va_start(argList, format);
+	while(*format != '\0'){
+		char numberBuffer[PRINT_BUFFER_SIZE];
+		char *buffer = numberBuffer;
+		struct PrintfArg pa;
+		format = parsePrintfArg(&pa, format);
+		SET_PRINTF_ARG(&pa, argList);
+		int bufferLength = outputPrintfArg(&buffer, &pa);
+		strncpy(str + printCount, buffer, bufferLength);
+		printCount += bufferLength;
+	}
+	va_end(argList);
+	return printCount;
+}
+
 int printk(const char* format, ...){
 	int printCount = 0;
 	va_list argList;
 	va_start(argList, format);
-	int percentFlag = 0, formatLength = 0;
-	int i;
-	for(i = 0; format[i] != '\0'; i++){
-		if(percentFlag == 0){
-			if(format[i] == '%'){
-				percentFlag = 1;
-				formatLength = 0;
-				continue;
-			}
-			char s[4];
-			s[0] = format[i];
-			s[1] = '\0';
-			printCount += printString(s, 1);
-			continue;
-		}
-		if(format[i] >= '0' && format[i] <= '9'){
-			formatLength = formatLength * 10 + format[i] - '0';
-			continue;
-		}
-		percentFlag = 0;
-		switch(format[i]){
-		case '%':
-			printCount += printString("%", 1);
-			break;
-		case 'd':
-			printCount += printSigned(va_arg(argList, int));
-			break;
-		case 'x':
-			printCount += printHexadecimal(va_arg(argList, unsigned));
-			break;
-		case 'b':
-			printCount += printBinary(va_arg(argList, unsigned));
-			break;
-		case 'u':
-			printCount += printDecimal(va_arg(argList, unsigned));
-			break;
-		case 's':
-			{
-				const char *string  = va_arg(argList, const char*);
-				printCount += printString(string, strlen(string));
-			}
-			break;
-		case 'c':
-			/*char is promoted to int when passed through ...*/
-			printCount += printCharacter(va_arg(argList, int));
-		}
-		percentFlag = 0;
+	while(*format != '\0'){
+		char numberBuffer[PRINT_BUFFER_SIZE];
+		char *buffer = numberBuffer;
+		struct PrintfArg pa;
+		format = parsePrintfArg(&pa, format);
+		SET_PRINTF_ARG(&pa, argList);
+		int bufferLength = outputPrintfArg(&buffer, &pa);
+		printString(buffer, bufferLength);
+		printCount += bufferLength;
 	}
 	va_end(argList);
 	return printCount;
+}
+
+uintptr_t parseHexadecimal(const char *s, uintptr_t length){
+	uintptr_t i, r = 0;
+	for(i = 0; i < length; i++){
+		r = r * 16 + (s[i] >= '0' && s[i] <= '9'? s[i] - '0': s[i] - 'a' + 10);
+	}
+	return r;
 }
 
 void printAndHalt(const char *condition, const char *file, int line){
