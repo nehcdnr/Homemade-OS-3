@@ -3,37 +3,11 @@
 #include"interrupt/systemcall.h"
 #include"interrupt/controller/pic.h"
 #include"multiprocessor/processorlocal.h"
-#include"io.h"
+#include"file/file.h"
 #include"keyboard.h"
 #include"task/task.h"
 #include"common.h"
 #include"fifo.h"
-
-static void mouseInput(uint8_t newData){
-	static int  state = 0;
-	static uint8_t prev0, data[3];
-	if(state == 0 && (newData & (1<<3)) == 0){ // lost mouse data
-		return;
-	}
-	data[state] = newData;
-	if(state < 2){
-		state++;
-		return;
-	}
-
-	int dx = (char)data[1], dy = (char)data[2], pressed = 0, released = 0;
-	pressed = (data[0] & 7 & (data[0] ^ prev0));
-	released = (prev0 & 7 & (data[0] ^ prev0));
-	if(data[0] & 64){ // x overflow
-		dx = (data[0] & 16? -128: 128);
-	}
-	if(data[0] & 128){ // y overflow
-		dy = (data[0] & 32? -128: 128);
-	}
-	printk("%x %x %d %d\n", pressed, released, dx,dy);
-	prev0 = data[0];
-	state = 0;
-}
 
 static const unsigned short scan1[][2] = {
 	{ESC, 0x01}, {F1, 0x3b}, {F2, 0x3c}, {F3, 0x3d}, {F4, 0x3e},
@@ -83,7 +57,8 @@ static const struct{
 	{PAUSE, 0, 6, {0xe1, 0x1d, 0x45, 0xe1, 0x9d, 0xc5}}
 };
 
-static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
+// return 1 if KeyboardEvent is filled
+static int scanCodeToKey(uint8_t scanCode, KeyboardEvent *ke){
 	static int e0Flag = 0, sp[NUMBER_OF_SPECIAL_SCAN] = {0, 0, 0};
 	unsigned short key = NO_KEY, re = 0;
 	int i;
@@ -104,12 +79,13 @@ static unsigned int scanCodeToKey(uint8_t scanCode, int *released){
 	}
 	e0Flag = (scanCode == 0xe0? 1: 0);
 	if(key == NO_KEY)
-		return key;
+		return 0;
 	for(i = 0; i < NUMBER_OF_SPECIAL_SCAN; i++){
 		sp[i] = 0;
 	}
-	*released = re;
-	return key;
+	ke->isRelease = re;
+	ke->key = key;
+	return 1;
 }
 
 #define PS2_DATA_PORT (0x60)
@@ -131,43 +107,66 @@ static void writeData(uint16_t port, uint8_t data){
 	out8(port, data);
 }
 
-typedef struct PS2Data{
-	FIFO *intFIFO, *sysFIFO;
-}PS2Data;
+typedef struct{
+	FIFO *intFIFO, *kbFIFO, *mouseFIFO;
+}PS2FIFO;
 
 // ps2Handler -> ps2Driver -> keyboardInput ->syscall_keyboard
 
+typedef struct{
+	uint8_t status;
+	uint8_t data;
+}PS2Data;
+
 static void ps2Handler(InterruptParam *p){
-	uint8_t status = in8(PS2_CMD_PORT);
-	if(status & READABLE_FLAG){
-		uintptr_t data = readData();
-		PS2Data *ps2 = (PS2Data*)(p->argument);
-		writeFIFO(ps2->intFIFO, (status | (data << 8)));
+	PS2Data d;
+	d.status = in8(PS2_CMD_PORT);
+	if(d.status & READABLE_FLAG){
+		d.data = readData();
+		PS2FIFO *ps2 = (PS2FIFO*)(p->argument);
+		writeFIFO(ps2->intFIFO, &d);
 	}
 	processorLocalPIC()->endOfInterrupt(p);
 	sti();
 }
-
-static void readKeyboardHandler(InterruptParam *p){
-	sti();
-	PS2Data *ps2Data = (PS2Data*)(p->argument);
-	uintptr_t key;
-	if(readFIFO(ps2Data->sysFIFO, &key) == 0){
-		printk("warning: cannot read keyboard fifo");
-		key = NO_KEY;
+static void mouseInput(uint8_t newData, FIFO *mouseFIFO){
+	static int state = 0;
+	static uint8_t prev0, data[3];
+	if(state == 0 && (newData & (1<<3)) == 0){ // lost mouse data
+		return;
 	}
-	SYSTEM_CALL_RETURN_VALUE_0(p) = key;
+	data[state] = newData;
+	if(state < 2){
+		state++;
+		return;
+	}
+
+	MouseEvent me;
+	me.moveX = (char)data[1];
+	me.moveY = (char)data[2];
+	if(data[0] & 64){ // x overflow
+		me.moveX = (data[0] & 16? -128: 128);
+	}
+	if(data[0] & 128){ // y overflow
+		me.moveY = (data[0] & 32? -128: 128);
+	}
+	uint8_t pressed = (data[0] & (data[0] ^ prev0)), released = (prev0 & (data[0] ^ prev0));
+	me.pressLeft = (pressed & 1);
+	me.pressRight = (pressed & 2);
+	me.pressMiddle = (pressed & 4);
+	me.releaseLeft = (released & 1);
+	me.releaseRight = (released & 2);
+	me.releaseMiddle = (released & 4);
+	overwriteFIFO(mouseFIFO, &me);
+	prev0 = data[0];
+	state = 0;
 }
 
-static void readMouseHandler(InterruptParam *p){
-	printk("%d\n",p->regs.eax);
-}
-
-static void keyboardInput(uint8_t data, PS2Data *ps2Data){
-	int release = 0;
-	unsigned int key = scanCodeToKey(data, &release);
-	if(key != NO_KEY && key < 128 && release == 0){
-		overwriteFIFO(ps2Data->sysFIFO, key);
+static void keyboardInput(uint8_t data, FIFO *kbFIFO){
+	KeyboardEvent ke;
+	unsigned int ok = scanCodeToKey(data, &ke);
+	if(ok){
+		overwriteFIFO(kbFIFO, &ke);
 	}
 }
 
@@ -202,57 +201,133 @@ static void initKeyboard(void){
 	}
 }
 
-uintptr_t systemCall_readKeyboard(void){
-	static int kbService = -1;
-	while(kbService < 0){
-		kbService = systemCall_queryService(KEYBOARD_SERVICE_NAME);
-		if(kbService >= 0){
-			break;
-		}
-		printk("warning: keyboard service has not initalized...\n");
-		sleep(20);
-	}
-	return systemCall1(kbService);
+typedef struct{
+	OpenedFile of;
+	FIFO *fifo;
+}OpenedPS2;
+
+static void acceptReadKeyboard(void *instance){
+	FileIORequest1 *fior1 = instance;
+	DELETE(fior1);
 }
 
-static PS2Data ps2 = {NULL, NULL};
+static FileIORequest1 *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+	// TODO: mapBufferToKernel
+	EXPECT(bufferSize >= sizeof(KeyboardEvent));
+	OpenedPS2 *ops2 = of->instance;
+	FileIORequest1 *NEW(fior1);
+	EXPECT(fior1 != NULL);
+	INIT_FILE_IO(fior1, fior1, of, notSupportCancelFileIO, acceptReadKeyboard);
+	uintptr_t readCount = 0;
+	for(readCount = 0; readCount < bufferSize; readCount += getElementSize(ops2->fifo)){
+		if(readCount == 0){
+			readFIFO(ops2->fifo, buffer + readCount);
+		}
+		else{
+			if(readFIFONonBlock(ops2->fifo, buffer + readCount) == 0)
+				break;
+		}
+	}
+	pendIO(&fior1->fior.ior);
+	completeFileIO1(fior1, readCount);
+	return fior1;
+	//DELETE(fior1);
+	ON_ERROR;
+	ON_ERROR;
+	return NULL;
+}
+
+static void acceptCloseKeyboard(void *instance){
+	OpenedPS2 *okb = instance;
+	DELETE(okb);
+}
+
+static CloseFileRequest *closePS2(OpenedFile *of){
+	OpenedPS2 *okb = of->instance;
+	CloseFileRequest *cfr = setCloseFileIO(of, okb, acceptCloseKeyboard);
+	pendIO(&cfr->cfior.ior);
+	completeCloseFile(cfr);
+	return cfr;
+
+}
+
+static void acceptOpenPS2(__attribute__((__unused__)) void *instance){
+	OpenFileRequest *ofr = instance;
+	DELETE(ofr);
+}
+
+static PS2FIFO ps2 = {NULL, NULL, NULL};
+
+static OpenFileRequest *openPS2(const char *name, uintptr_t nameLength, OpenFileMode openMode){
+	// check argument
+	if(openMode.value != OPEN_FILE_MODE_0.value){
+		return NULL;
+	}
+	FIFO *fifo;
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.read = readPS2Event;
+	ff.close = closePS2;
+	if(isStringEqual(name, nameLength, "keyboard", strlen("keyboard"))){
+		fifo = ps2.kbFIFO;
+	}
+	else if(isStringEqual(name, nameLength, "mouse", strlen("mouse"))){
+		fifo = ps2.mouseFIFO;
+	}
+	else{
+		return NULL;
+	}
+	// allocate
+	OpenFileRequest *NEW(ofr);
+	EXPECT(ofr != NULL);
+	initOpenFileIO(ofr, ofr, notSupportCancelFileIO, acceptOpenPS2);
+	OpenedPS2 *NEW(ops2);
+	EXPECT(ops2 != NULL);
+	initOpenedFile(&ops2->of, ops2, &ff);
+	ops2->fifo = fifo;
+
+	pendIO(&ofr->ofior.ior);
+	completeOpenFile(ofr, &ops2->of);
+	return ofr;
+	//DELETE(of);
+	ON_ERROR;
+	DELETE(ofr);
+	ON_ERROR;
+	return NULL;
+}
 
 typedef struct InterruptController PIC;
-typedef struct SystemCallTable SystemCallTable;
 
-static void initPS2Driver(PIC* pic, SystemCallTable *syscallTable){
+static void initPS2Driver(PIC* pic){
 	// interrupt
 	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);
 	InterruptVector *mouseVector = pic->irqToVector(pic, MOUSE_IRQ);
 	initMouse();
 	initKeyboard();
 
-	ps2.intFIFO = createFIFO(64);
-	ps2.sysFIFO = createFIFO(128);
+	ps2.intFIFO = createFIFO(64, sizeof(PS2Data));
+	ps2.kbFIFO = createFIFO(256, sizeof(KeyboardEvent));
+	ps2.mouseFIFO = createFIFO(512, sizeof(MouseEvent));
+	//ps2.sysFIFO = createFIFO(128, sizeof(MouseEvent));
 
 	setHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
 	setHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
-	// system call
-	registerService(syscallTable, KEYBOARD_SERVICE_NAME, readKeyboardHandler, (uintptr_t)&ps2);
-	registerService(syscallTable, MOUSE_SERVICE_NAME, readMouseHandler, (uintptr_t)&ps2);
+	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
+	ff.open = openPS2;
+	addFileSystem(&ff, "ps2", strlen("ps2"));
 }
 
 void ps2Driver(void){
-	initPS2Driver(processorLocalPIC(), global.syscallTable);
+	initPS2Driver(processorLocalPIC());
 	while(1){
-		uintptr_t ds;
-
-		if(readFIFO(ps2.intFIFO, &ds) == 0){
-			panic("ps2 intFIFO");
-		}
-		uint8_t data = ((ds >> 8) & 0xff), status = (ds & 0xff);
-		if(status & DATA_FROM_MOUSE_FLAG){
-			mouseInput(data);
+		PS2Data d;
+		readFIFO(ps2.intFIFO, &d);
+		if(d.status & DATA_FROM_MOUSE_FLAG){
+			mouseInput(d.data, ps2.mouseFIFO);
 		}
 		else{
-			keyboardInput(data, &ps2);
+			keyboardInput(d.data, ps2.kbFIFO);
 		}
 	}
 }

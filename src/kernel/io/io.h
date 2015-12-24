@@ -74,7 +74,6 @@ void vbeDriver(void);
 
 // keyboard.c
 void ps2Driver(void);
-uintptr_t systemCall_readKeyboard(void);
 
 // pci.c
 void pciDriver(void);

@@ -240,9 +240,7 @@ static void setVBEArgument(InterruptParam *p){
 	}
 	while(1){
 		// wait for next request
-		while(readFIFO(v->biosFIFO, &lastData) == 0){
-			panic("biosFIFO");
-		}
+		readFIFO(v->biosFIFO, &lastData);
 		// set next argument
 		int f;
 		for(f = 0; f < NUMBER_OF_VBE_FUNCTIONS; f++){
@@ -265,7 +263,7 @@ static void setVBEArgument(InterruptParam *p){
 static void syscall_video(InterruptParam *p){
 	Video *v = (Video*)(p->argument);
 	uintptr_t param0 = SYSTEM_CALL_ARGUMENT_0(p);
-	if(writeFIFO(v->biosFIFO, param0) == 0){
+	if(writeFIFO(v->biosFIFO, &param0) == 0){
 		SYSTEM_CALL_RETURN_VALUE_0(p) = 1;
 	}
 }
@@ -274,13 +272,18 @@ static void syscall_video(InterruptParam *p){
 void callBIOS(void);
 
 void vbeDriver(void){
-	video.biosFIFO = createFIFO(32);
+	video.biosFIFO = createFIFO(32, sizeof(uintptr_t));
 	setTaskSystemCall(processorLocalTask(), setVBEArgument, (uintptr_t)&video);
-	writeFIFO(video.biosFIFO, GET_VBE_INFO);
-	writeFIFO(video.biosFIFO, GET_VBE_MODE_INFO);
-	//writeFIFO(video.biosFIFO, SET_VBE_MODE);
-	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_WINDOW);
-	writeFIFO(video.biosFIFO, SET_VBE_DISPLAY_START);
+	uintptr_t data = GET_VBE_INFO;
+	writeFIFO(video.biosFIFO, &data);
+	data = GET_VBE_MODE_INFO;
+	writeFIFO(video.biosFIFO, &data);
+	//data = SET_VBE_MODE
+	//writeFIFO(video.biosFIFO, &data);
+	data = SET_VBE_DISPLAY_WINDOW;
+	writeFIFO(video.biosFIFO, &data);
+	data = SET_VBE_DISPLAY_START;
+	writeFIFO(video.biosFIFO, &data);
 	registerService(global.syscallTable, VIDEO_SERVICE_NAME, syscall_video, (uintptr_t)&video);
 
 	if(switchToVirtual8086Mode(callBIOS) == 0){

@@ -100,6 +100,12 @@ static int signedToString(char *str, int number, int base){
 	return printMinus + unsignedToString(str + printMinus, (unsigned)number, base);
 }
 
+int isStringEqual(const char *s1, uintptr_t len1, const char *s2, uintptr_t len2){
+	if(len1 != len2){
+		return 0;
+	}
+	return strncmp(s1, s2, len1) == 0;
+}
 
 uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c){
 	while(i < len && s[i] != c)
@@ -113,7 +119,7 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c){
 	return i;
 }
 
-// if we
+
 #define PRINT_BUFFER_SIZE (sizeof(uintptr_t) * 8 + 4)
 
 struct PrintfArg{

@@ -207,18 +207,17 @@ static uintptr_t readCommand(const char *cmdLine, uintptr_t length){
 	EXPECT(cmdLine != NULL);
 	uint8_t *buffer = systemCall_allocateHeap(4096, USER_WRITABLE_PAGE);
 	EXPECT(buffer != NULL);
-	uintptr_t totalReadSize = 0;
-	while(1){
-		uintptr_t readSize = 4096, r, i;
-		r = syncReadFile(handle, buffer, &readSize);
-		if(r == IO_REQUEST_FAILURE || readSize == 0)
-			break;
-		totalReadSize += readSize;
-		for(i = 0; i < readSize; i++)
-			printk("%c", buffer[i]);
-	}
+
+	uintptr_t readSize = 4096, r, i;
+	r = syncReadFile(handle, buffer, &readSize);
+	if(r == IO_REQUEST_FAILURE || readSize == 0)
+		break;
+
+	for(i = 0; i < readSize; i++)
+		printk("%c", buffer[i]);
+
 	systemCall_releaseHeap(buffer);
-	return totalReadSize;
+	return readSize;
 	// systemCall_releaseHeap(buffer);
 	ON_ERROR;
 	ON_ERROR;
@@ -302,12 +301,28 @@ static int printHandler(char *cmdLine, int index, int key){
 }
 
 static void kernelConsoleLoop(void){
+	int a;
+	uintptr_t kb = IO_REQUEST_FAILURE;
+	for(a = 0; a < 10 && kb == IO_REQUEST_FAILURE; a++){
+		kb = syncOpenFile("ps2:keyboard");
+		sleep(500);
+	}
+	if(kb == IO_REQUEST_FAILURE){
+		printk("cannot open ps/2 keyboard\n");
+		systemCall_terminate();
+	}
 	char cmdLine[MAX_COMMAND_LINE_LENGTH];
 	int index = 0;
 	while(1){
-		uintptr_t key = systemCall_readKeyboard();
+		KeyboardEvent ke;
+		uintptr_t readSize = sizeof(ke);
+		uintptr_t r = syncReadFile(kb, &ke, &readSize);
+		if(r == IO_REQUEST_FAILURE || readSize != sizeof(ke))
+			break;
 		// command line
-		switch(key){
+		if(ke.isRelease != 0)
+			continue;
+		switch(ke.key){
 		case BACKSPACE:
 			index = backspaceHandler(index);
 			break;
@@ -315,10 +330,12 @@ static void kernelConsoleLoop(void){
 			index = enterHandler(cmdLine, index);
 			break;
 		default:
-			index = printHandler(cmdLine, index, key);
+			index = printHandler(cmdLine, index, ke.key);
 			break;
 		}
 	}
+	printk("cannot read ps/2 keyboard");
+	systemCall_terminate();
 }
 
 void kernelConsoleService(void){

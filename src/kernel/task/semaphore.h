@@ -10,6 +10,7 @@ void deleteSemaphore(Semaphore *s);
 void syscall_acquireSemaphore(Semaphore *s);
 void syscall_releaseSemaphore(Semaphore *s);
 */
+int tryAcquireSemaphore(Semaphore *s);
 void acquireSemaphore(Semaphore *s);
 void releaseSemaphore(Semaphore *s);
 int getSemaphoreValue(Semaphore *s);

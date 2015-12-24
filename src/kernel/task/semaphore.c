@@ -26,7 +26,7 @@ static void afterExLock(Task *t, uintptr_t exLockPtr){
 	releaseLock(&exLock->lock);
 }
 
-static void acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLockQueue)(void*, Task *)){
+static int acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLockQueue)(void*, Task *), int doBlock){
 	int interruptEnabled = getEFlags().bit.interrupt;
 	// turn off interrupt to prevent sti in releaseLock in pushSemaphoreQueue
 	if(interruptEnabled){
@@ -34,16 +34,24 @@ static void acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLo
 	}
 	acquireLock(&e->lock);
 	assert(e->pushLockQueue == NULL);
+	int acquired;
 	if(acquire(e->instance)){
 		releaseLock(&e->lock);
+		acquired = 1;
+	}
+	else if(doBlock == 0){
+		releaseLock(&e->lock);
+		acquired = 0;
 	}
 	else{
 		e->pushLockQueue = pushLockQueue;
 		taskSwitch(afterExLock, (uintptr_t)e);
+		acquired = 1;
 	}
 	if(interruptEnabled){
 		sti();
 	}
+	return acquired;
 }
 
 static void releaseExLock(ExclusiveLock *e, Task *(*release)(void*)){
@@ -89,8 +97,12 @@ static Task *_releaseSemaphore(void *inst){
 	return t;
 }
 
+int tryAcquireSemaphore(Semaphore *s){
+	return acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue, 0);
+}
+
 void acquireSemaphore(Semaphore *s){
-	acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue);
+	acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue, 1);
 }
 
 void releaseSemaphore(Semaphore *s){
@@ -163,7 +175,7 @@ static void _pushReaderQueue(void *inst, Task *t){
 }
 
 void acquireReaderLock(ReaderWriterLock *rwl){
-	acquireExLock(&rwl->exLock, _acquireReaderLock, _pushReaderQueue);
+	acquireExLock(&rwl->exLock, _acquireReaderLock, _pushReaderQueue, 1);
 }
 
 static int _acquireWriterLock(void *inst){
@@ -180,7 +192,7 @@ static void _pushWriterQueue(void *inst, Task *t){
 }
 
 void acquireWriterLock(ReaderWriterLock *rwl){
-	acquireExLock(&rwl->exLock, _acquireWriterLock, _pushWriterQueue);
+	acquireExLock(&rwl->exLock, _acquireWriterLock, _pushWriterQueue, 1);
 }
 
 static Task *_releaseReaderWriterLock(void *instance){

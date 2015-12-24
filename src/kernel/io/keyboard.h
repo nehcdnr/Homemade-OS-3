@@ -27,3 +27,18 @@ enum SpecialKey{
 	PRINT_SCREEN,
 	PAUSE
 };
+
+typedef struct{
+	uint16_t key;
+	uint16_t isRelease;
+}KeyboardEvent;
+
+typedef struct{
+	signed short moveX, moveY;
+	uint8_t pressLeft: 1;
+	uint8_t pressRight: 1;
+	uint8_t pressMiddle: 1;
+	uint8_t releaseLeft: 1;
+	uint8_t releaseRight: 1;
+	uint8_t releaseMiddle: 1;
+}MouseEvent;
