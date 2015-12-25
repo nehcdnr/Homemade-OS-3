@@ -130,19 +130,13 @@ static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob, const FileF
 	return f;
 }
 
-static const BLOBAddress *mapAndFindByName(const char *fileName, uintptr_t length){
-	void *mappedPage;
-	void *mappedFileName;
-	if(mapBufferToKernel(fileName, length, &mappedPage, &mappedFileName) == 0)
-		return NULL;
-
+static const BLOBAddress *findByName(const char *fileName, uintptr_t length){
 	const BLOBAddress *file;
 	for(file = blobList; file != blobList + blobCount; file++){
-		if(strncmp(mappedFileName, file->name, length) == 0){
+		if(strncmp(fileName, file->name, length) == 0){
 			break;
 		}
 	}
-	unmapPages(kernelLinear, mappedPage);
 	if(file == blobList + blobCount)
 		return NULL;
 	else return file;
@@ -153,7 +147,7 @@ static BLOBAddress kfDirectory;
 static OpenFileRequest *openKFS(const char *fileName, uintptr_t length, OpenFileMode mode){
 	const BLOBAddress *blobAddress;
 	if(mode.enumeration == 0){
-		blobAddress = mapAndFindByName(fileName, length);
+		blobAddress = findByName(fileName, length);
 	}
 	else{
 		blobAddress = (length == 0? &kfDirectory: NULL);

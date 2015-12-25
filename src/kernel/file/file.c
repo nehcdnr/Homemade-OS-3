@@ -447,12 +447,7 @@ static IORequest *dispatchFileNameCommand(
 		{
 			OpenFileMode m = {value: SYSTEM_CALL_ARGUMENT_2(p)};
 			OpenFileRequest *r1 = ff->open(str, strLen, m);
-			if(r1 != NULL){
-				fior = &r1->ofior;
-			}
-			else{
-				fior = NULL;
-			}
+			fior = (r1 != NULL? &r1->ofior: NULL);
 		}
 		break;
 	default:

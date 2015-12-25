@@ -186,7 +186,7 @@ static uintptr_t nextHexadecimal(const char **cmdLine, uintptr_t *length){
 	return v;
 }
 
-static uintptr_t openCommand(const char *cmdLine, uintptr_t length){
+static uintptr_t _openCommand(const char *cmdLine, uintptr_t length, OpenFileMode mode){
 	const char *arg;
 	arg = nextArgument(&cmdLine, &length);
 	if(cmdLine == NULL)
@@ -198,8 +198,18 @@ for(a=0;arg + a != cmdLine;a++){
 }
 	printString(arg, cmdLine - arg);
 	printk("\n");
-	uintptr_t file = syncOpenFileN(arg, cmdLine - arg, OPEN_FILE_MODE_0);
+	uintptr_t file = syncOpenFileN(arg, cmdLine - arg, mode);
 	return file;
+}
+
+static uintptr_t openCommand(const char *cmdLine, uintptr_t length){
+	return _openCommand(cmdLine, length, OPEN_FILE_MODE_0);
+}
+
+static uintptr_t enumCommand(const char *cmdLine, uintptr_t length){
+	OpenFileMode mode = OPEN_FILE_MODE_0;
+	mode.enumeration = 1;
+	return _openCommand(cmdLine, length, mode);
 }
 
 static uintptr_t readCommand(const char *cmdLine, uintptr_t length){
@@ -237,6 +247,7 @@ static void parseCommand(const char *cmdLine, uintptr_t length){
 		uintptr_t (*handle)(const char*, uintptr_t);
 	}cmdList[] = {
 		{"open", openCommand},
+		{"enum", enumCommand},
 		{"read", readCommand},
 		{"close", closeCommand}
 	};
