@@ -485,7 +485,7 @@ typedef struct{
 	uintptr_t bufferOffset;
 	PhysicalAddressArray *pa;
 	OpenedFATFile *file;
-	FileIORequest1 fior;
+	RWFileRequest fior;
 }RWFATRequest;
 
 static void acceptRWFAT(void* instance){
@@ -496,10 +496,10 @@ static void acceptRWFAT(void* instance){
 
 static void rwFATTask(void *rwfrPtr);
 
-static FileIORequest1 *readFAT(OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
+static RWFileRequest *readFAT(OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
 	RWFATRequest *NEW(rwfr);
 	EXPECT(rwfr != NULL);
-	INIT_FILE_IO(&rwfr->fior, rwfr, of, notSupportCancelFileIO, acceptRWFAT);
+	initRWFileIO(&rwfr->fior, rwfr, of, notSupportCancelFileIO, acceptRWFAT);
 	rwfr->file = of->instance;
 	rwfr->inputRWSize = readSize;
 	rwfr->pa = reserveBufferPages(buffer, readSize, &rwfr->bufferOffset);
@@ -593,12 +593,12 @@ static void rwFATTask(void *rwfrPtr){
 	releaseReaderWriterLock(f->shared->rwLock);
 
 	unmapPages(lm, bufferPage);
-	completeFileIO1(&rwfr->fior, outputRWSize);
+	completeRWFileIO(&rwfr->fior, outputRWSize);
 	systemCall_terminate();
 
 	//unmapPages(lm, bufferPage2);
 	ON_ERROR;
-	completeFileIO1(&rwfr->fior, 0);
+	completeRWFileIO(&rwfr->fior, 0);
 	systemCall_terminate();
 }
 
@@ -618,7 +618,7 @@ static FileIORequest2 *sizeOfFAT(OpenedFile *of){
 	SizeOfFATRequest *NEW(sofr);
 	if(sofr == NULL)
 		return NULL;
-	INIT_FILE_IO(&sofr->fior, sofr, of, notSupportCancelFileIO, acceptSizeOfFAT);
+	initFileIO2(&sofr->fior, sofr, of, notSupportCancelFileIO, acceptSizeOfFAT);
 	pendIO(&sofr->fior.fior.ior); // TODO:
 	completeFileIO64(&sofr->fior, f->dirEntry.fileSize);
 	return &sofr->fior;

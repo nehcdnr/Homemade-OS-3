@@ -23,15 +23,15 @@ static void acceptKFRequest(void *instance){
 	DELETE(instance);
 }
 
-static FileIORequest1 *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static RWFileRequest *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	void *mappedPage;
 	void *mappedBuffer;
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
 	OpenedBLOBFile *f = of->instance;
-	FileIORequest1 *NEW(fior1);
+	RWFileRequest *NEW(fior1);
 	EXPECT(fior1 != NULL);
-	INIT_FILE_IO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
+	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
 
 	pendIO(&fior1->fior.ior);
 	uintptr_t copySize = MIN(bufferSize, f->blob->end - f->blob->begin - f->offset);
@@ -39,7 +39,7 @@ static FileIORequest1 *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t buffer
 
 	unmapPages(kernelLinear, mappedPage);
 	f->offset += copySize;
-	completeFileIO1(fior1, copySize);
+	completeRWFileIO(fior1, copySize);
 	return fior1;
 
 	ON_ERROR;
@@ -48,7 +48,7 @@ static FileIORequest1 *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t buffer
 	return NULL;
 }
 
-static FileIORequest1 *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static RWFileRequest *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	if(bufferSize < sizeof(FileEnumeration))
 		return IO_REQUEST_FAILURE;
 	void *mappedPage;
@@ -56,9 +56,9 @@ static FileIORequest1 *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bu
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
 	OpenedBLOBFile *f = of->instance;
-	FileIORequest1 *NEW(fior1);
+	RWFileRequest *NEW(fior1);
 	EXPECT(fior1 != NULL);
-	INIT_FILE_IO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
+	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
 
 	pendIO(&fior1->fior.ior);
 	BLOBAddress *entry = (BLOBAddress*)(f->blob->begin + f->offset);
@@ -73,7 +73,7 @@ static FileIORequest1 *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bu
 	}
 	unmapPages(kernelLinear, mappedPage);
 	f->offset += sizeof(*entry);
-	completeFileIO1(fior1, readSize);
+	completeRWFileIO(fior1, readSize);
 	return fior1;
 
 	ON_ERROR;
@@ -87,7 +87,7 @@ static FileIORequest0 *seekKFS(OpenedFile *of, uint64_t position){
 	OpenedBLOBFile *f = of->instance;
 	FileIORequest0 *NEW(fior0);
 	EXPECT(fior0 != NULL);
-	INIT_FILE_IO(fior0, fior0, of, notSupportCancelFileIO, acceptKFRequest);
+	initFileIO0(fior0, fior0, of, notSupportCancelFileIO, acceptKFRequest);
 	if(position > f->blob->end - f->blob->begin){
 		return IO_REQUEST_FAILURE;
 	}
@@ -104,7 +104,7 @@ static FileIORequest2 *sizeOfKFS(OpenedFile *of){
 	OpenedBLOBFile *f = of->instance;
 	FileIORequest2 *NEW(fior2);
 	EXPECT(fior2 != NULL);
-	INIT_FILE_IO(fior2, fior2, of, notSupportCancelFileIO, acceptKFRequest);
+	initFileIO2(fior2, fior2, of, notSupportCancelFileIO, acceptKFRequest);
 	pendIO(&fior2->fior.ior);
 	completeFileIO64(fior2, f->blob->end - f->blob->begin);
 	return fior2;

@@ -107,9 +107,10 @@ typedef struct{
 }FileIORequest0;
 
 typedef struct{
+	void *mappedPage;
 	struct FileIORequest fior;
 	uintptr_t returnValues[1];
-}FileIORequest1;
+}RWFileRequest;
 
 typedef struct{
 	struct FileIORequest fior;
@@ -118,6 +119,7 @@ typedef struct{
 
 typedef struct{
 	struct OpenFileManager *fileManager;
+	void *mappedPage;
 	struct FileIORequest ofior;
 	uintptr_t returnValues[1];
 }OpenFileRequest;
@@ -130,23 +132,30 @@ typedef struct{
 // XXX: access a file without open/close
 #define NULL_OPENED_FILE ((OpenedFile*)NULL)
 
-void initFileIO(
-	struct FileIORequest *r0, void *instance,
-	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-);
-
-#define INIT_FILE_IO(FIOR, INSTANCE, FILE, CANCEL, ACCEPT) \
-	initFileIO(&((FIOR)->fior), (INSTANCE), (FILE), (CANCEL), (ACCEPT))
-
 void initOpenFileIO(
 	OpenFileRequest *ofr, void *instance,
 	CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
 );
 
+void initFileIO0(
+	FileIORequest0 *r0, void *instance,
+	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
+);
+
+void initRWFileIO(
+	RWFileRequest *r0, void *instance,
+	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
+);
+
+void initFileIO2(
+	FileIORequest2 *r0, void *instance,
+	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
+);
+
 CloseFileRequest *setCloseFileIO(OpenedFile *of, void *instance, AcceptFileIO *acceptFileIO);
 
 void completeFileIO0(FileIORequest0 *r0);
-void completeFileIO1(FileIORequest1 *r1, uintptr_t v0);
+void completeRWFileIO(RWFileRequest *r1, uintptr_t v0);
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
 void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
 void completeOpenFile(OpenFileRequest *r1, OpenedFile *of);
@@ -163,21 +172,21 @@ OpenFileRequest *dummyOpen(const char *name, uintptr_t nameLength, OpenFileMode 
 int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength);
 
 typedef struct{
-	FileIORequest1 *(*read)(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
-	FileIORequest1 *(*write)(OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
+	RWFileRequest *(*read)(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
+	RWFileRequest *(*write)(OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 	FileIORequest0 *(*seek)(OpenedFile *of, uint64_t position/*, whence*/);
-	FileIORequest1 *(*seekRead)(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-	FileIORequest1 *(*seekWrite)(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+	RWFileRequest *(*seekRead)(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+	RWFileRequest *(*seekWrite)(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	FileIORequest2 *(*sizeOf)(OpenedFile *of);
 	CloseFileRequest *(*close)(OpenedFile *of);
 }FileFunctions;
 
 // always return NULL
-FileIORequest1 *dummyRead(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
-FileIORequest1 *dummyWrite(OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
+RWFileRequest *dummyRead(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
+RWFileRequest *dummyWrite(OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 FileIORequest0 *dummySeek(OpenedFile *of, uint64_t position);
-FileIORequest1 *dummySeekRead(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-FileIORequest1 *dummySeekWrite(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+RWFileRequest *dummySeekRead(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
+RWFileRequest *dummySeekWrite(OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 FileIORequest2 *dummySizeOf(OpenedFile *of);
 CloseFileRequest *dummyClose(OpenedFile *of);
 

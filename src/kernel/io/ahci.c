@@ -443,7 +443,7 @@ static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 // system call
 typedef struct DiskRequest DiskRequest;
 struct DiskRequest{
-	FileIORequest1 fior;
+	RWFileRequest fior;
 	Spinlock *lock;
 	enum ATACommand command;
 	LinearMemoryManager *memoryManager;
@@ -502,7 +502,7 @@ static DiskRequest *createDiskRequest(
 	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
-	INIT_FILE_IO(&dr->fior, dr, of, cancelDiskRequest, acceptDiskRequest);
+	initRWFileIO(&dr->fior, dr, of, cancelDiskRequest, acceptDiskRequest);
 	dr->lock = &a->lock;
 	dr->command = cmd;
 	dr->memoryManager = lm;
@@ -586,7 +586,7 @@ static void AHCIHandler(InterruptParam *param){
 		if(dr == NULL)
 			printk("warning: AHCI driver received unexpected interrupt\n");
 		else{
-			completeFileIO1(&dr->fior, dr->sectorCount * dr->ahci->desc.sectorSize);
+			completeRWFileIO(&dr->fior, dr->sectorCount * dr->ahci->desc.sectorSize);
 		}
 		if(servePortQueue(arg, p) == 0){
 			panic("servePortQueue == 0"); // TODO: how to handle?
@@ -694,8 +694,8 @@ static int initDiskDescription(struct DiskDescription *d, AHCIManager *ahciManag
 		0, 0, i, 0, 1
 	);
 	EXPECT(dr != NULL);
-	uintptr_t waitIOR = systemCall_waitIO((uintptr_t)&dr->fior);
-	assert(waitIOR == (uintptr_t)&dr->fior);
+	uintptr_t waitIOR = systemCall_waitIO((uintptr_t)&dr->fior.fior.ior);
+	assert(waitIOR == (uintptr_t)&dr->fior.fior.ior);
 	// the driver requires 48-bit address
 	const uint16_t buffer83 = buffer[83];
 	EXPECT(buffer83 & (1 << 10));
@@ -793,7 +793,7 @@ typedef struct{
 	HBAPortIndex diskCode;
 }OpenAHCIRequest;
 
-static FileIORequest1 *seekReadAHCI(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
+static RWFileRequest *seekReadAHCI(OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
 	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
 	OpenAHCIRequest *oar = of->instance;
 	DiskRequest *dr = ahciService(oar->manager, &oar->of,

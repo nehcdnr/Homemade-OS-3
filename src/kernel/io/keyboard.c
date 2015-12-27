@@ -207,17 +207,17 @@ typedef struct{
 }OpenedPS2;
 
 static void acceptReadKeyboard(void *instance){
-	FileIORequest1 *fior1 = instance;
+	RWFileRequest *fior1 = instance;
 	DELETE(fior1);
 }
 
-static FileIORequest1 *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static RWFileRequest *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	// TODO: mapBufferToKernel
 	EXPECT(bufferSize >= sizeof(KeyboardEvent));
 	OpenedPS2 *ops2 = of->instance;
-	FileIORequest1 *NEW(fior1);
+	RWFileRequest *NEW(fior1);
 	EXPECT(fior1 != NULL);
-	INIT_FILE_IO(fior1, fior1, of, notSupportCancelFileIO, acceptReadKeyboard);
+	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptReadKeyboard);
 	uintptr_t readCount = 0;
 	for(readCount = 0; readCount < bufferSize; readCount += getElementSize(ops2->fifo)){
 		if(readCount == 0){
@@ -229,7 +229,7 @@ static FileIORequest1 *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t b
 		}
 	}
 	pendIO(&fior1->fior.ior);
-	completeFileIO1(fior1, readCount);
+	completeRWFileIO(fior1, readCount);
 	return fior1;
 	//DELETE(fior1);
 	ON_ERROR;
