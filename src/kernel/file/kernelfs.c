@@ -9,58 +9,40 @@
 #include<blob.h>
 
 typedef struct{
-	OpenedFile of;
 	const BLOBAddress *blob;
 	uintptr_t offset;
 }OpenedBLOBFile;
 
-static void acceptCloseKF(void *instance){
-	OpenedBLOBFile *f = instance;
-	DELETE(f);
-}
-
-static void acceptKFRequest(void *instance){
-	DELETE(instance);
-}
-
-static RWFileRequest *readKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static int readKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	void *mappedPage;
 	void *mappedBuffer;
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
-	OpenedBLOBFile *f = of->instance;
-	RWFileRequest *NEW(fior1);
-	EXPECT(fior1 != NULL);
-	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
+	OpenedBLOBFile *f = getFileInstance(of);
 
-	pendIO(&fior1->fior.ior);
+	pendRWFileIO(fior1);
 	uintptr_t copySize = MIN(bufferSize, f->blob->end - f->blob->begin - f->offset);
 	memcpy(buffer, (void*)(f->blob->begin + f->offset), copySize);
 
 	unmapPages(kernelLinear, mappedPage);
 	f->offset += copySize;
 	completeRWFileIO(fior1, copySize);
-	return fior1;
-
+	return 1;
+	//unmapPages(kernelLinear, mappedPage);
 	ON_ERROR;
-	unmapPages(kernelLinear, mappedPage);
-	ON_ERROR;
-	return NULL;
+	return 0;
 }
 
-static RWFileRequest *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	if(bufferSize < sizeof(FileEnumeration))
 		return IO_REQUEST_FAILURE;
 	void *mappedPage;
 	void *mappedBuffer;
 	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
-	OpenedBLOBFile *f = of->instance;
-	RWFileRequest *NEW(fior1);
-	EXPECT(fior1 != NULL);
-	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptKFRequest);
+	OpenedBLOBFile *f = getFileInstance(of);;
 
-	pendIO(&fior1->fior.ior);
+	pendRWFileIO(fior1);
 	BLOBAddress *entry = (BLOBAddress*)(f->blob->begin + f->offset);
 	assert((f->blob->end - (uintptr_t)entry) % sizeof(*entry) == 0);
 	uintptr_t readSize;
@@ -74,57 +56,42 @@ static RWFileRequest *enumReadKFS(OpenedFile *of, uint8_t *buffer, uintptr_t buf
 	unmapPages(kernelLinear, mappedPage);
 	f->offset += sizeof(*entry);
 	completeRWFileIO(fior1, readSize);
-	return fior1;
-
+	return 1;
+	//unmapPages(kernelLinear, mappedPage);
 	ON_ERROR;
-	unmapPages(kernelLinear, mappedPage);
-	ON_ERROR;
-	return NULL;
+	return 0;
 
 }
 
-static FileIORequest0 *seekKFS(OpenedFile *of, uint64_t position){
-	OpenedBLOBFile *f = of->instance;
-	FileIORequest0 *NEW(fior0);
-	EXPECT(fior0 != NULL);
-	initFileIO0(fior0, fior0, of, notSupportCancelFileIO, acceptKFRequest);
+static int seekKFS(FileIORequest0 *fior0, OpenedFile *of, uint64_t position){
+	OpenedBLOBFile *f = getFileInstance(of);
 	if(position > f->blob->end - f->blob->begin){
-		return IO_REQUEST_FAILURE;
+		return 0;
 	}
-	pendIO(&fior0->fior.ior);
+	pendFileIO0(fior0);
 	f->offset = (uintptr_t)position;
 	completeFileIO0(fior0);
-	return fior0;
-
-	ON_ERROR;
-	return NULL;
+	return 1;
 }
 
-static FileIORequest2 *sizeOfKFS(OpenedFile *of){
-	OpenedBLOBFile *f = of->instance;
-	FileIORequest2 *NEW(fior2);
-	EXPECT(fior2 != NULL);
-	initFileIO2(fior2, fior2, of, notSupportCancelFileIO, acceptKFRequest);
-	pendIO(&fior2->fior.ior);
+static int sizeOfKFS(FileIORequest2 *fior2, OpenedFile *of){
+	OpenedBLOBFile *f = getFileInstance(of);
+	pendFileIO2(fior2);
 	completeFileIO64(fior2, f->blob->end - f->blob->begin);
-	return fior2;
-
-	ON_ERROR;
-	return NULL;
+	return 1;
 }
 
-static CloseFileRequest *closeKFS(OpenedFile *of){
-	CloseFileRequest *cfr = setCloseFileIO(of, of->instance, acceptCloseKF);
-	pendIO(&cfr->cfior.ior);
+static void closeKFS(CloseFileRequest *cfr, OpenedFile *of){
+	OpenedBLOBFile *f = getFileInstance(of);
+	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
-	return cfr;
+	DELETE(f);
 }
 
-static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob, const FileFunctions *func){
+static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob){
 	OpenedBLOBFile *NEW(f);
 	if(f == NULL)
 		return NULL;
-	initOpenedFile(&f->of, f, func);
 	f->blob = blob;
 	f->offset = 0;
 	return f;
@@ -144,7 +111,7 @@ static const BLOBAddress *findByName(const char *fileName, uintptr_t length){
 
 static BLOBAddress kfDirectory;
 
-static OpenFileRequest *openKFS(const char *fileName, uintptr_t length, OpenFileMode mode){
+static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length, OpenFileMode mode){
 	const BLOBAddress *blobAddress;
 	if(mode.enumeration == 0){
 		blobAddress = findByName(fileName, length);
@@ -153,8 +120,11 @@ static OpenFileRequest *openKFS(const char *fileName, uintptr_t length, OpenFile
 		blobAddress = (length == 0? &kfDirectory: NULL);
 	}
 	EXPECT(blobAddress != NULL);
+	// see closeKFS
+	OpenedBLOBFile *f = createOpenedBLOBFile(blobAddress);
+	EXPECT(f != NULL);
 
-	static FileFunctions func = INITIAL_FILE_FUNCTIONS;
+	FileFunctions func = INITIAL_FILE_FUNCTIONS;
 	if(mode.enumeration == 0){
 		func.read = readKFS;
 		func.seek = seekKFS;
@@ -165,22 +135,13 @@ static OpenFileRequest *openKFS(const char *fileName, uintptr_t length, OpenFile
 	}
 	func.close = closeKFS;
 
-	// see acceptClose
-	OpenedBLOBFile *f = createOpenedBLOBFile(blobAddress, &func);
-	EXPECT(f != NULL);
-	OpenFileRequest *NEW(fior);
-	EXPECT(fior != NULL);
-	initOpenFileIO(fior, fior, notSupportCancelFileIO, acceptKFRequest);
-
-	pendIO(&fior->ofior.ior);
-	completeOpenFile(fior, &f->of);
-	return fior;
-	//DELETE(fior1)
-	ON_ERROR;
-	DELETE(f);
+	pendOpenFileIO(fior);
+	completeOpenFile(fior, f, &func);
+	return 1;
+	//DELETE(f);
 	ON_ERROR;
 	ON_ERROR;
-	return NULL;
+	return 0;
 }
 
 void kernelFileService(void){

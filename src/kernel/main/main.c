@@ -25,7 +25,8 @@ static void initService(void){
 		fatService,
 		//testMemoryTask,
 		//testKFS,
-		//testFAT
+		//testFAT,
+		//testAHCI
 	};
 	unsigned int i;
 	Task *t;

@@ -46,7 +46,7 @@ struct DiskPartition{
 
 void readPartitions(
 	const char *driverName, uintptr_t fileHandle, uint64_t relativeLBA,
-	uint64_t sectorCount, uintptr_t sectorSize
+	uint64_t sectorCount, uintptr_t sectorSize, uintptr_t diskCode
 ){
 	struct MBR *buffer = systemCall_allocateHeap(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
@@ -77,10 +77,10 @@ void readPartitions(
 		}
 		//printk("\n");
 		if(pe->systemID == MBR_EXTENDED){
-			readPartitions(driverName, fileHandle, lba, pe->sectorCount, sectorSize);
+			readPartitions(driverName, fileHandle, lba, pe->sectorCount, sectorSize, diskCode);
 		}
 		if(addDiskPartition(pe->systemID, driverName,
-			lba, pe->sectorCount, sectorSize, fileHandle) == 0){
+			lba, pe->sectorCount, sectorSize, diskCode) == 0){
 			printk("warning: cannot register disk code %x to file system\n", fileHandle);
 		}
 	}
@@ -118,7 +118,7 @@ uintptr_t systemCall_discoverDisk(DiskPartitionType diskType){
 int addDiskPartition(
 	DiskPartitionType diskType, const char *driverName,
 	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
-	uintptr_t fileHandle
+	uintptr_t diskCode
 ){
 	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE);
 	DiskPartition *NEW(dp);
@@ -126,7 +126,7 @@ int addDiskPartition(
 	initResource(&dp->resource, dp, matchDiskType, returnDiskValues);
 	dp->type = diskType;
 	strncpy(dp->driverName, driverName, MAX_NAME_LENGTH);
-	dp->diskCode = fileHandle;
+	dp->diskCode = diskCode;
 	dp->startLBA = startLBA;
 	dp->sectorCount = sectorCount;
 	dp->sectorSize = sectorSize;
@@ -149,8 +149,7 @@ typedef struct FileSystem{
 static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
 	FileSystem *fs = resource->instance;
 	uintptr_t name32[MAX_FILE_SERVICE_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};
-	if(((char*)name32)[0] == '\0' || // match any file system
-	strncmp(fs->name, (const char*)name32, MAX_FILE_SERVICE_NAME_LENGTH) == 0)
+	if(strncmp(fs->name, (const char*)name32, MAX_FILE_SERVICE_NAME_LENGTH) == 0)
 		return 1;
 	return 0;
 }
@@ -183,25 +182,52 @@ uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
 	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
 }
 
-void initOpenedFile(OpenedFile *of, void *instance, /*Task *task, */const FileFunctions *fileFunctions){
-	of->instance = instance;
+// OpenedFile
+
+struct OpenedFile{
+	void *instance;
+	uintptr_t handle;
+	FileFunctions fileFunctions;
+
+	Spinlock lock;
+	uint32_t deleteOnCompletion;
+	uint32_t ioCount;
+	CloseFileRequest *cfr;
+	OpenFileManager *fileManager;
+	//Task *task;
+	OpenedFile *next, **prev;
+};
+
+static void initOpenedFile(OpenedFile *of, CloseFileRequest *cfr/*, Task *task, */){
+	of->instance = NULL; // see initOpenedFile2
 	of->handle = (uintptr_t)&of->handle;
 	of->lock = initialSpinlock;
-	of->isClosing = 0;
-	of->ioCount = 0;
-	MEMSET0(&of->cfr);
-	of->fileManager = NULL;
+	// delete if failed to open
+	of->deleteOnCompletion = 1;
+	of->ioCount = 1;
+	of->cfr = cfr;
+
+	of->fileManager = NULL; // see initOpenedFile2
 	//ofr->task = task;
-	of->fileFunctions = (*fileFunctions);
+	MEMSET0(&of->fileFunctions); // see initOpenedFile2
 	of->next = NULL;
 	of->prev = NULL;
 }
 
+//#define IS_OPENED_FILE_INITIALIZED(OF) ((OF)->fileManager != NULL)
+
+static void initOpenedFile2(OpenedFile *of, void *instance, const FileFunctions *fileFunctions, OpenFileManager *ofm){
+	of->deleteOnCompletion = 0;
+	of->instance = instance;
+	of->fileFunctions = (*fileFunctions);
+	addToOpenFileList(ofm, of);
+}
+
 static int setFileClosing(OpenedFile *of){
 	acquireLock(&of->lock);
-	int ok = (of->isClosing == 0 && of->ioCount == 0);
+	int ok = (of->deleteOnCompletion == 0 && of->ioCount == 0);
 	if(ok){
-		of->isClosing = 1;
+		of->deleteOnCompletion = 1;
 		of->ioCount = 1;
 	}
 	releaseLock(&of->lock);
@@ -210,11 +236,16 @@ static int setFileClosing(OpenedFile *of){
 
 static int addFileIOCount(OpenedFile *of, int v){
 	acquireLock(&of->lock);
-	int ok = (of->isClosing == 0 || of->ioCount + v == 0);
+	int doDelete = ((of->deleteOnCompletion != 0 && of->ioCount + v == 0));
+	int ok = (of->deleteOnCompletion == 0 || of->ioCount + v == 0);
 	if(ok){
 		of->ioCount += v;
 	}
 	releaseLock(&of->lock);
+	if(doDelete){
+		assert(ok && v == -1);
+		DELETE(of);
+	}
 	return ok;
 }
 
@@ -273,7 +304,7 @@ void addToOpenFileList(OpenFileManager *ofm, OpenedFile *of){
 }
 
 void removeFromOpenFileList(OpenedFile *of){
-	assert(of->isClosing && of->ioCount == 1 && of->fileManager != NULL);
+	assert(of->fileManager != NULL);
 	acquireLock(&of->fileManager->lock);
 	REMOVE_FROM_DQUEUE(of);
 	releaseLock(&of->fileManager->lock);
@@ -283,13 +314,58 @@ uintptr_t getFileHandle(OpenedFile *of){
 	return of->handle;
 }
 
+void *getFileInstance(OpenedFile *of){
+	return of->instance;
+}
 
 // FileIORequest
+
+struct FileIORequest{
+	IORequest ior;
+	void *acceptCancelArg;
+	CancelFileIO *cancelFileIO;
+	AcceptFileIO *acceptFileIO;
+	void *instance;
+	OpenedFile *file;
+	int returnCount;
+	uintptr_t returnValues[0];
+};
+
+struct FileIORequest0{
+	struct FileIORequest fior;
+	//uintptr_t returnValues[0];
+};
+
+struct RWFileRequest{
+	void *mappedPage;
+	struct FileIORequest fior;
+	uintptr_t returnValues[1];
+};
+
+struct FileIORequest2{
+	struct FileIORequest fior;
+	uintptr_t returnValues[2];
+};
+
+struct OpenFileRequest{
+	struct OpenFileManager *fileManager;
+	void *mappedPage;
+	struct FileIORequest ofior;
+	uintptr_t returnValues[1];
+};
+
+struct CloseFileRequest{
+	struct FileIORequest cfior;
+	//uintptr_t returnValues[0];
+};
 
 static_assert(MEMBER_OFFSET(struct FileIORequest, returnValues) ==
 	MEMBER_OFFSET(RWFileRequest, returnValues) - MEMBER_OFFSET(RWFileRequest, fior));
 static_assert(MEMBER_OFFSET(struct FileIORequest, returnValues) ==
 	MEMBER_OFFSET(OpenFileRequest, returnValues) - MEMBER_OFFSET(OpenFileRequest, ofior));
+
+void defaultAcceptFileIO(__attribute__((__unused__)) void *instance){
+}
 
 void notSupportCancelFileIO(__attribute__((__unused__)) void *instance){
 	panic("notSupportCancelFileIO");
@@ -297,7 +373,8 @@ void notSupportCancelFileIO(__attribute__((__unused__)) void *instance){
 
 static void cancelFileIORequest(void *instance){
 	struct FileIORequest *r0 = instance;
-	r0->cancelFileIO(r0->instance);
+	r0->cancelFileIO(r0->acceptCancelArg);
+	DELETE(r0->instance);
 }
 
 static int acceptFileIORequest(void *instance, uintptr_t *returnValue){
@@ -307,65 +384,100 @@ static int acceptFileIORequest(void *instance, uintptr_t *returnValue){
 		returnValue[i] = r0->returnValues[i];
 	}
 
-	r0->acceptFileIO(r0->instance);
+	r0->acceptFileIO(r0->acceptCancelArg);
+	DELETE(r0->instance);
 	return r;
 }
 
-static void initFileIO(
-	struct FileIORequest *fior, void *instance,
-	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-){
+static void initFileIO(struct FileIORequest *fior, void *instance, OpenedFile *file){
 	initIORequest(&fior->ior, fior, cancelFileIORequest, acceptFileIORequest);
 	//fior->ofr = ofr;
 	fior->instance = instance;
-	fior->file = file; // NULL if OpenFileRequest
-	// XXX: assert(file != NULL_OPENED_FILE);
-	fior->cancelFileIO = cancelFileIO;
-	fior->acceptFileIO = acceptFileIO;
+	fior->file = file;
+	assert(file != NULL);
+	fior->acceptCancelArg = fior;
+	fior->cancelFileIO = notSupportCancelFileIO;
+	fior->acceptFileIO = defaultAcceptFileIO;
 }
 
-void initOpenFileIO(
-	OpenFileRequest *ofr, void *instance,
-	CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-){
-	initFileIO(&ofr->ofior, instance, NULL_OPENED_FILE, cancelFileIO, acceptFileIO);
-	ofr->fileManager = getOpenFileManager(processorLocalTask());;
-	ofr->mappedPage = NULL;
+static OpenFileRequest *createOpenFileIO(OpenedFile *openingFile, void *mappedNamePage){
+	OpenFileRequest *NEW(ofr);
+	if(ofr == NULL)
+		return NULL;
+	initFileIO(&ofr->ofior, ofr, openingFile);
+	ofr->fileManager = getOpenFileManager(processorLocalTask());
+	ofr->mappedPage = mappedNamePage;
+	return ofr;
 }
 
-void initFileIO0(
-	FileIORequest0 *r0, void *instance,
-	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-){
-	initFileIO(&r0->fior, instance, file, cancelFileIO, acceptFileIO);
+static FileIORequest0 *createFileIO0(OpenedFile *file){
+	FileIORequest0 *NEW(r0);
+	if(r0 == NULL)
+		return NULL;
+	initFileIO(&r0->fior, r0, file);
+	return r0;
 }
 
-void initRWFileIO(
-	RWFileRequest *rwfr, void *instance,
-	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-){
-	initFileIO(&rwfr->fior, instance, file, cancelFileIO, acceptFileIO);
-	rwfr->mappedPage = NULL;
+static RWFileRequest *createRWFileIO(OpenedFile *file, void *mappedBufferPage){
+	RWFileRequest *NEW(rwfr);
+	if(rwfr == NULL)
+		return NULL;
+	initFileIO(&rwfr->fior, rwfr, file);
+	rwfr->mappedPage = mappedBufferPage;
+	return rwfr;
 }
 
-void initFileIO2(
-	FileIORequest2 *r2, void *instance,
-	OpenedFile *file, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO
-){
-	initFileIO(&r2->fior, instance, file, cancelFileIO, acceptFileIO);
+static FileIORequest2 *createFileIO2(OpenedFile *file){
+	FileIORequest2 *NEW(r2);
+	if(r2 == NULL)
+		return NULL;
+	initFileIO(&r2->fior, r2, file);
+	return r2;
 }
 
-CloseFileRequest *setCloseFileIO(OpenedFile *of, void *instance, AcceptFileIO *acceptFileIO){
-	assert(of != NULL_OPENED_FILE);
-	CloseFileRequest *cfr = &of->cfr;
-	initFileIO(&cfr->cfior, instance, of, notSupportCancelFileIO, acceptFileIO);
+static CloseFileRequest *createCloseFileIO(OpenedFile *file){
+	CloseFileRequest *NEW(cfr);
+	if(cfr == NULL)
+		return NULL;
+	initFileIO(&cfr->cfior, cfr, file);
 	return cfr;
 }
 
+void pendOpenFileIO(OpenFileRequest *r){
+	pendIO(&r->ofior.ior);
+}
+
+void pendFileIO0(FileIORequest0 *r){
+	pendIO(&r->fior.ior);
+}
+
+void pendRWFileIO(RWFileRequest *r){
+	pendIO(&r->fior.ior);
+}
+
+void pendFileIO2(FileIORequest2 *r){
+	pendIO(&r->fior.ior);
+}
+
+void pendCloseFileIO(CloseFileRequest *r){
+	pendIO(&r->cfior.ior);
+}
+
+static void setFileIOFunctions(struct FileIORequest *fior, void *arg, CancelFileIO *cancelFileIO/*, AcceptFileIO *acceptFileIO*/){
+	fior->acceptCancelArg = arg;
+	fior->cancelFileIO = cancelFileIO;
+	/*fior->acceptFileIO = acceptFileIO;*/
+}
+
+void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO/*, AcceptFileIO *acceptFileIO*/){
+	setFileIOFunctions(&rwfr->fior, arg, cancelFileIO);
+}
+
 static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
-	if(fior->file != NULL_OPENED_FILE){
-		addFileIOCount(fior->file, -1);
-	}
+	assert(fior->file != NULL_OPENED_FILE);
+	// delete OpenedFile here
+	int ok = addFileIOCount(fior->file, -1);
+	assert(ok);
 
 	fior->returnCount = returnCount;
 	va_list va;
@@ -384,8 +496,8 @@ void completeFileIO0(FileIORequest0 *r0){
 }
 
 void completeRWFileIO(RWFileRequest *r1, uintptr_t v0){
-	//TODO: assert(r1->mappedPage != NULL);
-	// unmapPages(kernelLinear, r1->mappedPage);
+	assert(r1->mappedPage != NULL);
+	unmapPages(kernelLinear, r1->mappedPage);
 	r1->mappedPage = NULL;
 	completeFileIO(&r1->fior, 1, v0);
 }
@@ -398,25 +510,57 @@ void completeFileIO64(FileIORequest2 *r2, uint64_t v0){
 	completeFileIO2(r2, LOW64(v0), HIGH64(v0));
 }
 
-void completeOpenFile(OpenFileRequest *r1, OpenedFile *of){
-	if(of == NULL_OPENED_FILE){
-		completeFileIO(&r1->ofior, 1, IO_REQUEST_FAILURE);
-		return;
-	}
-	assert(r1->ofior.file == NULL);
-	//TODO:assert(r1->mappedPage != NULL);
-	//unmapPages(kernelLinear, r1->mappedPage);
+static void _completeOpenFile(OpenFileRequest *r1, void *fileInstance, const FileFunctions *ff, int ok){
+	OpenedFile *of = r1->ofior.file;
+	assert(of->fileManager == NULL && r1->mappedPage != NULL);
+	unmapPages(kernelLinear, r1->mappedPage);
 	r1->mappedPage = NULL;
-	r1->ofior.file = of;
-	// add 1, and then subtract 1 in completeFileIO
-	addFileIOCount(of, 1);
-	addToOpenFileList(r1->fileManager, of);
-	completeFileIO(&r1->ofior, 1, getFileHandle(of));
+	if(ok){
+		initOpenedFile2(of, fileInstance, ff, r1->fileManager);
+		completeFileIO(&r1->ofior, 1, getFileHandle(of));
+	}
+	else{
+		DELETE(of->cfr);
+		// if not ok, delete OpenedFile here
+		completeFileIO(&r1->ofior, 1, IO_REQUEST_FAILURE);
+	}
+}
+
+void failOpenFile(OpenFileRequest *r1){
+	_completeOpenFile(r1, NULL, NULL, 0);
+}
+
+void completeOpenFile(OpenFileRequest *r1, void *fileInstance, const FileFunctions *ff){
+	_completeOpenFile(r1, fileInstance, ff, 1);
 }
 
 void completeCloseFile(CloseFileRequest* r0){
-	removeFromOpenFileList(r0->cfior.file);
+	OpenedFile *of = r0->cfior.file;
+	assert(of->ioCount == 1);
+	removeFromOpenFileList(of);
 	completeFileIO(&r0->cfior, 0);
+}
+
+// call DELETE if fail
+static int createOpenFileRequests(OpenedFile **of, CloseFileRequest **cfr, OpenFileRequest **ofr, void *mappedNamePage){
+	OpenedFile *NEW(of2);
+	EXPECT(of2 != NULL);
+	CloseFileRequest *cfr2 = createCloseFileIO(of2);
+	EXPECT(cfr2 != NULL);
+	OpenFileRequest *ofr2 = createOpenFileIO(of2, mappedNamePage);
+	EXPECT(ofr2 != NULL);
+	initOpenedFile(of2, cfr2);
+	(*of) = of2;
+	(*cfr) = cfr2;
+	(*ofr) = ofr2;
+	return 1;
+	//DELETE(ofr2);
+	ON_ERROR;
+	DELETE(cfr2);
+	ON_ERROR;
+	DELETE(of2);
+	ON_ERROR;
+	return 0;
 }
 
 void closeAllOpenFileRequest(OpenFileManager *ofm){
@@ -438,30 +582,29 @@ void closeAllOpenFileRequest(OpenFileManager *ofm){
 
 #define _UNUSED __attribute__((__unused__))
 
-OpenFileRequest *dummyOpen(_UNUSED const char *name, _UNUSED uintptr_t nameLength, _UNUSED OpenFileMode openMode){
-	return NULL;
+int dummyOpen(_UNUSED OpenFileRequest *ofr, _UNUSED const char *name, _UNUSED uintptr_t nameLength, _UNUSED OpenFileMode openMode){
+	return 0;
 }
-RWFileRequest *dummyRead(_UNUSED OpenedFile *of, _UNUSED uint8_t *buffer, _UNUSED uintptr_t bufferSize){
-	return NULL;
+int dummyRead(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED uint8_t *buffer, _UNUSED uintptr_t bufferSize){
+	return 0;
 }
-RWFileRequest *dummyWrite(_UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uintptr_t bufferSize){
-	return NULL;
+int dummyWrite(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uintptr_t bufferSize){
+	return 0;
 }
-FileIORequest0 *dummySeek(_UNUSED OpenedFile *of, _UNUSED uint64_t position){
-	return NULL;
+int dummySeek(_UNUSED FileIORequest0 *fior0, _UNUSED OpenedFile *of, _UNUSED uint64_t position){
+	return 0;
 }
-RWFileRequest *dummySeekRead(_UNUSED OpenedFile *of, _UNUSED uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
-	return NULL;
+int dummySeekRead(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
+	return 0;
 }
-RWFileRequest *dummySeekWrite(_UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
-	return NULL;
+int dummySeekWrite(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
+	return 0;
 }
-FileIORequest2 *dummySizeOf(_UNUSED OpenedFile *of){
-	return NULL;
+int dummySizeOf(_UNUSED FileIORequest2 *fior2, _UNUSED OpenedFile *of){
+	return 0;
 }
-CloseFileRequest *dummyClose(_UNUSED OpenedFile *of){
+void dummyClose(_UNUSED CloseFileRequest *cfr, _UNUSED OpenedFile *of){
 	panic("dummyClose");
-	return NULL;
 }
 #undef _UNUSED
 
@@ -469,22 +612,29 @@ CloseFileRequest *dummyClose(_UNUSED OpenedFile *of){
 // arg0 = str; arg1 = strLen
 static IORequest *dispatchFileNameCommand(
 	FileSystem *fs,
-	const char *fileName, uintptr_t nameLen, InterruptParam *p//, void *mappedNamePage
+	const char *fileName, uintptr_t nameLen, InterruptParam *p, void *mappedNamePage
 ){
 	const FileNameFunctions *ff = &fs->fileNameFunctions;
-	struct FileIORequest *fior;
+	struct FileIORequest *fior = NULL;
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_OPEN_FILE:
 		{
+			OpenedFile *openingFile;
+			OpenFileRequest *ofr;
+			CloseFileRequest *cfr;
+			int ok = createOpenFileRequests(&openingFile, &cfr, &ofr, mappedNamePage);
+			if(!ok)
+				break;
 			OpenFileMode m = {value: SYSTEM_CALL_ARGUMENT_2(p)};
-			OpenFileRequest *r1 = ff->open(fileName, nameLen, m);
-			if(r1 != NULL){
-				fior = &r1->ofior;
-				//r1->mappedPage = mappedNamePage;
+			ok = ff->open(ofr, fileName, nameLen, m);
+
+			if(!ok){
+				DELETE(ofr);
+				DELETE(cfr);
+				DELETE(openingFile);
+				break;
 			}
-			else{
-				fior = NULL;
-			}
+			fior = &ofr->ofior;
 		}
 		break;
 	default:
@@ -502,30 +652,34 @@ static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam
 	void *mappedPage;
 	void *mappedBuffer;
 	// see completeRWFileIO
-	int ok = mapBufferToKernel((const void*)buffer, size, &mappedPage, &mappedBuffer);
-	EXPECT(ok);
+	int bufferOK = mapBufferToKernel((const void*)buffer, size, &mappedPage, &mappedBuffer);
+	EXPECT(bufferOK);
 	const FileFunctions *f = &of->fileFunctions;
-	RWFileRequest *rwfr;
+	RWFileRequest *rwfr = createRWFileIO(of, mappedPage);
+	EXPECT(rwfr != NULL);
+	int rwOK;
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_READ_FILE:
-		rwfr = f->read(of, (uint8_t*)mappedBuffer, size);
+		rwOK = f->read(rwfr, of, (uint8_t*)mappedBuffer, size);
 		break;
 	case SYSCALL_WRITE_FILE:
-		rwfr = f->write(of, (uint8_t*)mappedBuffer, size);
+		rwOK = f->write(rwfr, of, (uint8_t*)mappedBuffer, size);
 		break;
 	case SYSCALL_SEEK_READ_FILE:
-		rwfr = f->seekRead(of, (uint8_t*)mappedBuffer,
+		rwOK = f->seekRead(rwfr, of, (uint8_t*)mappedBuffer,
 			COMBINE64(SYSTEM_CALL_ARGUMENT_3(p), SYSTEM_CALL_ARGUMENT_4(p)), size);
 		break;
 	case SYSCALL_SEEK_WRITE_FILE:
-		rwfr = f->seekWrite(of, (uint8_t*)mappedBuffer,
+		rwOK = f->seekWrite(rwfr, of, (uint8_t*)mappedBuffer,
 			COMBINE64(SYSTEM_CALL_ARGUMENT_3(p), SYSTEM_CALL_ARGUMENT_4(p)), size);
 		break;
 	default:
 		panic("impossible");
 	}
-	EXPECT(rwfr != NULL);
+	EXPECT(rwOK);
 	return rwfr;
+	ON_ERROR;
+	DELETE(rwfr);
 	ON_ERROR;
 	unmapPages(kernelLinear, mappedPage);
 	ON_ERROR;
@@ -538,43 +692,58 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	OpenFileManager *ofm = getOpenFileManager(processorLocalTask());
 	OpenedFile *of = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), isClosing);
 	// TODO: remove globalOpenFileManager
-	if(of == NULL){
-		ofm = globalOpenFileManager;
-		of = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), isClosing);
-	}
+	//if(of == NULL){
+	//	ofm = globalOpenFileManager;
+	//	of = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), isClosing);
+	//}
 	if(of == NULL)
 		return IO_REQUEST_FAILURE;
 	// close file
 	const FileFunctions *f = &of->fileFunctions;
 	struct FileIORequest *fior = NULL;
 	FileIORequest0 *r0;
-	RWFileRequest *r1;
+	RWFileRequest *rwfr;
 	FileIORequest2 *r2;
 	CloseFileRequest *cfr;
 	// check address and map buffer to kernel
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_CLOSE_FILE:
+		cfr = of->cfr;
 		// close cannot fail or be cancelled unless file does not exist
-		cfr = f->close(of);
-		assert(cfr != NULL);
+		f->close(cfr, of);
 		fior = &cfr->cfior;
-		assert(fior != NULL && fior->ior.cancellable == 0);
+		assert(fior->ior.cancellable == 0);
 		break;
 	case SYSCALL_READ_FILE:
 	case SYSCALL_WRITE_FILE:
 	case SYSCALL_SEEK_READ_FILE:
 	case SYSCALL_SEEK_WRITE_FILE:
-		r1 = dispatchRWFileCommand(of, p);
-		fior = NULL_OR(r1);
+		rwfr = dispatchRWFileCommand(of, p);
+		if(rwfr != NULL){
+			fior = &rwfr->fior;
+		}
 		break;
 	case SYSCALL_SEEK_FILE:
-		r0 = f->seek(of, COMBINE64(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p)));
-		fior = NULL_OR(r0);
+		r0 = createFileIO0(of);
+		if(r0 != NULL){
+			int ok = f->seek(r0, of, COMBINE64(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p)));
+			if(!ok){
+				DELETE(r0);
+				break;
+			}
+			fior = &r0->fior;
+		}
 		break;
-
 	case SYSCALL_SIZE_OF_FILE:
-		r2 = f->sizeOf(of);
-		fior = NULL_OR(r2);
+		r2 = createFileIO2(of);
+		if(r2 != NULL){
+			int ok = f->sizeOf(r2, of);
+			if(!ok){
+				DELETE(r2);
+				break;
+			}
+			fior = &r2->fior;
+		}
 		break;
 	default:
 		fior = NULL;
@@ -750,11 +919,10 @@ static void FileNameCommandHandler(InterruptParam *p){
 	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &fileSystem);
 	assert(r == r2);
 	r2 = systemCall_cancelIO(r);
-	assert(r2 != IO_REQUEST_FAILURE);
-	IORequest *ior = dispatchFileNameCommand((FileSystem*)fileSystem, fileName + i + 1, nameLength - i - 1, p/*, mappedPage*/);
+	assert(r2 != 0);
+	IORequest *ior = dispatchFileNameCommand((FileSystem*)fileSystem, fileName + i + 1, nameLength - i - 1, p, mappedPage);
 	EXPECT(ior != IO_REQUEST_FAILURE);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
-	unmapPages(kernelLinear, mappedPage); // TODO
 	return;
 	ON_ERROR;
 	ON_ERROR;

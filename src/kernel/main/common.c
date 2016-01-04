@@ -257,6 +257,7 @@ int sprintf(char *str, const char *format, ...){
 		strncpy(str + printCount, buffer, bufferLength);
 		printCount += bufferLength;
 	}
+	str[printCount] = '\0';
 	va_end(argList);
 	return printCount;
 }

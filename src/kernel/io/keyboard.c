@@ -202,22 +202,12 @@ static void initKeyboard(void){
 }
 
 typedef struct{
-	OpenedFile of;
 	FIFO *fifo;
 }OpenedPS2;
 
-static void acceptReadKeyboard(void *instance){
-	RWFileRequest *fior1 = instance;
-	DELETE(fior1);
-}
-
-static RWFileRequest *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
-	// TODO: mapBufferToKernel
+static int readPS2Event(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	EXPECT(bufferSize >= sizeof(KeyboardEvent));
-	OpenedPS2 *ops2 = of->instance;
-	RWFileRequest *NEW(fior1);
-	EXPECT(fior1 != NULL);
-	initRWFileIO(fior1, fior1, of, notSupportCancelFileIO, acceptReadKeyboard);
+	OpenedPS2 *ops2 = getFileInstance(of);
 	uintptr_t readCount = 0;
 	for(readCount = 0; readCount < bufferSize; readCount += getElementSize(ops2->fifo)){
 		if(readCount == 0){
@@ -228,45 +218,29 @@ static RWFileRequest *readPS2Event(OpenedFile *of, uint8_t *buffer, uintptr_t bu
 				break;
 		}
 	}
-	pendIO(&fior1->fior.ior);
+	pendRWFileIO(fior1);
 	completeRWFileIO(fior1, readCount);
-	return fior1;
-	//DELETE(fior1);
+	return 1;
 	ON_ERROR;
-	ON_ERROR;
-	return NULL;
+	return 0;
 }
 
-static void acceptCloseKeyboard(void *instance){
-	OpenedPS2 *okb = instance;
-	DELETE(okb);
-}
-
-static CloseFileRequest *closePS2(OpenedFile *of){
-	OpenedPS2 *okb = of->instance;
-	CloseFileRequest *cfr = setCloseFileIO(of, okb, acceptCloseKeyboard);
-	pendIO(&cfr->cfior.ior);
+static void closePS2(CloseFileRequest *cfr, OpenedFile *of){
+	OpenedPS2 *ops2 = getFileInstance(of);
+	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
-	return cfr;
-
-}
-
-static void acceptOpenPS2(__attribute__((__unused__)) void *instance){
-	OpenFileRequest *ofr = instance;
-	DELETE(ofr);
+	DELETE(ops2);
 }
 
 static PS2FIFO ps2 = {NULL, NULL, NULL};
 
-static OpenFileRequest *openPS2(const char *name, uintptr_t nameLength, OpenFileMode openMode){
+static int openPS2(OpenFileRequest *ofr, const char *name, uintptr_t nameLength, OpenFileMode openMode){
 	// check argument
 	if(openMode.value != OPEN_FILE_MODE_0.value){
-		return NULL;
+		return 0;
 	}
 	FIFO *fifo;
-	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
-	ff.read = readPS2Event;
-	ff.close = closePS2;
+
 	if(isStringEqual(name, nameLength, "keyboard", strlen("keyboard"))){
 		fifo = ps2.kbFIFO;
 	}
@@ -274,25 +248,23 @@ static OpenFileRequest *openPS2(const char *name, uintptr_t nameLength, OpenFile
 		fifo = ps2.mouseFIFO;
 	}
 	else{
-		return NULL;
+		return 0;
 	}
 	// allocate
-	OpenFileRequest *NEW(ofr);
-	EXPECT(ofr != NULL);
-	initOpenFileIO(ofr, ofr, notSupportCancelFileIO, acceptOpenPS2);
 	OpenedPS2 *NEW(ops2);
 	EXPECT(ops2 != NULL);
-	initOpenedFile(&ops2->of, ops2, &ff);
 	ops2->fifo = fifo;
 
-	pendIO(&ofr->ofior.ior);
-	completeOpenFile(ofr, &ops2->of);
-	return ofr;
-	//DELETE(of);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.read = readPS2Event;
+	ff.close = closePS2;
+
+	pendOpenFileIO(ofr);
+	completeOpenFile(ofr, ops2, &ff);
+	return 1;
+	//DELETE(ops2);
 	ON_ERROR;
-	DELETE(ofr);
-	ON_ERROR;
-	return NULL;
+	return 0;
 }
 
 typedef struct InterruptController PIC;
