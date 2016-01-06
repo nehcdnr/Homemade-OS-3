@@ -9,10 +9,6 @@
 #include"task/task.h"
 #include"multiprocessor/spinlock.h"
 
-//FIXME
-#include<task/semaphore.h>
-Semaphore *testsem=NULL;
-
 typedef struct{
 	uint32_t commandBaseLow/*1KB aligned*/, commandBaseHigh, fisBaseLow/*256 byte aligned*/, fisBaseHigh;
 	uint32_t interruptStatus, interruptEnable, commandStatus, reserved0;
@@ -862,9 +858,6 @@ static IORequest *seekWriteAHCI(OpenFileRequest *ofr, const uint8_t *buffer, uin
 */
 
 void ahciDriver(void){
-	testsem = createSemaphore();//FIXME
-	releaseSemaphore(testsem);
-
 	const char *driverName = "ahci";
 	uintptr_t discoverPCI = systemCall_discoverPCI(0x01060100, 0xffffff00);
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;

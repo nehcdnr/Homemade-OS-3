@@ -17,8 +17,9 @@ int strncmp(const char *s1, const char *s2, size_t n);
 char *strncpy(char *dst, const char* src, size_t n);
 
 // ctype.h
-int tolower(int);
-int toupper(int);
+int tolower(int c);
+int toupper(int c);
+int isspace(int c);
 
 // assert.h
 void printAndHalt(const char *condition, const char *file, int line);
@@ -62,6 +63,7 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 
 int sprintf(char *str, const char *format, ...);
 int printk(const char *format, ...);
+int sscanf(const char *str, const char *format, ...);
 uintptr_t parseHexadecimal(const char *s, uintptr_t length);
 
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
