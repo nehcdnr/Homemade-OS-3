@@ -61,8 +61,9 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))
 
-int sprintf(char *str, const char *format, ...);
+int snprintf(char *str, size_t len, const char *format, ...);
 int printk(const char *format, ...);
+int snscanf(const char *str, size_t len, const char *format, ...);
 int sscanf(const char *str, const char *format, ...);
 uintptr_t parseHexadecimal(const char *s, uintptr_t length);
 

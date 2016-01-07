@@ -876,7 +876,7 @@ void ahciDriver(void){
 			}
 			const HBAPortIndex diskCode = toDiskCode(arg->hbaIndex, p);
 			char fileName[20];
-			sprintf(fileName, "%s:%x", driverName, diskCode.value);
+			snprintf(fileName, 20, "%s:%x", driverName, diskCode.value);
 			if(initDiskDescription(&arg->desc, arg) == 0){
 				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
@@ -905,7 +905,7 @@ void testAHCI(void){
 	lba = COMBINE64(lbaLow, lbaHigh);
 	assert(r == d);
 	char s[20];
-	sprintf(s, "ahci:%x", pi.value);
+	snprintf(s, 20, "ahci:%x", pi.value);
 	//printk("open %s\n",s);
 	uintptr_t h = syncOpenFile(s);
 	assert(h != IO_REQUEST_FAILURE);

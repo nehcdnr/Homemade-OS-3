@@ -716,7 +716,7 @@ void fatService(void){
 			continue;
 		}
 		char s[20];
-		sprintf(s, "ahci:%x", diskCode); // TODO: enumerate disk service names
+		snprintf(s, 20, "ahci:%x", diskCode); // TODO: enumerate disk service names
 		uintptr_t diskFile = syncOpenFile(s);
 		assert(diskFile != IO_REQUEST_FAILURE);
 		FAT32DiskPartition *dp = createFATPartition(diskFile, COMBINE64(startLBALow, startLBAHigh), sectorSize, i);
