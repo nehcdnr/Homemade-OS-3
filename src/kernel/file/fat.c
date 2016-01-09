@@ -762,7 +762,7 @@ void testFAT(void){
 	for(a = 3; a > 0; a--){
 		sleep(1000);
 		printk("test open fat...\n");
-		fileHandle =  syncOpenFile("fat:C/bootsect.bin");//syncOpenFile("fat:C/FDOS/watTCP.cfg");
+		fileHandle = syncOpenFile("fat:C/FDOS/watTCP.cfg");
 		if(fileHandle == IO_REQUEST_FAILURE){
 			printk("test open fat failed...\n");
 			continue;
@@ -785,7 +785,7 @@ void testFAT(void){
 		assert(r == fileHandle);
 		totalReadSize += readSize;
 		str[readSize] = '\0';
-		printk("%s", str);
+		printk("%s\n", str);
 		if(readSize != 32)
 			break;
 	}

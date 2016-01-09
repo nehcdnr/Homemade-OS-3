@@ -2,8 +2,9 @@
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"interrupt/systemcall.h"
+#include"file/file.h"
 #include"multiprocessor/processorlocal.h"
-#include"resource/resource.h"
+#include"multiprocessor/spinlock.h"
 
 // USB 1.0 (UHCI)
 /*
@@ -67,20 +68,27 @@ struct XHCICapabilityRegisters{
 */
 
 // PCI
+#define PCI_DRIVER_NAME ("pci")
 
-uint32_t readPCIConfig(uint8_t bus, uint8_t dev, uint8_t func, enum PCIConfigRegister reg){
+static uint32_t readPCIConfig(uint8_t bus, uint8_t dev, uint8_t func, uint8_t offset){
+	assert(offset % 4 == 0);
 	out32(0xcf8,
 		0x80000000 | // enable config cycle
 		(bus << 16) | // 7 bits
 		(dev << 11) | // 5 bits
 		(func << 8) | // 3 bits
-		reg // 8 bits
+		offset // 8 bits
 	);
 	return in32(0xcfc);
 }
 
+typedef struct{
+	struct PCIConfigSpace *listHead;
+	Spinlock lock;
+}PCIManager;
+
 typedef struct PCIConfigSpace{
-	Resource resource;
+	struct PCIConfigSpace **prev, *next;
 
 	union PCIConfigSpaceLocation{
 		struct{
@@ -91,37 +99,43 @@ typedef struct PCIConfigSpace{
 		};
 		uint16_t value;
 	}location;
-	struct PCIConfigRegisters{
-		uint16_t vendorID, deviceID;
-		uint16_t command, status;
-		union{
-			struct{uint8_t revision, programInterface, subclassCode, classCode;};
-			uint32_t classCodes;
-		};
-		uint8_t cacheLineSize, latencyTimer, headerType, bist;
-	}regs;
+
+	uintptr_t regsSize;
+	union{
+		PCICommonConfigRegisters regs;
+		PCIConfigRegisters0 regs0;
+		PCIConfigRegisters1 regs1;
+		PCIConfigRegisters2 regs2;
+	};
 }PCIConfigSpace;
-static_assert(sizeof(struct PCIConfigRegisters) == 16);
 
-static int matchPCIClassCodes(Resource *resource, const uintptr_t *arguments){
-	PCIConfigSpace *cs = resource->instance;
+static_assert(MEMBER_OFFSET(PCIConfigSpace, regs.headerType) == MEMBER_OFFSET(PCIConfigSpace, regs0.headerType));
+static_assert(MEMBER_OFFSET(PCIConfigSpace, regs.headerType) == MEMBER_OFFSET(PCIConfigSpace, regs1.headerType));
+static_assert(MEMBER_OFFSET(PCIConfigSpace, regs.headerType) == MEMBER_OFFSET(PCIConfigSpace, regs2.headerType));
+static_assert(sizeof(PCIConfigRegisters0) == 0x40);
+static_assert(sizeof(PCIConfigRegisters1) == 0x40);
+static_assert(sizeof(PCIConfigRegisters2) == 0x48);
 
-	if((cs->regs.classCodes & arguments[2]) == (arguments[1] & arguments[2])){
-		return 1;
-	}
-	return 0;
+static void addPCIConfigSpace(PCIManager *pciManager, PCIConfigSpace *cs){
+	acquireLock(&pciManager->lock);
+	ADD_TO_DQUEUE(cs, &pciManager->listHead);
+	releaseLock(&pciManager->lock);
 }
 
-static int returnPCILocation(Resource *resource, uintptr_t *returnValues){
-	PCIConfigSpace *cs = resource->instance;
-	returnValues[0] = cs->location.bus;
-	returnValues[1] = cs->location.device;
-	returnValues[2] = cs->location.function;
-	return 3;
+static void firstPCIConfigSpace(PCIManager *pciManager, const PCIConfigSpace **cs){
+	acquireLock(&pciManager->lock);
+	*cs = pciManager->listHead;
+	releaseLock(&pciManager->lock);
 }
 
-static PCIConfigSpace *readAndAddConfigSpace(uint8_t b, uint8_t d, uint8_t f){
-	uint32_t device_vendor = readPCIConfig(b, d, f, DEVICE_VENDOR);
+static void nextPCIConfigSpace(PCIManager *pciManager, const PCIConfigSpace **cs){
+	acquireLock(&pciManager->lock);
+	(*cs) = (*cs)->next;
+	releaseLock(&pciManager->lock);
+}
+
+static PCIConfigSpace *createPCIConfigSpace(uint8_t b, uint8_t d, uint8_t f){
+	uint32_t device_vendor = readPCIConfig(b, d, f, 0);
 	if((device_vendor & 0xffff) == 0xffff){
 		return NULL;
 	}
@@ -130,30 +144,48 @@ static PCIConfigSpace *readAndAddConfigSpace(uint8_t b, uint8_t d, uint8_t f){
 		printk("cannot allocate memory for PCI configuration space\n");
 		return NULL;
 	}
-	initResource(&cs->resource, cs, matchPCIClassCodes, returnPCILocation);
+	cs->prev = NULL;
+	cs->next = NULL;
 	cs->location.bus = b;
 	cs->location.device = d;
 	cs->location.function = f;
 	cs->location.unused = 0;
-	((uint32_t*)&cs->regs)[0] = device_vendor;
-	((uint32_t*)&cs->regs)[1] = readPCIConfig(b, d, f, STATUS_COMMAND);
-	((uint32_t*)&cs->regs)[2] = readPCIConfig(b, d, f, CLASS_REVISION);
-	((uint32_t*)&cs->regs)[3] = readPCIConfig(b, d, f, HEADER_TYPE);
-	addResource(RESOURCE_PCI_DEVICE, &cs->resource);
+	switch(cs->regs.headerType & 0x7f){
+	case 0x00:
+		cs->regsSize = sizeof(cs->regs0);
+		break;
+	case 0x01:
+		cs->regsSize = sizeof(cs->regs1);
+		break;
+	case 0x02:
+		cs->regsSize = sizeof(cs->regs2);
+		break;
+	default:
+		cs->regsSize = sizeof(cs->regs);
+		printk("warning: unrecognized PCI");
+		break;
+	}
+	uint32_t *regs32 = (uint32_t*)&cs->regs;
+	regs32[0] = device_vendor;
+	uintptr_t i;
+	for(i = 1 ; i * sizeof(uint32_t) < cs->regsSize; i ++){
+		regs32[i] = readPCIConfig(b, d, f, i * sizeof(uint32_t));
+	}
 	return cs;
 }
 
 // return number of found configuration spaces
-static int enumeratePCIBridge(uint32_t bus){
+static int enumeratePCIBridge(PCIManager *pciManager, uint32_t bus){
 	int dev;
 	int configSpaceCount = 0;
 	for(dev = 0; dev < 32; dev++){
 		int func, functionCount = 1;
 		for(func = 0; func < functionCount; func++){
-			const PCIConfigSpace *cs = readAndAddConfigSpace(bus, dev, func);
+			PCIConfigSpace *cs = createPCIConfigSpace(bus, dev, func);
 			if(cs == NULL){
 				continue;
 			}
+			addPCIConfigSpace(pciManager, cs);
 			configSpaceCount++;
 			if(func == 0 && (cs->regs.headerType & 0x80)){
 				functionCount = 8;
@@ -163,9 +195,9 @@ static int enumeratePCIBridge(uint32_t bus){
 			// bus, d, f, cs->regs.classCode, cs->regs.subclassCode, cs->regs.programInterface,
 			// cs->regs.deviceID, cs->regs.vendorID, cs->regs.headerType);
 			if(cs->regs.classCode == 6 && cs->regs.subclassCode == 4/*PCI bridge*/){
-				uint32_t busNumber = readPCIConfig(bus, dev, func, BUS_NUMBER);
-				if(((busNumber >> 8) & 0xff)/*secondary*/ != ((busNumber >> 16) & 0xff)/*subordinate*/){
-					configSpaceCount += enumeratePCIBridge(((busNumber >> 8) & 0xff));
+				PCIConfigRegisters1 *regs1 = &cs->regs1;
+				if(regs1->secondaryBus != regs1->subordinateBus){
+					configSpaceCount += enumeratePCIBridge(pciManager, regs1->secondaryBus);
 				}
 			}
 			// USB
@@ -197,31 +229,222 @@ static int enumeratePCIBridge(uint32_t bus){
 
 // TODO: function for reload driver
 
-static int enumerateHostBridge(void){
-	uint32_t classCode = readPCIConfig(0, 0, 0, CLASS_REVISION);
+static int enumerateHostBridge(PCIManager *pciManager){
+	uint32_t classCode = readPCIConfig(0, 0, 0, MEMBER_OFFSET(PCICommonConfigRegisters, classCodes));
 	if(((classCode >> 24) & 0xff)/*class code*/ != 6 || ((classCode >> 16) & 0xff)/*subclass code*/ != 0){
 		printk("bus 0, device 0, function 0 is not PCI Host Bridge\n");
 		return 0;
 	}
-	uint32_t headerType = readPCIConfig(0, 0, 0, HEADER_TYPE);
+	uint32_t headerType = readPCIConfig(0, 0, 0, MEMBER_OFFSET(PCICommonConfigRegisters, types));
 	int f, functionCount = (((headerType >> 16) & 0x80)? 8: 1);
 	int configSpaceCount = 0;
 	for(f= 0; f < functionCount; f++){
-		configSpaceCount += enumeratePCIBridge(f);
+		configSpaceCount += enumeratePCIBridge(pciManager, f);
 	}
 	return configSpaceCount;
 }
 
-uintptr_t systemCall_discoverPCI(
-	uint32_t classCode, uint32_t classMask
+uintptr_t enumeratePCI(uint32_t classCode, uint32_t classMask){
+	char buf[30];
+	snprintf(buf, sizeof(buf), "%s:%x/%x", PCI_DRIVER_NAME, classCode, classMask);
+	return syncEnumerateFile(buf);
+}
+
+uintptr_t nextPCIConfigRegisters(uintptr_t pciEnumHandle, PCIConfigRegisters *regs, uintptr_t readSize){
+	FileEnumeration fe;
+	uintptr_t feSize = sizeof(fe);
+	uintptr_t r = syncReadFile(pciEnumHandle, &fe, &feSize);
+	if(r == IO_REQUEST_FAILURE || feSize != sizeof(fe))
+		return 0;
+	char buf[20];
+	assert(fe.nameLength < 12);
+	fe.name[fe.nameLength] = '\0';
+	snprintf(buf, sizeof(buf), "%s:%s", PCI_DRIVER_NAME, fe.name);
+	uintptr_t pciHandle = syncOpenFile(buf);
+	if(pciHandle == IO_REQUEST_FAILURE)
+		return 0;
+	r = syncSeekReadFile(pciHandle, regs, 0, &readSize);
+	if(r == IO_REQUEST_FAILURE)
+		readSize = 0;
+	r = syncCloseFile(pciHandle);
+	assert(r != IO_REQUEST_FAILURE);
+	return readSize;
+}
+
+static PCIManager pciManager = {NULL, INITIAL_SPINLOCK};
+
+static_assert(sizeof(union PCIConfigSpaceLocation) < sizeof(unsigned));
+
+static int seekReadPCIConfigSpace(
+	RWFileRequest *rwfr, OpenedFile *of,
+	uint8_t *buffer, uint64_t position, uintptr_t bufferSize
 ){
-	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_PCI_DEVICE, classCode ,classMask);
+	const PCIConfigSpace *cs = getFileInstance(of);
+	if(position > sizeof(cs->regs))
+		return 0;
+	uintptr_t beginPos = (uintptr_t)position;
+	uintptr_t endPos = MIN(beginPos + bufferSize, cs->regsSize);
+	memcpy(buffer, ((const uint8_t*)&cs->regs) + beginPos, endPos - beginPos);
+	pendRWFileIO(rwfr);
+	completeRWFileIO(rwfr, endPos - beginPos);
+	return 1;
+}
+
+static void closePCIConfigSpace(CloseFileRequest *cfr, __attribute__((__unused__)) OpenedFile *of){
+	pendCloseFileIO(cfr);
+	completeCloseFile(cfr);
+	// do not delete of->instance
+}
+
+static int openPCIConfigSpace(OpenFileRequest *ofr, const char *fileName, uintptr_t length,
+	__attribute__((__unused__)) OpenFileMode mode){
+	unsigned loc;
+	int ok = (snscanf(fileName, length, "%x", &loc) == 1);
+	EXPECT(ok);
+
+	const PCIConfigSpace *cs;
+	firstPCIConfigSpace(&pciManager, &cs);
+	while(cs != NULL){
+		if(cs->location.value == loc)
+			break;
+		nextPCIConfigSpace(&pciManager, &cs);
+	}
+	EXPECT(cs != NULL);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.seekRead = seekReadPCIConfigSpace;
+	ff.close = closePCIConfigSpace;
+	pendOpenFileIO(ofr);
+	completeOpenFile(ofr, (void*)cs, &ff);
+	return 1;
+	ON_ERROR;
+	ON_ERROR;
+	return 0;
+}
+
+typedef struct PCIEnumerator{
+	uint32_t classCode, classMask;
+	PCIManager *manager;
+	const PCIConfigSpace *cs;
+	// add something if we want to remove PCIConfigSpace
+	// struct PCIEnumerator **prev, *next;
+}PCIEnumerator;
+
+static int readEnumPCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+	if(bufferSize < sizeof(FileEnumeration)){
+		return 0;
+	}
+	FileEnumeration *fe = (FileEnumeration*)buffer;
+	PCIEnumerator *pe = getFileInstance(of);
+	uintptr_t readCount = 0;
+	while(pe->cs != NULL){
+		union PCIConfigSpaceLocation loc = pe->cs->location;
+		uint32_t cc = pe->cs->regs.classCodes;
+		nextPCIConfigSpace(pe->manager, &pe->cs);
+		if((cc & pe->classMask) == (pe->classCode & pe->classMask)){
+			fe->nameLength = snprintf(fe->name, sizeof(fe->name)/*MAX_FILE_ENUM_NAME_LENGTH*/, "%x", loc.value);
+			readCount = sizeof(FileEnumeration);
+			break;
+		}
+	}
+	pendRWFileIO(rwfr);
+	completeRWFileIO(rwfr, readCount);
+	return 1;
+}
+
+static void closeEnumPCI(CloseFileRequest *cfr, OpenedFile *of){
+	PCIEnumerator *pe = getFileInstance(of);
+	pendCloseFileIO(cfr);
+	completeCloseFile(cfr);
+	DELETE(pe);
+}
+
+static_assert(sizeof(uint32_t) == sizeof(int));
+
+static int openEnumPCI(OpenFileRequest *ofr, const char *fileName, uintptr_t length, OpenFileMode mode){
+	uint32_t classCode, classMask;
+	EXPECT(length != 0 && mode.enumeration != 0);
+	int ok = (snscanf(fileName, length, "%x/%x", &classCode, &classMask) == 2);
+	EXPECT(ok);
+	PCIEnumerator *NEW(pe);
+	EXPECT(pe);
+	assert(pciManager.listHead != NULL);
+	pe->manager = &pciManager;
+	firstPCIConfigSpace(pe->manager, &pe->cs);
+	pe->classCode = classCode;
+	pe->classMask = classMask;
+	// addFileSystem after initialization. see pciDriver
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.close = closeEnumPCI;
+	ff.read = readEnumPCI;
+	pendOpenFileIO(ofr);
+	completeOpenFile(ofr, pe, &ff);
+	return 1;
+	// DELETE(pe);
+	ON_ERROR;
+	ON_ERROR;
+	ON_ERROR;
+	return 0;
+}
+
+static int openPCI(OpenFileRequest *ofr, const char *fileName, uintptr_t length, OpenFileMode mode){
+	if(mode.enumeration){
+		return openEnumPCI(ofr, fileName, length, mode);
+	}
+	else{
+		return openPCIConfigSpace(ofr, fileName, length, mode);
+	}
 }
 
 void pciDriver(void){
-	int pciCount = enumerateHostBridge();
+	int pciCount = enumerateHostBridge(&pciManager);
 	printk("%d PCI devices enumerated\n", pciCount);
+
+	FileNameFunctions f = INITIAL_FILE_NAME_FUNCTIONS;
+	f.open = openPCI;
+	addFileSystem(&f, "pci", strlen("pci"));
 	while(1){
 		sleep(1000);
 	}
 }
+
+#ifndef NDEBUG
+#include"task/task.h"
+
+void testPCI(void);
+void testPCI(void){
+	uintptr_t r, enumHandle = enumeratePCI(0x01060100, 0xffffff00);
+	//("pci:0/0");
+	assert(enumHandle != IO_REQUEST_FAILURE);
+	while(1){
+		FileEnumeration fe;
+		uintptr_t s = sizeof(fe);
+		r = syncReadFile(enumHandle, &fe, &s);
+		assert(r != IO_REQUEST_FAILURE);
+		if(s == 0)
+			break;
+		uintptr_t i;
+		for(i = 0; i < fe.nameLength; i++){
+			printk("%c", fe.name[i]);
+		}
+		printk("\n");
+
+		char buf[30] = "pci:";
+		strncpy(buf + strlen(buf), fe.name, fe.nameLength);
+		uintptr_t pciHandle = syncOpenFile(buf);
+		assert(pciHandle != IO_REQUEST_FAILURE);
+		PCICommonConfigRegisters regs;
+		s = sizeof(regs);
+		r = syncSeekReadFile(pciHandle, &regs, 0, &s);
+		assert(r != IO_REQUEST_FAILURE && s == sizeof(regs));
+		for(i = 0; i < sizeof(regs) / sizeof(uint32_t); i++){
+			printk("%x ",((uint32_t*)&regs)[i]);
+		}
+		printk("\n");
+		r = syncCloseFile(pciHandle);
+		assert(r != IO_REQUEST_FAILURE);
+	}
+	r = syncCloseFile(enumHandle);
+	assert(r != IO_REQUEST_FAILURE);
+	systemCall_terminate();
+}
+#endif

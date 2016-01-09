@@ -78,53 +78,79 @@ void ps2Driver(void);
 // pci.c
 void pciDriver(void);
 
-// return index of found PCI configuration space
-// return 0xffff if no element matches
-// call this function with index + 1 to enumerate next one
-uintptr_t systemCall_discoverPCI(
-	uint32_t classCode, uint32_t classMask // parameters
-);
+#define PCI_COMMON_CONFIG_REGISTERS \
+struct{\
+	uint16_t vendorID, deviceID;\
+	uint16_t command, status;\
+	union{\
+		struct{uint8_t revision, programInterface, subclassCode, classCode;};\
+		uint32_t classCodes;\
+	};\
+	union{\
+		struct{uint8_t cacheLineSize, latencyTimer, headerType, bist;};\
+		uint32_t types;\
+	};\
+}
 
-enum PCIConfigRegister{
-	// device id, vendor id
-	// 16, 16
-	DEVICE_VENDOR = 0x00,
-	// status, command
-	// 16, 16
-	STATUS_COMMAND = 0x04,
-	// class, subclass, program interface, revision id
-	// 8, 8, 8, 8
-	CLASS_REVISION = 0x08,
-	// built-in self test, header type, latency timer, cache line size
-	// 8, 8, 8 ,8
-	HEADER_TYPE = 0x0c,
-	// memory mapped registers
-	// 32
-	BASE_ADDRESS_0 = 0x10 + 0,
-	BASE_ADDRESS_1 = 0x10 + 4,
-	BASE_ADDRESS_2 = 0x10 + 8,
-	BASE_ADDRESS_3 = 0x10 + 12,
-	BASE_ADDRESS_4 = 0x10 + 16,
-	BASE_ADDRESS_5 = 0x10 + 20,
+typedef struct{
+	PCI_COMMON_CONFIG_REGISTERS;
+}PCICommonConfigRegisters;
 
-	// for header type = 0x10
-	// secondary Latency timer, subordinate bus number, secondary bus number, primary bus number
-	// 8, 8, 8, 8
-	// primary: direct upstream; secondary: direct downstream; subordinate: most downstream
-	BUS_NUMBER = 0x18,
+// for headerType = 0x00
+typedef struct{
+	PCI_COMMON_CONFIG_REGISTERS;
+	uint32_t bar0;
+	uint32_t bar1;
+	uint32_t bar2;
+	uint32_t bar3;
+	uint32_t bar4;
+	uint32_t bar5;
+	uint32_t cardbus;
+	uint16_t subsystemVendorID, subsystemID;
+	uint32_t expansionROM;
+	uint8_t  capability, reserved0[3];
+	uint32_t reserved1;
+	uint8_t interruptLine, interruptPIN, minGrant, maxLatency;
+}PCIConfigRegisters0;
 
-	// for USB host controller
-	// serial bus release number
-	// 8
-	SBRN = 0x60,
+typedef struct{
+	PCI_COMMON_CONFIG_REGISTERS;
+	uint32_t bar0;
+	uint32_t bar1;
+	uint8_t primaryBus, secondaryBus, subordinateBus, secondaryTimer;
+	uint8_t ioBase, ioLimit;
+	uint16_t secondaryStatus;
+	uint16_t memoryBase, memoryLimit;
+	uint16_t prefetchMemoryBase, prefetchMemoryLimit;
+	uint32_t prefetchBaseHigh;
+	uint32_t prefetchBaseLow;
+	uint16_t ioBaseHigh;
+	uint16_t ioLimitHigh;
+	uint8_t capability, reserved0[3];
+	uint32_t expansionROM;
+	uint8_t interruptLine, interruptPIN;
+	uint16_t bridgeControl;
+}PCIConfigRegisters1;
 
-	// for AHCI host controller
-	// max latency, min grant, pin, interrupt irq
-	// 8, 8, 8, 8
-	INTERRUPT_INFORMATION = 0x3c
-};
+typedef struct{
+	PCI_COMMON_CONFIG_REGISTERS;
+	uint8_t unimplemented[0x38];
+}PCIConfigRegisters2;
 
-uint32_t readPCIConfig(uint8_t bus, uint8_t dev, uint8_t func, enum PCIConfigRegister reg);
+
+typedef union{
+	 PCICommonConfigRegisters common;
+	 PCIConfigRegisters0 regs0;
+	 PCIConfigRegisters0 regs1;
+	 PCIConfigRegisters0 regs2;
+}PCIConfigRegisters;
+
+// return a file enumeration handle
+// the enumeration consists of PCI paths (bus, deivce, function)
+// whose class code & classMask == classCode & classMask
+uintptr_t enumeratePCI(uint32_t classCode, uint32_t classMask);
+
+uintptr_t nextPCIConfigRegisters(uintptr_t pciEnumHandle, PCIConfigRegisters *regs, uintptr_t readSize);
 
 // ahci.c
 void ahciDriver(void);

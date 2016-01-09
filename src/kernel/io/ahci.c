@@ -761,13 +761,9 @@ static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument 
 	return 0;
 }
 
-static AHCIInterruptArgument *initAHCI(AHCIManager *am, uint8_t bus, uint8_t dev, uint8_t func){
+static AHCIInterruptArgument *initAHCI(AHCIManager *am, const PCIConfigRegisters0 *regs){
 	PIC *pic = processorLocalPIC();
-	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
-	uint32_t bar5 = readPCIConfig(bus, dev, func, BASE_ADDRESS_5);
-	uint32_t intInfo  = readPCIConfig(bus, dev, func, INTERRUPT_INFORMATION);
-
-	AHCIInterruptArgument *arg = initAHCIRegisters(bar5);
+	AHCIInterruptArgument *arg = initAHCIRegisters(regs->bar5);
 	if(arg == NULL){
 		return NULL;
 	}
@@ -779,9 +775,9 @@ static AHCIInterruptArgument *initAHCI(AHCIManager *am, uint8_t bus, uint8_t dev
 	am->ahciCount++;
 	releaseLock(&am->lock);
 
-	InterruptVector *v = pic->irqToVector(pic, (intInfo & 0xff));
+	InterruptVector *v = pic->irqToVector(pic, regs->interruptLine);
 	setHandler(v, AHCIHandler, (uintptr_t)arg);
-	pic->setPICMask(pic, (intInfo & 0xff), 0);
+	pic->setPICMask(pic, regs->interruptLine, 0);
 	return arg;
 }
 
@@ -859,15 +855,18 @@ static IORequest *seekWriteAHCI(OpenFileRequest *ofr, const uint8_t *buffer, uin
 
 void ahciDriver(void){
 	const char *driverName = "ahci";
-	uintptr_t discoverPCI = systemCall_discoverPCI(0x01060100, 0xffffff00);
+	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
+	uintptr_t enumPCI = enumeratePCI(0x01060100, 0xffffff00);
+	assert(enumPCI != IO_REQUEST_FAILURE);
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openAHCI;
 	addFileSystem(&ff, driverName, strlen(driverName));
 	while(1){
-		uintptr_t bus, dev, func;
-		uintptr_t discoverPCI2 = systemCall_waitIOReturn(discoverPCI, 3, &bus, &dev, &func);
-		assert(discoverPCI == discoverPCI2);
-		AHCIInterruptArgument *arg = initAHCI(&ahciManager, bus, dev, func);
+		PCIConfigRegisters pciConfig;
+		PCIConfigRegisters0 *regs0 = &pciConfig.regs0;
+		if(nextPCIConfigRegisters(enumPCI, &pciConfig, sizeof(*regs0)) != sizeof(*regs0))
+			break;
+		AHCIInterruptArgument *arg = initAHCI(&ahciManager, regs0);
 
 		int p;
 		for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
@@ -888,6 +887,10 @@ void ahciDriver(void){
 			uintptr_t r = syncCloseFile(fileHandle);
 			assert(r != IO_REQUEST_FAILURE);
 		}
+	}
+	syncCloseFile(enumPCI);
+	while(1){
+		sleep(1000);
 	}
 }
 
