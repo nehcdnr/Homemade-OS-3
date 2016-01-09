@@ -191,11 +191,6 @@ static uintptr_t _openCommand(const char *cmdLine, uintptr_t length, OpenFileMod
 	arg = nextArgument(&cmdLine, &length);
 	if(cmdLine == NULL)
 		return UINTPTR_NULL;
-	unsigned a;
-//TODO: shift key
-for(a=0;arg + a != cmdLine;a++){
-	if(arg[a]==';')((char*)arg)[a]=':';
-}
 	printString(arg, cmdLine - arg);
 	printk("\n");
 	uintptr_t file = syncOpenFileN(arg, cmdLine - arg, mode);
@@ -311,7 +306,42 @@ static int printHandler(char *cmdLine, int index, int key){
 	return index;
 }
 
+#define SHIFT_ARRAY_LENGTH (128)
+
+static const char *createShiftKeyMap(void){
+	char *NEW_ARRAY(shiftKeyMap, SHIFT_ARRAY_LENGTH);
+	if(shiftKeyMap == NULL)
+		return NULL;
+	const char *s1 =
+		"`1234567890-=qwertyuiop[]\\"
+		"asdfghjkl;'"
+		"zxcvbnm,./";
+	const char *s2 =
+		"~!@#$%^&*()_+QWERTYUIOP{}|"
+		"ASDFGHJKL:\""
+		"ZXCVBNM<>?";
+	int a;
+	for(a = 0;a < SHIFT_ARRAY_LENGTH; a++)
+		shiftKeyMap[a] = a;
+	for(a=0; s1[a]!='\0'; a++)
+		shiftKeyMap[(int)s1[a]] = (int)s2[a];
+	return shiftKeyMap;
+}
+
+static int shiftKey(const char *shiftKeyMap, int key){
+	return (key < SHIFT_ARRAY_LENGTH && key >= 0? shiftKeyMap[key]: key);
+}
+
+struct KeyboardState{
+	int shiftPressed;
+};
+
 static void kernelConsoleLoop(void){
+	const char *shiftKeyMap = createShiftKeyMap();
+	if(shiftKeyMap == NULL){
+		printk("cannot allocate memory for kernel console\n");
+		systemCall_terminate();
+	}
 	int a;
 	uintptr_t kb = IO_REQUEST_FAILURE;
 	for(a = 0; a < 10 && kb == IO_REQUEST_FAILURE; a++){
@@ -322,6 +352,7 @@ static void kernelConsoleLoop(void){
 		printk("cannot open ps/2 keyboard\n");
 		systemCall_terminate();
 	}
+	struct KeyboardState kbState = {0};
 	char cmdLine[MAX_COMMAND_LINE_LENGTH];
 	int index = 0;
 	while(1){
@@ -331,18 +362,30 @@ static void kernelConsoleLoop(void){
 		if(r == IO_REQUEST_FAILURE || readSize != sizeof(ke))
 			break;
 		// command line
-		if(ke.isRelease != 0)
-			continue;
-		switch(ke.key){
-		case BACKSPACE:
-			index = backspaceHandler(index);
-			break;
-		case ENTER:
-			index = enterHandler(cmdLine, index);
-			break;
-		default:
-			index = printHandler(cmdLine, index, ke.key);
-			break;
+		if(ke.isRelease != 0){
+			switch(ke.key){
+			case LEFT_SHIFT:
+			case RIGHT_SHIFT:
+				kbState.shiftPressed = 0;
+				break;
+			}
+		}
+		else{
+			switch(ke.key){
+			case LEFT_SHIFT:
+			case RIGHT_SHIFT:
+				kbState.shiftPressed = 1;
+				break;
+			case BACKSPACE:
+				index = backspaceHandler(index);
+				break;
+			case ENTER:
+				index = enterHandler(cmdLine, index);
+				break;
+			default:
+				index = printHandler(cmdLine, index, (kbState.shiftPressed? shiftKey(shiftKeyMap, ke.key): ke.key));
+				break;
+			}
 		}
 	}
 	printk("cannot read ps/2 keyboard");
@@ -350,9 +393,7 @@ static void kernelConsoleLoop(void){
 }
 
 void kernelConsoleService(void){
-	int result;
-	result = //systemCall3(SYSCALL_REGISTER_SERVICE,
-	registerService(global.syscallTable,
+	int result = registerService(global.syscallTable,
 		KERNEL_CONSOLE_SERVICE_NAME, printConsoleHandler, (uintptr_t)&kernelConsole);
 	EXPECT(result >= 0);
 	kernelConsoleLoop();
