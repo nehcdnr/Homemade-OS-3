@@ -1,4 +1,4 @@
-#include"semaphore.h"
+#include"exclusivelock.h"
 #include"task_private.h"
 #include"interrupt/systemcall.h"
 #include"memory/memory.h"

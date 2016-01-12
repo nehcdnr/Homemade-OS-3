@@ -1,6 +1,6 @@
 #include"task.h"
 #include"task_private.h"
-#include"semaphore.h"
+#include"exclusivelock.h"
 #include"assembly/assembly.h"
 #include"memory/segment.h"
 #include"memory/memory.h"
@@ -20,7 +20,7 @@ typedef struct TaskMemoryManager{
 }TaskMemoryManager;
 
 static TaskMemoryManager *kernelTaskMemory = NULL;
-OpenFileManager *globalOpenFileManager = NULL;
+static OpenFileManager *kernelOpenFileManager = NULL;
 
 static int addTaskMemoryReference(TaskMemoryManager *m, int value){
 	acquireLock(&m->lock);
@@ -648,7 +648,7 @@ static void taskDefinedHandler(InterruptParam *p){
 
 TaskManager *createTaskManager(SegmentTable *gdt){
 	assert(globalQueue != NULL);
-	assert(kernelTaskMemory != NULL && globalOpenFileManager != NULL);
+	assert(kernelTaskMemory != NULL && kernelOpenFileManager != NULL);
 	// each processor needs an idle task
 	// create a task for current running bootstrap task. not need to initialize eip and esp
 	TaskManager *NEW(tm);
@@ -656,7 +656,7 @@ TaskManager *createTaskManager(SegmentTable *gdt){
 		panic("cannot initialize task manager");
 	}
 	tm->current = createTask(/*esp0*/0, /*espInterrupt*/0, /*stackBottom*/0,
-		kernelTaskMemory, globalOpenFileManager, NUMBER_OF_PRIORITIES - 1);
+		kernelTaskMemory, kernelOpenFileManager, NUMBER_OF_PRIORITIES - 1);
 	if(tm->current == NULL){
 		panic("cannot initialize bootstrap task");
 	}
@@ -884,8 +884,8 @@ void initTaskManagement(SystemCallTable *systemCallTable){
 	if(kernelTaskMemory == NULL){
 		panic("cannot create kernel task memory");
 	}
-	globalOpenFileManager = createOpenFileManager();
-	if(globalOpenFileManager == NULL){
+	kernelOpenFileManager = createOpenFileManager();
+	if(kernelOpenFileManager == NULL){
 		panic("cannot create kernel open file manager");
 	}
 	registerSystemCall(systemCallTable, SYSCALL_TASK_DEFINED, taskDefinedHandler, 0);

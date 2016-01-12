@@ -474,7 +474,6 @@ void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFi
 }
 
 static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
-	assert(fior->file != NULL_OPENED_FILE);
 	// delete OpenedFile here
 	int ok = addFileIOCount(fior->file, -1);
 	assert(ok);
@@ -691,11 +690,7 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	// file handle to OpenedFile
 	OpenFileManager *ofm = getOpenFileManager(processorLocalTask());
 	OpenedFile *of = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), isClosing);
-	// TODO: remove globalOpenFileManager
-	//if(of == NULL){
-	//	ofm = globalOpenFileManager;
-	//	of = searchOpenFileList(ofm, SYSTEM_CALL_ARGUMENT_0(p), isClosing);
-	//}
+
 	if(of == NULL)
 		return IO_REQUEST_FAILURE;
 	// close file

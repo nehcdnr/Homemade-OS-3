@@ -2,7 +2,7 @@
 #include<common.h>
 #include"memory/memory.h"
 #include"multiprocessor/spinlock.h"
-#include"task/semaphore.h"
+#include"task/exclusivelock.h"
 
 struct FIFO{
 	uintptr_t begin, dataSize, bufferSize;

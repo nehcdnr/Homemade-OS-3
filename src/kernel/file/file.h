@@ -101,9 +101,6 @@ typedef struct CloseFileRequest CloseFileRequest;
 typedef struct OpenedFile OpenedFile;
 typedef struct FileFunctions FileFunctions;
 
-// XXX: access a file without open/close
-#define NULL_OPENED_FILE ((OpenedFile*)NULL)
-
 #define INIT(FUNC, TYPE)\
 void FUNC(\
 	TYPE *r, void *instance,\
@@ -178,8 +175,6 @@ uintptr_t getFileHandle(OpenedFile *of);
 void *getFileInstance(OpenedFile *of);
 // assume no pending IO requests
 void closeAllOpenFileRequest(OpenFileManager *ofm);
-
-extern OpenFileManager *globalOpenFileManager; // see taskmanager.c
 
 // FAT32
 void fatService(void);

@@ -3,7 +3,7 @@
 #include"io/io.h"
 #include"file.h"
 #include"interrupt/systemcall.h"
-#include"task/semaphore.h"
+#include"task/exclusivelock.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
 #include"multiprocessor/spinlock.h"
@@ -597,7 +597,7 @@ static void rwFATTask(void *rwfrPtr){
 
 static int sizeOfFAT(FileIORequest2 *fior2, OpenedFile *of){
 	OpenedFATFile *f = getFileInstance(of);
-	pendFileIO2(fior2); // TODO:
+	pendFileIO2(fior2);
 	completeFileIO64(fior2, f->dirEntry.fileSize);
 	return 1;
 }
