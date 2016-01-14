@@ -180,9 +180,14 @@ static const char *nextArgument(const char **cmdLine, uintptr_t *length){
 static uintptr_t nextHexadecimal(const char **cmdLine, uintptr_t *length){
 	const char *arg;
 	arg = nextArgument(cmdLine, length);
-	if(*cmdLine == NULL)
+	if(*cmdLine == NULL){
 		return 0;
-	uintptr_t v = parseHexadecimal(arg, (*cmdLine) - arg);
+	}
+	uintptr_t v;
+	if(snscanf(arg,*cmdLine - arg, "%x", &v) != 1){
+		*cmdLine = NULL;
+		return 0;
+	}
 	return v;
 }
 

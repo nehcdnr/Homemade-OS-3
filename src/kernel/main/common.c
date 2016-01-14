@@ -515,14 +515,6 @@ int sscanf(const char *str, const char *format, ...){
 	return scanCount;
 }
 
-uintptr_t parseHexadecimal(const char *s, uintptr_t length){
-	uintptr_t i, r = 0;
-	for(i = 0; i < length; i++){
-		r = r * 16 + (s[i] >= '0' && s[i] <= '9'? s[i] - '0': s[i] - 'a' + 10);
-	}
-	return r;
-}
-
 void printAndHalt(const char *condition, const char *file, int line){
 	printk("failure: %s %s %d", condition, file, line);
 	// if the console does not display, use vm debugger to watch registers

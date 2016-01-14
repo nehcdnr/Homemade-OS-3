@@ -51,7 +51,7 @@ void readPartitions(
 	struct MBR *buffer = systemCall_allocateHeap(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
 	uintptr_t readSize = sectorSize;
-	uintptr_t ior1 = syncSeekReadFile(fileHandle, buffer, relativeLBA, &readSize);
+	uintptr_t ior1 = syncSeekReadFile(fileHandle, buffer, relativeLBA * sectorSize, &readSize);
 	EXPECT(ior1 != IO_REQUEST_FAILURE && sectorSize == readSize);
 
 	if(buffer->signature != MBR_SIGNATRUE){

@@ -65,7 +65,6 @@ int snprintf(char *str, size_t len, const char *format, ...);
 int printk(const char *format, ...);
 int snscanf(const char *str, size_t len, const char *format, ...);
 int sscanf(const char *str, const char *format, ...);
-uintptr_t parseHexadecimal(const char *s, uintptr_t length);
 
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
 #define MEMBER_OFFSET(T, M) ((size_t)&(((T*)0)->M))

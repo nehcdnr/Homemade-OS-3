@@ -115,6 +115,8 @@ static_assert(sizeof(HBAPortMemory) % PAGE_SIZE == 0);
 
 #define DEFAULT_SECTOR_SIZE (512)
 
+static_assert(PAGE_SIZE % DEFAULT_SECTOR_SIZE == 0);
+
 #define POLL_UNTIL(CONDITION, MAX_TRY, SUCCESS) do{\
 	int _tryCount;\
 	for(_tryCount = 0; 1; _tryCount++){\
@@ -193,7 +195,10 @@ enum ATACommand{
 	IDENTIFY_DEVICE = 0xec
 };
 
-static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm, PhysicalAddress buffer){
+static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm, uintptr_t buffer){
+	if(buffer % DEFAULT_SECTOR_SIZE != 0){
+		return 0;
+	}
 	{
 		uint32_t ctbl = pm->commandHeader[0].commandTableBaseLow;
 		uint32_t ctbh = pm->commandHeader[0].commandTableBaseHigh;
@@ -209,7 +214,7 @@ static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm,
 	{
 		struct PhysicalRegion *pm_ct_pr = &pm->commandTable[0].physicalRegion[0];
 		MEMSET0(pm_ct_pr);
-		pm_ct_pr->dataBaseLow = buffer.value;
+		pm_ct_pr->dataBaseLow = buffer;
 		pm_ct_pr->dataBaseHigh = 0;
 		pm_ct_pr->byteCount = DEFAULT_SECTOR_SIZE - 1;
 		pm_ct_pr->completeInterrupt = 0;
@@ -237,9 +242,10 @@ static int issueIdentifyCommand(volatile HBAPortRegister *pr, HBAPortMemory *pm,
 
 static int issueDMACommand(
 	volatile HBAPortRegister *pr, HBAPortMemory *pm, uint32_t sectorSize,
-	PhysicalAddress buffer, uint64_t lba, unsigned int sectorCount, int write
+	uintptr_t buffer, uint64_t lba, unsigned int sectorCount, int write
 ){
-	if(sectorCount == 0 || sectorCount > 65536 ||
+	if(buffer % sectorSize != 0 ||
+	sectorCount == 0 || sectorCount > 65536 ||
 	sectorSize * sectorCount >= (1 << 22)){
 		return 0;
 	}
@@ -269,7 +275,7 @@ static int issueDMACommand(
 	{
 		struct PhysicalRegion *pm_ct_pr = &pm->commandTable[0].physicalRegion[0];
 		MEMSET0(pm_ct_pr);
-		pm_ct_pr->dataBaseLow = buffer.value;
+		pm_ct_pr->dataBaseLow = buffer;
 		pm_ct_pr->dataBaseHigh = 0;
 		pm_ct_pr->byteCount = sectorCount * sectorSize - 1;
 		pm_ct_pr->completeInterrupt = 0;
@@ -442,12 +448,27 @@ static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 
 // system call
 typedef struct DiskRequest{
+	// when sending a READ or WRITE command, ior == NULL and rwfr != NULL
 	RWFileRequest *rwfr;
+	// when sending a IDENTIFY command, ior != NULL and rwfr == NULL
 	IORequest *ior;
 	Spinlock *lock;
 	enum ATACommand command;
-	LinearMemoryManager *memoryManager;
-	PhysicalAddress buffer;
+
+	LinearMemoryManager *physicalBufferManager;
+	// not aligned
+	void *inputBuffer;
+	uintptr_t inputSize;
+	// aligned to page
+	PhysicalAddress physicalBufferPage;
+	// if inputBuffer is aligned, sectorBuffer == inputBuffer and not need to copy
+	// aligned to Page
+	void *sectorBufferPage;
+	// aligned to sector;
+	uintptr_t sectorBufferOffset;
+	// not aligned
+	uintptr_t bufferOffset;
+
 	uint64_t lba;
 	uint32_t sectorCount;
 	AHCIInterruptArgument *ahci;
@@ -456,6 +477,19 @@ typedef struct DiskRequest{
 	struct DiskRequest **prev, *next;
 }DiskRequest;
 
+
+static uintptr_t diskPhysicalSectorBuffer(DiskRequest *dr){
+	return dr->physicalBufferPage.value + dr->sectorBufferOffset;
+}
+
+static void *diskLinearBuffer(DiskRequest *dr){
+	return (void*)(((uintptr_t)dr->sectorBufferPage) + dr->bufferOffset);
+}
+
+static int hasSeparateSectorBuffer(DiskRequest *dr){
+	return ((uintptr_t)dr->inputBuffer) != ((uintptr_t)dr->sectorBufferPage) + dr->bufferOffset;
+}
+
 static int sendDiskRequest(DiskRequest *dr){
 	AHCIInterruptArgument *a = dr->ahci;
 	switch(dr->command){
@@ -463,12 +497,12 @@ static int sendDiskRequest(DiskRequest *dr){
 	case DMA_WRITE_EXT:
 		return issueDMACommand(
 			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory, a->desc.sectorSize,
-			dr->buffer, dr->lba, dr->sectorCount, dr->isWrite
+			diskPhysicalSectorBuffer(dr), dr->lba, dr->sectorCount, dr->isWrite
 		);
 	case IDENTIFY_DEVICE:
 		return issueIdentifyCommand(
 			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory,
-			dr->buffer
+			diskPhysicalSectorBuffer(dr)
 		);
 	default:
 		assert(0); // unknown command;
@@ -485,55 +519,92 @@ static void cancelRWAHCI(void *instance){
 	DELETE(dr);
 }
 */
+
 static void deleteDiskRequest(DiskRequest *dr){
-	releaseReservedPage(dr->memoryManager, dr->buffer);
+	releaseReservedPage(dr->physicalBufferManager, dr->physicalBufferPage);
+	if(hasSeparateSectorBuffer(dr)){
+		if(checkAndReleaseKernelPages(dr->sectorBufferPage) == 0){
+			panic("");
+		}
+	}
 	DELETE(dr);
 }
 
 static DiskRequest *createRWDiskRequest(
-	enum ATACommand cmd, LinearMemoryManager *lm, RWFileRequest *rwfr,
-	void *linearBuffer, uint64_t lba, uint32_t sectorCount,
+	enum ATACommand cmd, RWFileRequest *rwfr,
+	void *buffer, uintptr_t bufferSize, uint64_t position,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
-	PhysicalAddress buffer = checkAndReservePage(lm, linearBuffer, KERNEL_PAGE);
-	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
+	const uintptr_t sectorSize = a->desc.sectorSize;
+	const uintptr_t sectorBufferSize = CEIL(position + bufferSize, sectorSize) - FLOOR(position, sectorSize);
+	// assert(PAGE_SIZE % a->desc.sectorSize == 0);
+	// TODO: allocate continuous physical pages or send multiple commands
+	// read sector size <= PAGE_SIZE and buffer resides in one page
+	if(sectorBufferSize > PAGE_SIZE ||
+		CEIL(((uintptr_t)buffer) + bufferSize, PAGE_SIZE) - FLOOR((uintptr_t)buffer, PAGE_SIZE) > PAGE_SIZE
+	){
+		return NULL;
+	}
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
 	dr->rwfr = rwfr;
 	dr->ior = NULL;
 	dr->lock = &a->lock;
 	dr->command = cmd;
-	dr->memoryManager = lm;
-	dr->buffer = buffer;
-	dr->lba = lba;
-	dr->sectorCount = sectorCount;
+	dr->inputBuffer = buffer;
+	dr->inputSize = bufferSize;
+
+	// buffer aligned to sector && size aligned to sector && resides in one page && position aligned to sector
+	if(
+		((uintptr_t)buffer) % a->desc.sectorSize == 0 &&
+		bufferSize == sectorBufferSize &&
+		position % a->desc.sectorSize == 0
+	){ // aligned
+		dr->sectorBufferOffset =
+		dr->bufferOffset = ((uintptr_t)buffer) % PAGE_SIZE;
+		dr->sectorBufferPage = (void*)(((uintptr_t)buffer) - dr->bufferOffset);
+		dr->physicalBufferManager = getTaskLinearMemory(processorLocalTask());
+	}
+	else{ // not aligned
+		dr->sectorBufferOffset = 0;
+		dr->bufferOffset = position % sectorSize;
+		dr->sectorBufferPage = allocateKernelPages(CEIL(sectorBufferSize, PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
+		dr->physicalBufferManager  = kernelLinear;
+	}
+	EXPECT(dr->sectorBufferPage != NULL);
+	dr->physicalBufferPage = checkAndReservePage(dr->physicalBufferManager, dr->sectorBufferPage, KERNEL_PAGE);
+	EXPECT(dr->physicalBufferPage.value != INVALID_PAGE_ADDRESS);
+	dr->lba = position / sectorSize;
+	dr->sectorCount = sectorBufferSize / sectorSize;
 	dr->ahci = a;
 	dr->portIndex = portIndex;
 	dr->isWrite = isWrite;
 	dr->prev = NULL;
 	dr->next = NULL;
 	return dr;
-	//DELETE(dr);
+	//releaseReservedPage(dr->bufferMemory, dr->buffer);
 	ON_ERROR;
-	releaseReservedPage(lm, buffer);
+	if(hasSeparateSectorBuffer(dr)){
+		checkAndReleaseKernelPages(dr->sectorBufferPage);
+	}
+	ON_ERROR;
+	DELETE(dr);
 	ON_ERROR;
 	return NULL;
 }
 
 static int acceptIdentifyDiskRequest(void *instance, uintptr_t *returnValues){
 	DiskRequest *dr = instance;
-	returnValues[0] = (dr->sectorCount * dr->ahci->desc.sectorSize);
+	returnValues[0] = DEFAULT_SECTOR_SIZE;//(dr->sectorCount * dr->ahci->desc.sectorSize);
 	deleteDiskRequest(dr);
 	return 1;
 }
 
 static DiskRequest *createIdentifyDiskRequest(
-	enum ATACommand cmd, LinearMemoryManager *lm, IORequest *ior,
-	void *linearBuffer,
+	enum ATACommand cmd, IORequest *ior,
+	void *buffer, uintptr_t bufferSize,
 	AHCIInterruptArgument *a, int portIndex
 ){
-	PhysicalAddress buffer = checkAndReservePage(lm, linearBuffer, KERNEL_PAGE);
-	EXPECT(buffer.value != INVALID_PAGE_ADDRESS);
 	DiskRequest *NEW(dr);
 	EXPECT(dr != NULL);
 	initIORequest(ior, dr, notSupportCancelIO, acceptIdentifyDiskRequest);
@@ -541,8 +612,15 @@ static DiskRequest *createIdentifyDiskRequest(
 	dr->ior = ior;
 	dr->lock = &a->lock;
 	dr->command = cmd;
-	dr->memoryManager = lm;
-	dr->buffer = buffer; // at least 512 bytes
+	assert(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize == DEFAULT_SECTOR_SIZE);
+	dr->inputBuffer = buffer;
+	dr->inputSize = bufferSize;
+	dr->sectorBufferOffset = 0;
+	dr->bufferOffset = 0;
+	dr->physicalBufferManager = getTaskLinearMemory(processorLocalTask());
+	dr->sectorBufferPage = buffer;
+	dr->physicalBufferPage = checkAndReservePage(dr->physicalBufferManager, buffer, KERNEL_PAGE); // at least 512 bytes
+	EXPECT(dr->physicalBufferPage.value != INVALID_PAGE_ADDRESS);
 	dr->lba = 0; // ignored
 	dr->sectorCount = 0; // ignored
 	dr->ahci = a;
@@ -551,9 +629,9 @@ static DiskRequest *createIdentifyDiskRequest(
 	dr->prev = NULL;
 	dr->next = NULL;
 	return dr;
-	//DELETE(dr);
+	//releaseReservedPage(kernelLinear, buffer);
 	ON_ERROR;
-	releaseReservedPage(lm, buffer);
+	DELETE(dr);
 	ON_ERROR;
 	return NULL;
 }
@@ -634,13 +712,16 @@ static void AHCIHandler(InterruptParam *param){
 	while(completedRW != NULL){
 		DiskRequest *dr = completedRW;
 		REMOVE_FROM_DQUEUE(dr);
+		if(hasSeparateSectorBuffer(dr)){
+			memcpy(dr->inputBuffer, diskLinearBuffer(dr), dr->inputSize);
+		}
 		if(dr->command == IDENTIFY_DEVICE){
 			assert(dr->rwfr == NULL && dr->ior != NULL);
 			completeIO(dr->ior);
 		}
 		else{
 			assert(dr->rwfr != NULL && dr->ior == NULL);
-			completeRWFileIO(dr->rwfr, dr->sectorCount * dr->ahci->desc.sectorSize);
+			completeRWFileIO(dr->rwfr, dr->inputSize);
 			deleteDiskRequest(dr);
 		}
 	}
@@ -703,8 +784,8 @@ static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument 
 	IORequest ior;
 
 	DiskRequest *dr = createIdentifyDiskRequest(
-		IDENTIFY_DEVICE, getTaskLinearMemory(processorLocalTask()), &ior,
-		buffer, arg, arg->hbaIndex
+		IDENTIFY_DEVICE, &ior,
+		buffer, DEFAULT_SECTOR_SIZE, arg, arg->hbaIndex
 	);
 	EXPECT(dr != NULL);
 	pendIO(dr->ior);
@@ -785,17 +866,16 @@ static AHCIInterruptArgument *initAHCI(AHCIManager *am, const PCIConfigRegisters
 
 static int seekReadAHCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize){
 	// TODO: allow multiple pages/physical regions
-	EXPECT(((uintptr_t)buffer) % PAGE_SIZE == 0 && bufferSize <= PAGE_SIZE);
 	HBAPortIndex index;
 	index.value = (uintptr_t)getFileInstance(of);
 	AHCIInterruptArgument *hba = searchHBAByPortIndex(&ahciManager, index);
 	EXPECT(hba != NULL);
 
-	EXPECT(bufferSize % hba->desc.sectorSize == 0);
+	EXPECT(position < hba->desc.sectorCount * hba->desc.sectorSize &&
+		position + bufferSize <= hba->desc.sectorCount * hba->desc.sectorSize);
 	DiskRequest *dr = createRWDiskRequest(
-		(0? DMA_WRITE_EXT: DMA_READ_EXT),
-		getTaskLinearMemory(processorLocalTask()), rwfr,
-		buffer, position, bufferSize / hba->desc.sectorSize,
+		(0? DMA_WRITE_EXT: DMA_READ_EXT), rwfr,
+		buffer, bufferSize, position,
 		hba, index.portIndex, 0
 	);
 	EXPECT(dr != NULL);
@@ -814,7 +894,6 @@ static int seekReadAHCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	ON_ERROR;
 	return 0;
 }
 
@@ -828,11 +907,14 @@ static int openAHCI(
 	OpenFileRequest *ofr,
 	const char *fileName, uintptr_t length, __attribute__((__unused__)) OpenFileMode mode
 ){
-	uintptr_t index = parseHexadecimal(fileName, length);
+	uintptr_t index;
+	if(snscanf(fileName, length, "%x", &index) != 1){
+		return 0;
+	}
 	AHCIInterruptArgument *arg = searchHBAByPortIndex(&ahciManager, (HBAPortIndex)index);
-
-	EXPECT(arg != NULL);
-
+	if(arg == NULL){
+		return 0;
+	}
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.seekRead = seekReadAHCI;
 	//if(mode.writable){
@@ -842,9 +924,6 @@ static int openAHCI(
 	pendOpenFileIO(ofr);
 	completeOpenFile(ofr, (void*)index, &ff);
 	return 1;
-
-	ON_ERROR;
-	return 0;
 }
 
 /*
@@ -879,6 +958,9 @@ void ahciDriver(void){
 			if(initDiskDescription(&arg->desc, arg) == 0){
 				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
+			}
+			if(PAGE_SIZE % arg->desc.sectorSize != 0){
+				printk("warning: unsupported ahci disk sector size: %u\n", arg->desc.sectorSize);
 			}
 			uintptr_t fileHandle = syncOpenFile(fileName);
 			assert(fileHandle != IO_REQUEST_FAILURE);
@@ -917,15 +999,26 @@ void testAHCI(void){
 	assert(buffer != NULL);
 	for(i = 0; i < 30; i++){
 		uintptr_t bs = PAGE_SIZE;
-		memset(buffer, 0, bs);
-		r = syncSeekReadFile(h, buffer, lba + i * PAGE_SIZE, &bs);
+		memset(buffer, 9, PAGE_SIZE);
+		r = syncSeekReadFile(h, buffer, lba * sectorSize + i * PAGE_SIZE, &bs);
 		assert(r != IO_REQUEST_FAILURE && bs == PAGE_SIZE);
 		uintptr_t j;
 		for(j = 0; j < bs; j++){
-			if(buffer[j] != 0)
+			if(buffer[j] != 9){
 				break;
+			}
 		}
-		assert(j < bs);
+		assert(j != bs);
+		;
+		// test non aligned buffer
+		for(j = 0; j < 20; j++){
+			uintptr_t j2 = ((j + 19) * (i + 11) % PAGE_SIZE);
+			uint8_t buffer1[3] = {9, 9, 9};
+			bs = 1;
+			r = syncSeekReadFile(h, &buffer1[1], lba * sectorSize + i * PAGE_SIZE + j2, &bs);
+			assert(r != IO_REQUEST_FAILURE && bs == 1);
+			assert(buffer1[0] == 9 && buffer1[1] == buffer[j2] && buffer1[2] == 9);
+		}
 	}
 	r = systemCall_releaseHeap(buffer);
 	assert(r);

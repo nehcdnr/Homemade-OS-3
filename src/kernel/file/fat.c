@@ -171,7 +171,6 @@ static uint64_t clusterToLBA(const FAT32DiskPartition *dp, uint32_t cluster){
 static uint32_t *loadFAT32(const FATBootSector *br, const FAT32DiskPartition *dp){
 	const size_t fatSize = br->ebr32.sectorsPerFAT32 * br->bytesPerSector; // what is the actual length of fat?
 	const uint64_t fatBeginLBA = dp->startLBA + br->reservedSectorCount;
-	const uintptr_t sectorsPerPage = PAGE_SIZE / dp->sectorSize;
 	//TODO: ahci driver accepts non-aligned buffer
 	uint32_t *fat = systemCall_allocateHeap(CEIL(fatSize, PAGE_SIZE), KERNEL_NON_CACHED_PAGE);
 	EXPECT(fat != NULL);
@@ -179,7 +178,7 @@ static uint32_t *loadFAT32(const FATBootSector *br, const FAT32DiskPartition *dp
 	for(p = 0; p * PAGE_SIZE < fatSize; p++){
 		uintptr_t readSize = PAGE_SIZE;
 		uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
-			(void*)(((uintptr_t)fat) + PAGE_SIZE * p), fatBeginLBA + p * sectorsPerPage, &readSize);
+			(void*)(((uintptr_t)fat) + PAGE_SIZE * p), fatBeginLBA * dp->sectorSize + p * PAGE_SIZE, &readSize);
 		if(rwDisk == IO_REQUEST_FAILURE || readSize != PAGE_SIZE){
 			printk("warning: failed to read FAT\n");
 			break;
@@ -281,7 +280,7 @@ static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t sta
 	MEMSET0(br);
 	uintptr_t actualReadSize = readSize;
 	uintptr_t rwDisk = syncSeekReadFile(dp->diskFileHandle,
-		br, dp->startLBA, &actualReadSize);
+		br, dp->startLBA * sectorSize, &actualReadSize);
 	EXPECT(rwDisk != IO_REQUEST_FAILURE && actualReadSize == readSize);
 	EXPECT(br->ebr32.ext.signature == 0x28 || br->ebr32.ext.signature == 0x29);
 
@@ -518,7 +517,8 @@ static uintptr_t readByFAT(const FAT32DiskPartition *dp, void *buffer, uint32_t 
 		if(/*fileIndex < readFileEnd &&*/fileIndex + clusterSize > readOffset){
 			// read next cluster to buffer1
 			uintptr_t readDiskSize = clusterSize;
-			uintptr_t ret = syncSeekReadFile(dp->diskFileHandle, clusterBuffer, clusterToLBA(dp, cluster), &readDiskSize);
+			uintptr_t ret = syncSeekReadFile(dp->diskFileHandle, clusterBuffer,
+				dp->sectorSize * clusterToLBA(dp, cluster), &readDiskSize);
 			if(readDiskSize != clusterSize || ret == IO_REQUEST_FAILURE)
 				break;
 			// copy clusterBuffer to buffer
