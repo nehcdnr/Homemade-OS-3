@@ -170,6 +170,9 @@ static const char *nextArgument(const char **cmdLine, uintptr_t *length){
 	uintptr_t i = indexOfNot(*cmdLine, 0, *length, ' ');
 	(*cmdLine) += i;
 	(*length) -= i;
+	if(*length == 0){
+		return NULL;
+	}
 	i = indexOf(*cmdLine, 0, *length, ' ');
 	const char *prevCmdLine = *cmdLine;
 	(*cmdLine) += i;
@@ -180,7 +183,8 @@ static const char *nextArgument(const char **cmdLine, uintptr_t *length){
 static uintptr_t nextHexadecimal(const char **cmdLine, uintptr_t *length){
 	const char *arg;
 	arg = nextArgument(cmdLine, length);
-	if(*cmdLine == NULL){
+	if(arg == NULL){
+		*cmdLine = NULL;
 		return 0;
 	}
 	uintptr_t v;
@@ -194,7 +198,7 @@ static uintptr_t nextHexadecimal(const char **cmdLine, uintptr_t *length){
 static uintptr_t _openCommand(const char *cmdLine, uintptr_t length, OpenFileMode mode){
 	const char *arg;
 	arg = nextArgument(&cmdLine, &length);
-	if(cmdLine == NULL)
+	if(arg == NULL)
 		return UINTPTR_NULL;
 	printString(arg, cmdLine - arg);
 	printk("\n");
@@ -241,6 +245,39 @@ static uintptr_t closeCommand(const char *cmdLine, uintptr_t length){
 	return syncCloseFile(handle);
 }
 
+static uintptr_t dirCommand(const char *cmdLine, uintptr_t length){
+	const char *arg = nextArgument(&cmdLine, &length);
+	if(arg == NULL){
+		printk("missing file name\n");
+		return 0;
+	}
+	uintptr_t r, fileHandle = syncEnumerateFileN(arg, cmdLine - arg);
+	if(fileHandle == IO_REQUEST_FAILURE){
+		printk("open file error\n");
+		return 0;
+	}
+	while(1){
+		FileEnumeration fe;
+		uintptr_t readSize = sizeof(fe);
+		r = syncReadFile(fileHandle, &fe, &readSize);
+		if(r == IO_REQUEST_FAILURE){
+			printk("read file error\n");
+			break;
+		}
+		if(readSize == 0)
+			break;
+		for(r = 0; r < fe.nameLength; r++){
+			printk("%c", fe.name[r]);
+		}
+		printk("\n");
+	}
+	r = syncCloseFile(fileHandle);
+	if(r == IO_REQUEST_FAILURE){
+		printk("close file error\n");
+	}
+	return fileHandle;
+}
+
 static void parseCommand(const char *cmdLine, uintptr_t length){
 	const struct{
 		const char *string;
@@ -249,11 +286,12 @@ static void parseCommand(const char *cmdLine, uintptr_t length){
 		{"open", openCommand},
 		{"enum", enumCommand},
 		{"read", readCommand},
-		{"close", closeCommand}
+		{"close", closeCommand},
+		{"dir", dirCommand}
 	};
 
 	const char *arg = nextArgument(&cmdLine, &length);
-	if(cmdLine == NULL)
+	if(arg == NULL)
 		return;
 	uintptr_t argLen = (cmdLine - arg);
 

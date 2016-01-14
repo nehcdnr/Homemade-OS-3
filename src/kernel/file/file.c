@@ -774,10 +774,14 @@ uintptr_t syncOpenFile(const char *fileName){
 	return syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_0);
 }
 
-uintptr_t syncEnumerateFile(const char * fileName){
+uintptr_t syncEnumerateFileN(const char *fileName, uintptr_t nameLength){
 	OpenFileMode m = OPEN_FILE_MODE_0;
 	m.enumeration = 1;
-	return syncOpenFileN(fileName, strlen(fileName), m);
+	return syncOpenFileN(fileName, nameLength, m);
+}
+
+uintptr_t syncEnumerateFile(const char *fileName){
+	return syncEnumerateFileN(fileName, strlen(fileName));
 }
 
 uintptr_t systemCall_closeFile(uintptr_t handle){

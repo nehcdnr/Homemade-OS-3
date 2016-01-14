@@ -51,6 +51,7 @@ typedef union{
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFile(const char *fileName);
+uintptr_t syncEnumerateFileN(const char *fileName, uintptr_t nameLength);
 uintptr_t syncEnumerateFile(const char * fileName);
 uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
