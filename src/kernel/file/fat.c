@@ -473,9 +473,8 @@ static int openFAT(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLen
 // readFAT
 
 typedef struct{
+	void *buffer;
 	uintptr_t inputRWSize;
-	uintptr_t bufferOffset;
-	PhysicalAddressArray *pa;
 	OpenedFATFile *file;
 	RWFileRequest *rwfr;
 }RWFATRequest;
@@ -488,16 +487,13 @@ static int readFAT(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr
 	rwfr2->rwfr = rwfr;
 	rwfr2->file = getFileInstance(of);
 	rwfr2->inputRWSize = readSize;
-	rwfr2->pa = reserveBufferPages(buffer, readSize, &rwfr2->bufferOffset);
-	EXPECT(rwfr2->pa != NULL);
+	rwfr2->buffer = buffer;
 	Task *t = createSharedMemoryTask(rwFATTask, &rwfr2, sizeof(rwfr2), fat32List.mainTask);
 	EXPECT(t != NULL);
 	pendRWFileIO(rwfr);
 	resume(t);
 	return 1;
 	// delete task
-	ON_ERROR;
-	deletePhysicalAddressArray(rwfr2->pa);
 	ON_ERROR;
 	DELETE(rwfr2);
 	ON_ERROR;
@@ -540,19 +536,16 @@ static uintptr_t readByFAT(const FAT32DiskPartition *dp, void *buffer, uint32_t 
 }
 
 static void rwFATTask(void *rwfrPtr){
-	LinearMemoryManager *lm = getTaskLinearMemory(processorLocalTask());
 	RWFATRequest *rwfr = *(RWFATRequest**)rwfrPtr;
 	OpenedFATFile *f = rwfr->file;
-	void *bufferPage = mapReservedPages(lm, rwfr->pa, USER_WRITABLE_PAGE);
-	EXPECT(bufferPage != NULL);
-	void *buffer = (void*)(((uintptr_t)bufferPage) + rwfr->bufferOffset);
 	acquireReaderLock(f->shared->rwLock);
 	uintptr_t outputRWSize = 0;
 	// IMPROVE: f->offset is not locked
 	if(f->mode.enumeration){
 		outputRWSize = 0;
 		if(rwfr->inputRWSize >= sizeof(FileEnumeration)){
-			FileEnumeration *fileEnum = buffer;
+			// rwfr->buffer is in kernel space
+			FileEnumeration *fileEnum = rwfr->buffer;
 			while(1){
 				FATDirEntry dir;
 				uintptr_t readDirSize = readByFAT(f->shared->diskPartition,
@@ -574,21 +567,12 @@ static void rwFATTask(void *rwfrPtr){
 	else{
 		uint32_t readFileSize = MIN(rwfr->inputRWSize, f->dirEntry.fileSize - f->offset);
 		outputRWSize = readByFAT(f->shared->diskPartition,
-			buffer, f->shared->beginCluster, f->offset, readFileSize);
+			rwfr->buffer, f->shared->beginCluster, f->offset, readFileSize);
 		f->offset += outputRWSize;
 	}
 	releaseReaderWriterLock(f->shared->rwLock);
 
-	unmapPages(lm, bufferPage);
 	completeRWFileIO(rwfr->rwfr, outputRWSize);
-	deletePhysicalAddressArray(rwfr->pa);
-	DELETE(rwfr);
-	systemCall_terminate();
-
-	//unmapPages(lm, bufferPage2);
-	ON_ERROR;
-	completeRWFileIO(rwfr->rwfr, 0);
-	deletePhysicalAddressArray(rwfr->pa);
 	DELETE(rwfr);
 	systemCall_terminate();
 }

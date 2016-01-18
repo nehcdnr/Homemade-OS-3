@@ -318,6 +318,38 @@ void *getFileInstance(OpenedFile *of){
 	return of->instance;
 }
 
+// buffer memory
+
+static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
+	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
+	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
+	*pageOffset = bufferBegin - (*pageBegin);
+	*pageSize = CEIL(bufferBegin + bufferSize, PAGE_SIZE) - (*pageBegin);
+}
+
+// call unmapPages(kernelLinear, mappedPage) to release
+static int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer){
+	uintptr_t pageOffset, pageBegin;
+	size_t pageSize;
+	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
+	*mappedPage = checkAndMapExistingPages(
+		kernelLinear, getTaskLinearMemory(processorLocalTask()),
+		pageBegin, pageSize, KERNEL_PAGE, 0);
+	if(*mappedPage == NULL){
+		return 0;
+	}
+	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
+	return 1;
+}
+
+/*
+static PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uintptr_t *bufferOffset){
+	uintptr_t pageBegin, pageSize;
+	bufferToPageRange((uintptr_t)buffer, bufferSize, &pageBegin, bufferOffset, &pageSize);
+	return checkAndReservePages(getTaskLinearMemory(processorLocalTask()), (void*)pageBegin, pageSize);
+}
+*/
+
 // FileIORequest
 
 struct FileIORequest{
@@ -869,34 +901,6 @@ void initFileEnumeration(FileEnumeration *fileEnum, const char *name){
 	fileEnum->nameLength = strlen(name);
 	strncpy(fileEnum->name, name, fileEnum->nameLength);
 }
-
-static void bufferToPageRange(uintptr_t bufferBegin, size_t bufferSize,
-	uintptr_t *pageBegin, uintptr_t *pageOffset, size_t *pageSize){
-	*pageBegin = FLOOR(bufferBegin, PAGE_SIZE);
-	*pageOffset = bufferBegin - (*pageBegin);
-	*pageSize = CEIL(bufferBegin + bufferSize, PAGE_SIZE) - (*pageBegin);
-}
-
-int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer){
-	uintptr_t pageOffset, pageBegin;
-	size_t pageSize;
-	bufferToPageRange((uintptr_t)buffer, size, &pageBegin, &pageOffset, &pageSize);
-	*mappedPage = checkAndMapExistingPages(
-		kernelLinear, getTaskLinearMemory(processorLocalTask()),
-		pageBegin, pageSize, KERNEL_PAGE, 0);
-	if(*mappedPage == NULL){
-		return 0;
-	}
-	*mappedBuffer = (void*)(pageOffset + ((uintptr_t)*mappedPage));
-	return 1;
-}
-
-PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uintptr_t *bufferOffset){
-	uintptr_t pageBegin, pageSize;
-	bufferToPageRange((uintptr_t)buffer, bufferSize, &pageBegin, bufferOffset, &pageSize);
-	return checkAndReservePages(getTaskLinearMemory(processorLocalTask()), (void*)pageBegin, pageSize);
-}
-
 
 static void FileNameCommandHandler(InterruptParam *p){
 	sti();

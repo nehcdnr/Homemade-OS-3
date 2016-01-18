@@ -78,11 +78,6 @@ typedef struct FileEnumeration{
 
 void initFileEnumeration(FileEnumeration *fileEnum, const char *name);
 
-//TODO: change to static functions
-// call unmapPages(kernelLinear, mappedPage) to release
-int mapBufferToKernel(const void *buffer, uintptr_t size, void **mappedPage, void **mappedBuffer);
-PhysicalAddressArray *reserveBufferPages(void *buffer, uintptr_t bufferSize, uintptr_t *bufferOffset);
-
 typedef struct SystemCallTable SystemCallTable;
 void initFile(SystemCallTable *s);
 

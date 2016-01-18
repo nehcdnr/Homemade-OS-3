@@ -14,31 +14,20 @@ typedef struct{
 }OpenedBLOBFile;
 
 static int readKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
-	void *mappedPage;
-	void *mappedBuffer;
-	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
-
 	OpenedBLOBFile *f = getFileInstance(of);
 
 	pendRWFileIO(fior1);
 	uintptr_t copySize = MIN(bufferSize, f->blob->end - f->blob->begin - f->offset);
 	memcpy(buffer, (void*)(f->blob->begin + f->offset), copySize);
 
-	unmapPages(kernelLinear, mappedPage);
 	f->offset += copySize;
 	completeRWFileIO(fior1, copySize);
 	return 1;
-	//unmapPages(kernelLinear, mappedPage);
-	ON_ERROR;
-	return 0;
 }
 
 static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
 	if(bufferSize < sizeof(FileEnumeration))
 		return IO_REQUEST_FAILURE;
-	void *mappedPage;
-	void *mappedBuffer;
-	EXPECT(mapBufferToKernel(buffer, bufferSize, &mappedPage, &mappedBuffer));
 
 	OpenedBLOBFile *f = getFileInstance(of);;
 
@@ -48,19 +37,14 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	uintptr_t readSize;
 	if(f->blob->end > (uintptr_t)entry){
 		readSize = sizeof(FileEnumeration);
-		initFileEnumeration(mappedBuffer, entry->name);
+		initFileEnumeration((FileEnumeration*)buffer, entry->name);
 	}
 	else{
 		readSize = 0;
 	}
-	unmapPages(kernelLinear, mappedPage);
 	f->offset += sizeof(*entry);
 	completeRWFileIO(fior1, readSize);
 	return 1;
-	//unmapPages(kernelLinear, mappedPage);
-	ON_ERROR;
-	return 0;
-
 }
 
 static int seekKFS(FileIORequest0 *fior0, OpenedFile *of, uint64_t position){
