@@ -11,7 +11,7 @@
 
 typedef struct TimerEvent{
 	IORequest ior;
-	uint64_t countDownTicks;
+	uint64_t countdownTicks;
 	// period = 0 for one-shot timer
 	uint64_t tickPeriod;
 	volatile int isSentToTask;
@@ -21,6 +21,7 @@ typedef struct TimerEvent{
 
 struct TimerEventList{
 	Spinlock lock;
+	uint64_t currentTick;
 	TimerEvent *head;
 };
 
@@ -55,7 +56,7 @@ static TimerEvent *createTimerEvent(uint64_t periodTicks){
 		return NULL;
 	}
 	initIORequest(&te->ior, te, cancelTimerEvent, acceptTimerEvent);
-	te->countDownTicks = 0;
+	te->countdownTicks = 0;
 	te->tickPeriod = periodTicks;
 	te->isSentToTask = 0;
 	te->lock = NULL;
@@ -64,22 +65,38 @@ static TimerEvent *createTimerEvent(uint64_t periodTicks){
 	return te;
 }
 
-static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *te){
-	te->countDownTicks = waitTicks;
+#define COUNTDOWN_TICK_MODULAR (((uint64_t)1) << 50)
+
+static void addTimerEvent_noLock(TimerEventList* tel, uint64_t waitTicks, TimerEvent *te){
+	TimerEvent **i;
+	for(i = &tel->head; *i != NULL; i = &(*i)->next){
+		uint64_t waitTicks2 = ((*i)->countdownTicks + COUNTDOWN_TICK_MODULAR - tel->currentTick) % COUNTDOWN_TICK_MODULAR;
+		if(waitTicks <= waitTicks2){
+			break;
+		}
+	}
+	te->countdownTicks = (tel->currentTick + waitTicks) % COUNTDOWN_TICK_MODULAR;
 	te->isSentToTask = 0;
 	te->lock = &(tel->lock);
+	ADD_TO_DQUEUE(te, i);
+}
+
+static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *te){
 	acquireLock(&tel->lock);
-	ADD_TO_DQUEUE(te, &(tel->head));
+	addTimerEvent_noLock(tel, waitTicks, te);
 	releaseLock(&tel->lock);
 }
 
 static void setAlarmHandler(InterruptParam *p){
 	uint64_t millisecond = COMBINE64(SYSTEM_CALL_ARGUMENT_0(p), SYSTEM_CALL_ARGUMENT_1(p));
 	uintptr_t isPeriodic = SYSTEM_CALL_ARGUMENT_2(p);
-	EXPECT(millisecond <= 1000000000 * (uint64_t)1000);
+	// not check overflow
 	uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;
-	if(tick == 0)
-		tick = 1;
+
+	EXPECT(tick < COUNTDOWN_TICK_MODULAR);
+	if(tick == 0){
+		tick++;
+	}
 	TimerEvent *te = createTimerEvent((isPeriodic? tick: 0));
 	EXPECT(te != NULL);
 	IORequest *ior = &te->ior;
@@ -108,20 +125,17 @@ int sleep(uint64_t millisecond){
 }
 
 static void handleTimerEvents(TimerEventList *tel){
-	TimerEvent *periodicList = NULL;
 	acquireLock(&tel->lock);
 	TimerEvent **prev = &(tel->head);
-	while(*prev != NULL){
+	while(1){
 		TimerEvent *curr = *prev;
-		if(curr->countDownTicks > 0){
-			curr->countDownTicks--;
-			prev = &(curr->next);
-			continue;
-		}
+		if(curr == NULL)
+			break;
+		if(curr->countdownTicks != tel->currentTick)
+			break;
 		REMOVE_FROM_DQUEUE(curr);
 		if(curr->isSentToTask == 0){
 			curr->isSentToTask = 1;
-			curr->countDownTicks = curr->tickPeriod;
 			completeIO(&curr->ior);
 		}
 #ifndef NDEBUG
@@ -131,15 +145,11 @@ static void handleTimerEvents(TimerEventList *tel){
 		}
 #endif
 		if(curr->tickPeriod > 0){
-			ADD_TO_DQUEUE(curr, &periodicList);
+			// IMPROVE: addTimerEventList()
+			addTimerEvent_noLock(tel, curr->tickPeriod, curr);
 		}
 	}
-	// append periodicList to *prev
-	*prev = periodicList;
-	if(periodicList != NULL){
-		periodicList->prev = prev;
-		//periodicList = NULL;
-	}
+	tel->currentTick = (tel->currentTick + 1) % COUNTDOWN_TICK_MODULAR;
 	releaseLock(&tel->lock);
 }
 
@@ -154,6 +164,7 @@ static void timerHandler(InterruptParam *p){
 TimerEventList *createTimer(){
 	TimerEventList *NEW(tel);
 	tel->lock = initialSpinlock;
+	tel->currentTick = 0;
 	tel->head = NULL;
 	return tel;
 }
