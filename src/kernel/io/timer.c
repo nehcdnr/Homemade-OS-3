@@ -153,12 +153,17 @@ static void handleTimerEvents(TimerEventList *tel){
 	releaseLock(&tel->lock);
 }
 
+static int chainedTimerHandler(const InterruptParam *p){
+	handleTimerEvents((TimerEventList*)p->argument);
+	schedule();
+	return 1;
+}
+
 static void timerHandler(InterruptParam *p){
 	// kprintf("interrupt #%d (timer), arg = %x\n", toChar(p.vector), p.argument);
 	processorLocalPIC()->endOfInterrupt(p);
-	handleTimerEvents((TimerEventList*)p->argument);
-	schedule();
-	sti();
+	chainedTimerHandler(p);
+	//sti()
 }
 
 TimerEventList *createTimer(){
@@ -171,6 +176,10 @@ TimerEventList *createTimer(){
 
 void setTimerHandler(TimerEventList *tel, InterruptVector *v){
 	setHandler(v, timerHandler, (uintptr_t)tel);
+}
+
+int addTimerHandler(TimerEventList *tel, InterruptVector *v){
+	return addHandler(v, chainedTimerHandler, (uintptr_t)tel);
 }
 
 void initTimer(SystemCallTable *systemCallTable){

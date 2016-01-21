@@ -8,6 +8,7 @@
 #include"memory/memory.h"
 #include"task/task.h"
 #include"systemcall.h"
+#include"multiprocessor/spinlock.h"
 
 static_assert((SPURIOUS_INTERRUPT & 0xf) == 0xf);
 
@@ -24,11 +25,20 @@ typedef struct{
 }InterruptDescriptor;
 static_assert(sizeof(InterruptDescriptor) == 8);
 
+typedef struct InterruptHandlerChain{
+	ChainedInterruptHandler handler;
+	uintptr_t arg;
+	struct InterruptHandlerChain **prev, *next;
+}InterruptHandlerChain;
+
 #define INVALID_IRQ (-1)
 struct InterruptVector{
 	uint8_t charValue;
 	int irq;
 	InterruptTable *table;
+	// if irq != INVALID_IRQ
+	InterruptHandlerChain *handlerChain;
+	Spinlock lock;
 };
 
 // handler.asm
@@ -72,24 +82,54 @@ void defaultInterruptHandler(InterruptParam *p){
 	terminateCurrentTask();
 }
 
+// see interruptentry.asm
+static void chainedInterruptHandler(InterruptParam *p){
+	assert(p->argument = 0xffffffff);
+	InterruptVector *v = p->vector;
+	struct InterruptHandlerChain *c;
+	acquireLock(&v->lock);
+	int noHandler = (v->handlerChain == NULL);
+	int handledCount = 0;
+	for(c = v->handlerChain; c != NULL; c=c->next){
+		p->argument = c->arg;
+		if(c->handler(p)){
+			handledCount++;
+		}
+		assert(getEFlags().bit.interrupt == 0);
+	}
+	releaseLock(&v->lock);
+	if(noHandler){
+		defaultInterruptHandler(p);
+	}
+	if(handledCount > 0){
+		processorLocalPIC()->endOfInterrupt(p);
+	}
+	else{
+		printk("unhandled interrupt: %d (irq %d)\n", toChar(v), getIRQ(v));
+	}
+	// not call sti() to avoid stack underflow
+}
+
+static InterruptHandlerChain *createIntHandlerChain(ChainedInterruptHandler handler, uintptr_t arg){
+	InterruptHandlerChain *NEW(c);
+	if(c == NULL){
+		return NULL;
+	}
+	c->handler = handler;
+	c->arg = arg;
+	c->prev = NULL;
+	c->next = NULL;
+	return c;
+}
+
 // miss a timer interrupt if 8259 irq 0 is not mapped to vector 32
 InterruptVector *registerGeneralInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg){
 	assert(t->usedCount < t->length && t->usedCount < END_GENERAL_VECTOR);
 	t->asmIntEntry[t->usedCount].handler = handler;
-	t->asmIntEntry[SPURIOUS_INTERRUPT].arg = arg;
+	t->asmIntEntry[t->usedCount].arg = arg;
 	t->vector[t->usedCount].irq = INVALID_IRQ;
 	t->usedCount++;
 	return t->vector + t->usedCount - 1;
-}
-
-InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
-	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount < END_GENERAL_VECTOR);
-	int i;
-	for(i = 0; i < irqCount; i++){
-		t->vector[t->usedCount + i].irq = irqBegin + i;
-	}
-	t->usedCount += irqCount;
-	return t->vector + t->usedCount - irqCount;
 }
 
 InterruptVector *registerInterrupt(
@@ -105,8 +145,54 @@ InterruptVector *registerInterrupt(
 	return t->vector + i;
 }
 
+InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
+	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount < END_GENERAL_VECTOR);
+	int i;
+	for(i = 0; i < irqCount; i++){
+		t->asmIntEntry[t->usedCount + i].handler = chainedInterruptHandler;
+		t->asmIntEntry[t->usedCount + i].arg = 0xffffffff;
+		t->vector[t->usedCount + i].irq = irqBegin + i;
+		t->vector[t->usedCount + i].handlerChain = NULL;
+		t->vector[t->usedCount + i].lock = initialSpinlock;
+	}
+	t->usedCount += irqCount;
+	return t->vector + t->usedCount - irqCount;
+}
+
+int addHandler(InterruptVector *vector, ChainedInterruptHandler handler, uintptr_t arg){
+	assert(vector->irq != INVALID_IRQ);
+	InterruptHandlerChain *c = createIntHandlerChain(handler, arg);
+	if(c == NULL){
+		return 0;
+	}
+	acquireLock(&vector->lock);
+	ADD_TO_DQUEUE(c, &vector->handlerChain);
+	releaseLock(&vector->lock);
+	return 1;
+}
+
+int removeHandler(InterruptVector *vector, ChainedInterruptHandler handler, uintptr_t arg){
+	assert(vector->irq != INVALID_IRQ);
+	InterruptHandlerChain *c;
+	acquireLock(&vector->lock);
+	// assume handler and arg are legal
+	for(c = vector->handlerChain; c != NULL; c = c->next){
+		if(c->handler == handler || c->arg == arg){
+			REMOVE_FROM_DQUEUE(c);
+			break;
+		}
+	}
+	releaseLock(&vector->lock);
+	if(c == NULL){
+		return 0;
+	}
+	DELETE(c);
+	return 1;
+}
+
 void replaceHandler(InterruptVector *vector, InterruptHandler *handler, uintptr_t *arg){
 	InterruptTable *t = vector->table;
+	assert(vector->irq == INVALID_IRQ);
 	const int i = toChar(vector);
 	// printf("map IRQ %d to vector %d\n", irq, toChar(vectorBase) + irq);
 	InterruptHandler oldHandler = t->asmIntEntry[i].handler;

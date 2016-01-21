@@ -61,7 +61,10 @@ TimerEventList *createTimer(void);
 uintptr_t systemCall_setAlarm(uint64_t millisecond, int isPeriodic);
 int sleep(uint64_t millisecond);
 
+// for LAPIC timer
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);
+// for IRQ timer
+int addTimerHandler(TimerEventList *tel, InterruptVector *v);
 typedef struct SystemCallTable SystemCallTable;
 void initTimer(SystemCallTable *systemCallTable);
 
@@ -158,5 +161,8 @@ void ahciDriver(void);
 // return 0 if fail
 // return 1 if the io request is issued
 uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite);
+
+// intel8254x.c
+void i8254xDriver(void);
 
 #endif

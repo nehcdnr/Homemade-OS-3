@@ -118,7 +118,7 @@ typedef struct{
 	uint8_t data;
 }PS2Data;
 
-static void ps2Handler(InterruptParam *p){
+static int ps2Handler(const InterruptParam *p){
 	PS2Data d;
 	d.status = in8(PS2_CMD_PORT);
 	if(d.status & READABLE_FLAG){
@@ -126,8 +126,7 @@ static void ps2Handler(InterruptParam *p){
 		PS2FIFO *ps2 = (PS2FIFO*)(p->argument);
 		writeFIFO(ps2->intFIFO, &d);
 	}
-	processorLocalPIC()->endOfInterrupt(p);
-	sti();
+	return 1;
 }
 static void mouseInput(uint8_t newData, FIFO *mouseFIFO){
 	static int state = 0;
@@ -280,9 +279,8 @@ static void initPS2Driver(PIC* pic){
 	ps2.kbFIFO = createFIFO(256, sizeof(KeyboardEvent));
 	ps2.mouseFIFO = createFIFO(512, sizeof(MouseEvent));
 	//ps2.sysFIFO = createFIFO(128, sizeof(MouseEvent));
-
-	setHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
-	setHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
+	addHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
+	addHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
 	pic->setPICMask(pic, MOUSE_IRQ, 0);
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;

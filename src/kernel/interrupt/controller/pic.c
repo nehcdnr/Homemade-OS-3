@@ -101,7 +101,9 @@ PIC *createPIC(InterruptTable *t){
 void initLocalTimer(PIC *pic, InterruptTable *t, TimerEventList *timer){
 	if(isAPICSupported() == 0){
 		setTimer8254Frequency(TIMER_FREQUENCY);
-		setTimerHandler(timer, pic->irqToVector(pic, TIMER_IRQ));
+		if(addTimerHandler(timer, pic->irqToVector(pic, TIMER_IRQ)) == 0){
+			panic("cannot initialize timer interrupt handler");
+		}
 		pic->setPICMask(pic, TIMER_IRQ, 0);
 		return;
 	}

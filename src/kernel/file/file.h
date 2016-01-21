@@ -83,8 +83,8 @@ void initFile(SystemCallTable *s);
 
 // file IO common structure
 
-typedef void CancelFileIO(void *instance);
-typedef void AcceptFileIO(void *instance);
+typedef void CancelFileIO(void *arg);
+typedef void AcceptFileIO(void *arg);
 
 CancelFileIO notSupportCancelFileIO;
 AcceptFileIO defaultAcceptFileIO;
@@ -98,25 +98,13 @@ typedef struct CloseFileRequest CloseFileRequest;
 typedef struct OpenedFile OpenedFile;
 typedef struct FileFunctions FileFunctions;
 
-#define INIT(FUNC, TYPE)\
-void FUNC(\
-	TYPE *r, void *instance,\
-	OpenedFile *of, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO\
-)
-/*
-INIT(initOpenFileIO, OpenFileRequest);
-INIT(initFileIO0, FileIORequest0);
-INIT(initRWFileIO, RWFileRequest);
-INIT(initFileIO2, FileIORequest2);
-void initCloseFileIO(CloseFileRequest *of, void *instance, OpenedFile *file, AcceptFileIO *acceptFileIO);
-*/
 void pendOpenFileIO(OpenFileRequest *r);
 void pendFileIO0(FileIORequest0 *r);
 void pendRWFileIO(RWFileRequest *r);
 void pendFileIO2(FileIORequest2 *r);
 void pendCloseFileIO(CloseFileRequest *r);
 
-void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO);
+void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO);
 
 void completeFileIO0(FileIORequest0 *r0);
 void completeRWFileIO(RWFileRequest *r1, uintptr_t v0);
@@ -125,8 +113,6 @@ void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
 void failOpenFile(OpenFileRequest *r1);
 void completeOpenFile(OpenFileRequest *r1, void *instance, const FileFunctions *ff);
 void completeCloseFile(CloseFileRequest* r0);
-
-#undef INIT
 
 typedef struct{
 	int (*open)(OpenFileRequest *ofr, const char *name, uintptr_t nameLength, OpenFileMode openMode);

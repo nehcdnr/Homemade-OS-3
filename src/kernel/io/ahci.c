@@ -1,4 +1,3 @@
-
 #include"common.h"
 #include"io.h"
 #include"memory/memory.h"
@@ -7,6 +6,7 @@
 #include"file/file.h"
 #include"interrupt/controller/pic.h"
 #include"task/task.h"
+#include"task/exclusivelock.h"
 #include"multiprocessor/spinlock.h"
 
 typedef struct{
@@ -645,6 +645,39 @@ typedef struct AHCIManager{
 // must be in kernel space
 static AHCIManager ahciManager = {INITIAL_SPINLOCK, NULL, 0};
 
+struct DiskRequestList{
+	Spinlock lock;
+	Semaphore *semaphore;
+	DiskRequest *head;
+}finishInterrupt;
+
+static int initDiskRequestList(struct DiskRequestList *drList){
+	drList->lock = initialSpinlock;
+	drList->semaphore = createSemaphore();
+	if(drList->semaphore == NULL)
+		return 0;
+	drList->head = NULL;
+	return 1;
+}
+
+static void addToDiskRequestList(struct DiskRequestList *drList, DiskRequest *dr){
+	acquireLock(&drList->lock);
+	ADD_TO_DQUEUE(dr, &drList->head);
+	releaseLock(&drList->lock);
+	releaseSemaphore(drList->semaphore);
+}
+
+static DiskRequest *removeFromDiskRequestList(struct DiskRequestList *drList){
+	acquireSemaphore(drList->semaphore);
+	acquireLock(&drList->lock);
+	DiskRequest *dr = drList->head;
+	if(dr != NULL){
+		REMOVE_FROM_DQUEUE(dr);
+	}
+	releaseLock(&drList->lock);
+	return dr;
+}
+
 // return 0 if failed to issue command
 // return 1 if command was issued or pended
 static int servePortQueue(AHCIInterruptArgument *a, int portIndex){
@@ -679,12 +712,12 @@ static DiskRequest *removeFromPortQueue(AHCIInterruptArgument *a, int portIndex)
 
 // interrupt & system call
 
-static void AHCIHandler(InterruptParam *param){
+static int AHCIHandler(const InterruptParam *param){
 	AHCIInterruptArgument *arg = (AHCIInterruptArgument*)param->argument;
-	DiskRequest *completedRW = NULL;
 	uint32_t hostStatus = arg->hbaRegisters->interruptStatus;
 	// software writes 1 to indicate the interrupt has been handled
 	arg->hbaRegisters->interruptStatus = hostStatus;
+	int handled = 0;
 	int p;
 	for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
 		if((hostStatus & (1 << p)) == 0)
@@ -694,37 +727,22 @@ static void AHCIHandler(InterruptParam *param){
 			continue;
 		arg->hbaRegisters->port[p].interruptStatus = portStatus;
 
+		handled = 1;
 		acquireLock(&arg->lock);
 		DiskRequest *dr = removeFromPortQueue(arg, p);
 		if(servePortQueue(arg, p) == 0){
 			panic("servePortQueue == 0"); // TODO: how to handle?
 		}
 		releaseLock(&arg->lock);
-		if(dr == NULL)
+		if(dr == NULL){
 			printk("warning: AHCI driver received unexpected interrupt\n");
-		else{
-			// cannot completeRWFileIO() before sti(), so put requests into the queue
-			ADD_TO_DQUEUE(dr, &completedRW);
+			continue;
 		}
+		// see completeDiskRequestTask
+		addToDiskRequestList(&finishInterrupt, dr);
 	}
-	processorLocalPIC()->endOfInterrupt(param);
-	sti();
-	while(completedRW != NULL){
-		DiskRequest *dr = completedRW;
-		REMOVE_FROM_DQUEUE(dr);
-		if(hasSeparateSectorBuffer(dr)){
-			memcpy(dr->inputBuffer, diskLinearBuffer(dr), dr->inputSize);
-		}
-		if(dr->command == IDENTIFY_DEVICE){
-			assert(dr->rwfr == NULL && dr->ior != NULL);
-			completeIO(dr->ior);
-		}
-		else{
-			assert(dr->rwfr != NULL && dr->ior == NULL);
-			completeRWFileIO(dr->rwfr, dr->inputSize);
-			deleteDiskRequest(dr);
-		}
-	}
+	//processorLocalPIC()->endOfInterrupt(param);
+	return handled;
 	// printk("end of AHCI interrupt\n");
 }
 
@@ -857,7 +875,7 @@ static AHCIInterruptArgument *initAHCI(AHCIManager *am, const PCIConfigRegisters
 	releaseLock(&am->lock);
 
 	InterruptVector *v = pic->irqToVector(pic, regs->interruptLine);
-	setHandler(v, AHCIHandler, (uintptr_t)arg);
+	addHandler(v, AHCIHandler, (uintptr_t)arg);
 	pic->setPICMask(pic, regs->interruptLine, 0);
 	return arg;
 }
@@ -932,6 +950,29 @@ static IORequest *seekWriteAHCI(OpenFileRequest *ofr, const uint8_t *buffer, uin
 }
 */
 
+static void completeDiskRequest(DiskRequest *dr){
+	if(hasSeparateSectorBuffer(dr)){
+		memcpy(dr->inputBuffer, diskLinearBuffer(dr), dr->inputSize);
+	}
+	if(dr->command == IDENTIFY_DEVICE){
+		assert(dr->rwfr == NULL && dr->ior != NULL);
+		completeIO(dr->ior);
+	}
+	else{
+		assert(dr->rwfr != NULL && dr->ior == NULL);
+		completeRWFileIO(dr->rwfr, dr->inputSize);
+		deleteDiskRequest(dr);
+	}
+}
+
+static void completeDiskRequestTask(__attribute__((__unused__)) void *arg){
+	while(1){
+		DiskRequest *dr = removeFromDiskRequestList(&finishInterrupt);
+		assert(dr != NULL);
+		completeDiskRequest(dr);
+	}
+}
+
 void ahciDriver(void){
 	const char *driverName = "ahci";
 	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
@@ -939,7 +980,17 @@ void ahciDriver(void){
 	assert(enumPCI != IO_REQUEST_FAILURE);
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openAHCI;
-	addFileSystem(&ff, driverName, strlen(driverName));
+	if(initDiskRequestList(&finishInterrupt) == 0){
+		systemCall_terminate();
+	}
+	if(addFileSystem(&ff, driverName, strlen(driverName)) == 0){
+		systemCall_terminate();
+	}
+	Task * task2 = createSharedMemoryTask(completeDiskRequestTask, NULL , 0, processorLocalTask());
+	if(task2 == NULL){
+		systemCall_terminate();
+	}
+	resume(task2);
 	while(1){
 		PCIConfigRegisters pciConfig;
 		PCIConfigRegisters0 *regs0 = &pciConfig.regs0;
@@ -972,7 +1023,7 @@ void ahciDriver(void){
 	}
 	syncCloseFile(enumPCI);
 	while(1){
-		sleep(1000);
+		sleep(10000);
 	}
 }
 

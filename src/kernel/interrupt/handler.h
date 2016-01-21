@@ -36,6 +36,7 @@ typedef struct InterruptParam{
 void defaultInterruptHandler(InterruptParam *param);
 
 typedef void (*InterruptHandler)(InterruptParam *param);
+typedef int (*ChainedInterruptHandler)(const InterruptParam *param);
 typedef struct InterruptTable InterruptTable;
 
 // vector
@@ -72,14 +73,18 @@ enum ReservedInterruptVector{
 #define SYSTEM_CALL_VECTOR_STRING "126"
 
 InterruptVector *registerGeneralInterrupt(InterruptTable *t, InterruptHandler handler, uintptr_t arg);
-InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount);
 InterruptVector *registerInterrupt(
 	InterruptTable *t,
 	enum ReservedInterruptVector,
 	InterruptHandler handler,
 	uintptr_t arg
 );
+InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount);
 
+// for IRQ
+int addHandler(InterruptVector *vector, ChainedInterruptHandler handler, uintptr_t arg);
+int removeHandler(InterruptVector *vector, ChainedInterruptHandler handler, uintptr_t arg);
+// for general or reserved
 void replaceHandler(InterruptVector *v, InterruptHandler *handler, uintptr_t *arg);
 void setHandler(InterruptVector *v, InterruptHandler handler, uintptr_t arg);
 

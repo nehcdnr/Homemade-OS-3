@@ -475,6 +475,16 @@ static CloseFileRequest *createCloseFileIO(OpenedFile *file){
 	return cfr;
 }
 
+static void setFileIOFunctions(struct FileIORequest *fior, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO){
+	fior->acceptCancelArg = arg;
+	fior->cancelFileIO = cancelFileIO;
+	fior->acceptFileIO = acceptFileIO;
+}
+
+void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO){
+	setFileIOFunctions(&rwfr->fior, arg, cancelFileIO, acceptFileIO);
+}
+
 void pendOpenFileIO(OpenFileRequest *r){
 	pendIO(&r->ofior.ior);
 }
@@ -493,16 +503,6 @@ void pendFileIO2(FileIORequest2 *r){
 
 void pendCloseFileIO(CloseFileRequest *r){
 	pendIO(&r->cfior.ior);
-}
-
-static void setFileIOFunctions(struct FileIORequest *fior, void *arg, CancelFileIO *cancelFileIO/*, AcceptFileIO *acceptFileIO*/){
-	fior->acceptCancelArg = arg;
-	fior->cancelFileIO = cancelFileIO;
-	/*fior->acceptFileIO = acceptFileIO;*/
-}
-
-void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO/*, AcceptFileIO *acceptFileIO*/){
-	setFileIOFunctions(&rwfr->fior, arg, cancelFileIO);
 }
 
 static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){

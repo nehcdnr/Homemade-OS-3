@@ -72,11 +72,10 @@ static void setAPICError(const uintptr_t base, InterruptVector *v){
 }
 
 static volatile uint32_t sleepTicks;
-static void tempSleepHandler(InterruptParam *p){
+static int tempSleepHandler(__attribute__((__unused__)) const InterruptParam *p){
 	sleepTicks++;
-	// getProcessorLocal->pic->endOfInterrupt(p);
-	apic_endOfInterrupt(p);
-	//sti();
+	// apic_endOfInterrupt(p);
+	return 1;
 }
 
 static void setAPICTimer(const uintptr_t base, InterruptVector *v){
@@ -157,10 +156,12 @@ static uint32_t testLAPICTimerFrequency(const uintptr_t base, const uint32_t tic
 	timer_currentCnt = (MemoryMappedRegister)(base + TIMER_CURRENT_COUNT);
 	uint32_t cnt1, cnt2;
 	InterruptVector *timerVector = pic->irqToVector(pic, TIMER_IRQ);
-	InterruptHandler h = tempSleepHandler;
+	ChainedInterruptHandler h = tempSleepHandler;
 	uintptr_t a = 0;
 	*timer_initialCnt = 0xffffffff;
-	replaceHandler(timerVector, &h, &a);
+	if(addHandler(timerVector, h, a) == 0){
+		panic("cannot initialize LAPIC timer");
+	}
 	pic->setPICMask(pic, TIMER_IRQ, 0);
 	sleepTicks = 0;
 	sti();
@@ -173,9 +174,9 @@ static uint32_t testLAPICTimerFrequency(const uintptr_t base, const uint32_t tic
 		hlt();
 	}
 	cnt2 = *timer_currentCnt;
+	removeHandler(timerVector, h, a);
 	cli(); // end sleeping
 	pic->setPICMask(pic, TIMER_IRQ, 1);
-	replaceHandler(timerVector, &h, &a);
 	return cnt1 - cnt2;
 }
 
