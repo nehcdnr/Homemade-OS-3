@@ -56,7 +56,7 @@ copyapentrycodeloop:
 	mov bx, 0x7c00 + 512 ; es:bx = buffer
 	mov dl, 0 ; drive number
 loadloop:
-	cmp di, 256 ; load 256 sectors = 128kB
+	cmp di, 300 ; load 300 sectors = 150kB
 	jae KERNEL_ENTRY
 	mov al, 1 ; number of sectors to read
 	mov ah, 0x02 ; read disk

@@ -101,12 +101,10 @@ static void chainedInterruptHandler(InterruptParam *p){
 	if(noHandler){
 		defaultInterruptHandler(p);
 	}
-	if(handledCount > 0){
-		processorLocalPIC()->endOfInterrupt(p);
-	}
-	else{
+	if(handledCount == 0){
 		printk("unhandled interrupt: %d (irq %d)\n", toChar(v), getIRQ(v));
 	}
+	processorLocalPIC()->endOfInterrupt(p);
 	// not call sti() to avoid stack underflow
 }
 
@@ -146,7 +144,7 @@ InterruptVector *registerInterrupt(
 }
 
 InterruptVector *registerIRQs(InterruptTable *t, int irqBegin, int irqCount){
-	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount < END_GENERAL_VECTOR);
+	assert(t->usedCount + irqCount  <= t->length && t->usedCount + irqCount <= END_GENERAL_VECTOR);
 	int i;
 	for(i = 0; i < irqCount; i++){
 		t->asmIntEntry[t->usedCount + i].handler = chainedInterruptHandler;
@@ -194,7 +192,7 @@ void replaceHandler(InterruptVector *vector, InterruptHandler *handler, uintptr_
 	InterruptTable *t = vector->table;
 	assert(vector->irq == INVALID_IRQ);
 	const int i = toChar(vector);
-	// printf("map IRQ %d to vector %d\n", irq, toChar(vectorBase) + irq);
+	//printk("map IRQ %d to vector %d\n", vector->irq, toChar(vector));
 	InterruptHandler oldHandler = t->asmIntEntry[i].handler;
 	uintptr_t oldArg = t->asmIntEntry[i].arg;
 	t->asmIntEntry[i].handler = *handler;
@@ -238,6 +236,9 @@ InterruptTable *initInterruptTable(SegmentTable *gdt){
 		t->descriptor = (InterruptDescriptor*)desc;
 	}
 	NEW_ARRAY(t->vector, numberOfIntEntries);
+	if(t->vector == NULL){
+		panic("cannot allocate vector array\n");
+	}
 	t->asmIntEntry = createAsmIntEntries();
 	t->length = numberOfIntEntries;
 	t->usedCount = BEGIN_GENERAL_VECTOR;
@@ -253,7 +254,6 @@ InterruptTable *initInterruptTable(SegmentTable *gdt){
 		t->asmIntEntry[i].arg = 0;
 		InterruptDescriptor *d = t->descriptor + i;
 		uint32_t entryAddress = (uint32_t)(t->asmIntEntry) + t->asmIntEntry[i].entryOffset;
-
 		d->handler_0_16 =  ((entryAddress >> 0) & 0xffff);
 		d->handler_16_32 = ((entryAddress >> 16) & 0xffff);
 		d->segmentSelector = getSegmentSelector(gdt, GDT_KERNEL_CODE_INDEX).value;

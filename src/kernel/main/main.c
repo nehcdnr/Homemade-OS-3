@@ -23,6 +23,7 @@ static void initService(void){
 		ahciDriver,
 		kernelFileService,
 		fatService,
+		i8254xDriver
 		//testMemoryTask,
 		//testKFS,
 		//testFAT,
