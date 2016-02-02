@@ -13,16 +13,37 @@ typedef struct{
 	uintptr_t offset;
 }OpenedBLOBFile;
 
-static int readKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+static uintptr_t computeCopySize(OpenedBLOBFile *f, uint64_t offset64, uintptr_t bufferSize){
+	const uintptr_t fileSize = f->blob->end - f->blob->begin;
+	if(offset64 > fileSize)
+		return 0;
+	return MIN(bufferSize, fileSize - ((uintptr_t)offset64));
+}
+
+static int _seekReadKFS(
+	RWFileRequest *fior1, OpenedFile *of,
+	uint8_t *buffer, uint64_t offset64, uintptr_t bufferSize, int updateOffset
+){
 	OpenedBLOBFile *f = getFileInstance(of);
 
 	pendRWFileIO(fior1);
-	uintptr_t copySize = MIN(bufferSize, f->blob->end - f->blob->begin - f->offset);
-	memcpy(buffer, (void*)(f->blob->begin + f->offset), copySize);
+	uintptr_t copySize = computeCopySize(f, offset64, bufferSize);
+	memcpy(buffer, (void*)(f->blob->begin + ((uintptr_t)offset64)), copySize);
 
-	f->offset += copySize;
+	if(updateOffset){
+		f->offset += copySize;
+	}
 	completeRWFileIO(fior1, copySize);
 	return 1;
+}
+
+static int seekReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uint64_t offset64, uintptr_t bufferSize){
+	return _seekReadKFS(fior1, of, buffer, offset64, bufferSize, 0);
+}
+
+static int readKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+	OpenedBLOBFile *f = getFileInstance(of);
+	return _seekReadKFS(fior1, of, buffer, f->offset, bufferSize, 1);
 }
 
 static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
@@ -44,17 +65,6 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	}
 	f->offset += sizeof(*entry);
 	completeRWFileIO(fior1, readSize);
-	return 1;
-}
-
-static int seekKFS(FileIORequest0 *fior0, OpenedFile *of, uint64_t position){
-	OpenedBLOBFile *f = getFileInstance(of);
-	if(position > f->blob->end - f->blob->begin){
-		return 0;
-	}
-	pendFileIO0(fior0);
-	f->offset = (uintptr_t)position;
-	completeFileIO0(fior0);
 	return 1;
 }
 
@@ -111,7 +121,7 @@ static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length
 	FileFunctions func = INITIAL_FILE_FUNCTIONS;
 	if(mode.enumeration == 0){
 		func.read = readKFS;
-		func.seek = seekKFS;
+		func.seekRead = seekReadKFS;
 		func.sizeOf = sizeOfKFS;
 	}
 	else{
@@ -192,10 +202,10 @@ void testKFS(void){
 	//read
 	int i;
 	for(i = 0; i < 3; i++){
-		char x[12];
+		char x[8];
 		MEMSET0(x);
 		// read file
-		r = systemCall_readFile(file, x, 11);
+		r = systemCall_readFile(file, x, 7);
 		assert(r != IO_REQUEST_FAILURE);
 		// last operation is not accepted
 		// r2 = systemCall_readFile(file, x, 11);
@@ -204,11 +214,18 @@ void testKFS(void){
 		r2 = systemCall_waitIOReturn(r, 1, &readCount);
 		assert(r == r2);
 		x[readCount] = '\0';
-		printk("%s %d\n",x, readCount);
-		r = systemCall_seekFile(file, (i + 1) * 5);
+		printk("%s %d\n", x, readCount);
+
+		char x2[8];
+		r = systemCall_seekReadFile(file, x2, i * 7, 7);
 		assert(r != IO_REQUEST_FAILURE);
-		r2 = systemCall_waitIO(r);
+		uintptr_t readCount2 = 10000;
+		r2 = systemCall_waitIOReturn(r, 1, &readCount2);
 		assert(r == r2);
+		x[readCount2] = '\0';
+		if(readCount2 != readCount || strncmp(x, x2, readCount) != 0){
+			assert(0);
+		}
 	}
 	// close
 	r = systemCall_closeFile(file);

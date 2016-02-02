@@ -153,10 +153,8 @@ static int setAllocateProgramHeader32(
 		const ProgramHeader32 *ph = programHeaderArray + i;
 		if(ph->segmentType != 1)
 			continue;
-		if(syncSeekFile(file, ph->offset) == IO_REQUEST_FAILURE)
-			break;
 		uintptr_t readCount = ph->fileSize;
-		if(syncReadFile(file, (void*)ph->memoryAddress, &readCount) == IO_REQUEST_FAILURE)
+		if(syncSeekReadFile(file, (void*)ph->memoryAddress, ph->offset, &readCount) == IO_REQUEST_FAILURE)
 			break;
 		if(readCount != ph->fileSize)
 			break;
@@ -165,13 +163,13 @@ static int setAllocateProgramHeader32(
 	return i >= programHeaderCount;
 }
 
-static int loadProgramHeader32(uintptr_t file, int programHeaderLength){
+static int loadProgramHeader32(uintptr_t file, uintptr_t programHeaderOffset, int programHeaderLength){
 	int ok = 0;
 	const size_t programHeaderSize = programHeaderLength * sizeof(ProgramHeader32);
 	ProgramHeader32 *programHeader32 = allocateKernelMemory(programHeaderSize);
 	EXPECT(programHeader32 != NULL);
 	uintptr_t readCount = programHeaderSize;
-	uintptr_t request = syncReadFile(file, programHeader32, &readCount);
+	uintptr_t request = syncSeekReadFile(file, programHeader32, programHeaderOffset, &readCount);
 	EXPECT(request != IO_REQUEST_FAILURE && readCount == programHeaderSize);
 	uintptr_t programBegin;
 	uintptr_t programEnd;
@@ -212,14 +210,12 @@ static void elfLoader(void *arg){
 	// ELFHeader32
 	ELFHeader32 elfHeader32;
 	uintptr_t readCount = sizeof(elfHeader32);
-	request = syncReadFile(file, &elfHeader32, &readCount);
+	request = syncSeekReadFile(file, &elfHeader32, 0, &readCount);
 	EXPECT(request != IO_REQUEST_FAILURE && readCount == sizeof(elfHeader32) &&
 		checkELFHeader32(&elfHeader32));
 
 	// ProgramHeader32
-	request = syncSeekFile(file, elfHeader32.programHeaderOffset);
-	EXPECT(request != IO_REQUEST_FAILURE);
-	int ok = loadProgramHeader32(file, elfHeader32.programHeaderLength);
+	int ok = loadProgramHeader32(file, elfHeader32.programHeaderOffset, elfHeader32.programHeaderLength);
 	EXPECT(ok);
 	ok = syncCloseFile(file);
 	if(!ok)
@@ -230,7 +226,6 @@ static void elfLoader(void *arg){
 	ok = switchToUserMode(elfHeader32.entry, DEFAULT_USER_STACK_SIZE);
 	EXPECT(ok);
 	assert(0);
-	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;

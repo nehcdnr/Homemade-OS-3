@@ -441,7 +441,7 @@ static OpenFileRequest *createOpenFileIO(OpenedFile *openingFile, void *mappedNa
 	ofr->mappedPage = mappedNamePage;
 	return ofr;
 }
-
+/*
 static FileIORequest0 *createFileIO0(OpenedFile *file){
 	FileIORequest0 *NEW(r0);
 	if(r0 == NULL)
@@ -449,7 +449,7 @@ static FileIORequest0 *createFileIO0(OpenedFile *file){
 	initFileIO(&r0->fior, r0, file);
 	return r0;
 }
-
+*/
 static RWFileRequest *createRWFileIO(OpenedFile *file, void *mappedBufferPage){
 	RWFileRequest *NEW(rwfr);
 	if(rwfr == NULL)
@@ -622,9 +622,6 @@ int dummyRead(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED uint8
 int dummyWrite(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uintptr_t bufferSize){
 	return 0;
 }
-int dummySeek(_UNUSED FileIORequest0 *fior0, _UNUSED OpenedFile *of, _UNUSED uint64_t position){
-	return 0;
-}
 int dummySeekRead(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
 	return 0;
 }
@@ -728,7 +725,6 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	// close file
 	const FileFunctions *f = &of->fileFunctions;
 	struct FileIORequest *fior = NULL;
-	FileIORequest0 *r0;
 	RWFileRequest *rwfr;
 	FileIORequest2 *r2;
 	CloseFileRequest *cfr;
@@ -748,17 +744,6 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 		rwfr = dispatchRWFileCommand(of, p);
 		if(rwfr != NULL){
 			fior = &rwfr->fior;
-		}
-		break;
-	case SYSCALL_SEEK_FILE:
-		r0 = createFileIO0(of);
-		if(r0 != NULL){
-			int ok = f->seek(r0, of, COMBINE64(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_2(p)));
-			if(!ok){
-				DELETE(r0);
-				break;
-			}
-			fior = &r0->fior;
 		}
 		break;
 	case SYSCALL_SIZE_OF_FILE:
@@ -848,20 +833,6 @@ uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t b
 	return systemCall4(SYSCALL_WRITE_FILE, handle, (uintptr_t)buffer, bufferSize);
 }
 
-uintptr_t systemCall_seekFile(uintptr_t handle, uint64_t position){
-	return systemCall4(SYSCALL_SEEK_FILE, handle, LOW64(position), HIGH64(position));
-}
-
-uintptr_t syncSeekFile(uintptr_t handle, uint64_t position){
-	uintptr_t r;
-	r = systemCall_seekFile(handle, position);
-	if(r == IO_REQUEST_FAILURE)
-		return r;
-	if(r != systemCall_waitIO(r))
-		return IO_REQUEST_FAILURE;
-	return handle;
-}
-
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize){
 	return systemCall6(SYSCALL_SEEK_READ_FILE, handle, (uintptr_t)buffer, bufferSize,
 		LOW64(position), HIGH64(position));
@@ -946,7 +917,6 @@ void initFile(SystemCallTable *s){
 	registerSystemCall(s, SYSCALL_CLOSE_FILE, FileHandleCommandHandler, 1);
 	registerSystemCall(s, SYSCALL_READ_FILE, FileHandleCommandHandler, 2);
 	registerSystemCall(s, SYSCALL_WRITE_FILE, FileHandleCommandHandler, 3);
-	registerSystemCall(s, SYSCALL_SEEK_FILE, FileHandleCommandHandler, 4);
 	registerSystemCall(s, SYSCALL_SEEK_READ_FILE, FileHandleCommandHandler, 5);
 	registerSystemCall(s, SYSCALL_SEEK_WRITE_FILE, FileHandleCommandHandler, 6);
 	registerSystemCall(s, SYSCALL_SIZE_OF_FILE, FileHandleCommandHandler, 7);
