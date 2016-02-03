@@ -218,7 +218,7 @@ static int readPS2Event(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, u
 		}
 	}
 	pendRWFileIO(fior1);
-	completeRWFileIO(fior1, readCount);
+	completeRWFileIO(fior1, readCount, readCount);
 	return 1;
 	ON_ERROR;
 	return 0;

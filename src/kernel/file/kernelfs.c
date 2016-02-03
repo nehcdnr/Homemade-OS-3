@@ -10,7 +10,6 @@
 
 typedef struct{
 	const BLOBAddress *blob;
-	uintptr_t offset;
 }OpenedBLOBFile;
 
 static uintptr_t computeCopySize(OpenedBLOBFile *f, uint64_t offset64, uintptr_t bufferSize){
@@ -20,9 +19,9 @@ static uintptr_t computeCopySize(OpenedBLOBFile *f, uint64_t offset64, uintptr_t
 	return MIN(bufferSize, fileSize - ((uintptr_t)offset64));
 }
 
-static int _seekReadKFS(
+static int seekReadKFS(
 	RWFileRequest *fior1, OpenedFile *of,
-	uint8_t *buffer, uint64_t offset64, uintptr_t bufferSize, int updateOffset
+	uint8_t *buffer, uint64_t offset64, uintptr_t bufferSize
 ){
 	OpenedBLOBFile *f = getFileInstance(of);
 
@@ -30,20 +29,8 @@ static int _seekReadKFS(
 	uintptr_t copySize = computeCopySize(f, offset64, bufferSize);
 	memcpy(buffer, (void*)(f->blob->begin + ((uintptr_t)offset64)), copySize);
 
-	if(updateOffset){
-		f->offset += copySize;
-	}
-	completeRWFileIO(fior1, copySize);
+	completeRWFileIO(fior1, copySize, copySize);
 	return 1;
-}
-
-static int seekReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uint64_t offset64, uintptr_t bufferSize){
-	return _seekReadKFS(fior1, of, buffer, offset64, bufferSize, 0);
-}
-
-static int readKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
-	OpenedBLOBFile *f = getFileInstance(of);
-	return _seekReadKFS(fior1, of, buffer, f->offset, bufferSize, 1);
 }
 
 static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
@@ -53,7 +40,7 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	OpenedBLOBFile *f = getFileInstance(of);;
 
 	pendRWFileIO(fior1);
-	BLOBAddress *entry = (BLOBAddress*)(f->blob->begin + f->offset);
+	BLOBAddress *entry = (BLOBAddress*)(f->blob->begin + (uintptr_t)getFileOffset(of));
 	assert((f->blob->end - (uintptr_t)entry) % sizeof(*entry) == 0);
 	uintptr_t readSize;
 	if(f->blob->end > (uintptr_t)entry){
@@ -63,8 +50,7 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	else{
 		readSize = 0;
 	}
-	f->offset += sizeof(*entry);
-	completeRWFileIO(fior1, readSize);
+	completeRWFileIO(fior1, readSize, sizeof(*entry));
 	return 1;
 }
 
@@ -87,7 +73,6 @@ static OpenedBLOBFile *createOpenedBLOBFile(const BLOBAddress *blob){
 	if(f == NULL)
 		return NULL;
 	f->blob = blob;
-	f->offset = 0;
 	return f;
 }
 
@@ -120,7 +105,7 @@ static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length
 
 	FileFunctions func = INITIAL_FILE_FUNCTIONS;
 	if(mode.enumeration == 0){
-		func.read = readKFS;
+		func.read = seekReadByOffset;
 		func.seekRead = seekReadKFS;
 		func.sizeOf = sizeOfKFS;
 	}

@@ -286,7 +286,7 @@ static int seekReadPCIConfigSpace(
 	uintptr_t endPos = MIN(beginPos + bufferSize, cs->regsSize);
 	memcpy(buffer, ((const uint8_t*)&cs->regs) + beginPos, endPos - beginPos);
 	pendRWFileIO(rwfr);
-	completeRWFileIO(rwfr, endPos - beginPos);
+	completeRWFileIO(rwfr, endPos - beginPos, 0);
 	return 1;
 }
 
@@ -347,7 +347,7 @@ static int readEnumPCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uin
 		}
 	}
 	pendRWFileIO(rwfr);
-	completeRWFileIO(rwfr, readCount);
+	completeRWFileIO(rwfr, readCount, 0);
 	return 1;
 }
 

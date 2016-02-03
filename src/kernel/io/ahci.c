@@ -960,7 +960,7 @@ static void completeDiskRequest(DiskRequest *dr){
 	}
 	else{
 		assert(dr->rwfr != NULL && dr->ior == NULL);
-		completeRWFileIO(dr->rwfr, dr->inputSize);
+		completeRWFileIO(dr->rwfr, dr->inputSize, dr->inputSize);
 		deleteDiskRequest(dr);
 	}
 }

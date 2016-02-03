@@ -192,6 +192,9 @@ struct OpenedFile{
 	Spinlock lock;
 	uint32_t deleteOnCompletion;
 	uint32_t ioCount;
+	//uint64_t readByteCount, writeByteCount;
+	uint64_t offset;
+
 	CloseFileRequest *cfr;
 	OpenFileManager *fileManager;
 	//Task *task;
@@ -205,6 +208,7 @@ static void initOpenedFile(OpenedFile *of, CloseFileRequest *cfr/*, Task *task, 
 	// delete if failed to open
 	of->deleteOnCompletion = 1;
 	of->ioCount = 1;
+	of->offset = 0;
 	of->cfr = cfr;
 
 	of->fileManager = NULL; // see initOpenedFile2
@@ -247,6 +251,19 @@ static int addFileIOCount(OpenedFile *of, int v){
 		DELETE(of);
 	}
 	return ok;
+}
+
+static void addFileOffset(OpenedFile *of, uintptr_t v){
+	acquireLock(&of->lock);
+	of->offset += v;
+	releaseLock(&of->lock);
+}
+
+uint64_t getFileOffset(OpenedFile *of){
+	acquireLock(&of->lock);
+	uint64_t r = of->offset;
+	releaseLock(&of->lock);
+	return r;
 }
 
 // IMPROVE: openFileHashTable
@@ -369,6 +386,8 @@ struct FileIORequest0{
 };
 
 struct RWFileRequest{
+	int isWrite: 1;
+	int updateOffset: 1;
 	void *mappedPage;
 	struct FileIORequest fior;
 	uintptr_t returnValues[1];
@@ -450,11 +469,14 @@ static FileIORequest0 *createFileIO0(OpenedFile *file){
 	return r0;
 }
 */
-static RWFileRequest *createRWFileIO(OpenedFile *file, void *mappedBufferPage){
+
+static RWFileRequest *createRWFileIO(OpenedFile *file, int doWrite, int updateOffset, void *mappedBufferPage){
 	RWFileRequest *NEW(rwfr);
 	if(rwfr == NULL)
 		return NULL;
 	initFileIO(&rwfr->fior, rwfr, file);
+	rwfr->isWrite = doWrite;
+	rwfr->updateOffset = updateOffset;
 	rwfr->mappedPage = mappedBufferPage;
 	return rwfr;
 }
@@ -526,12 +548,16 @@ void completeFileIO0(FileIORequest0 *r0){
 	completeFileIO(&r0->fior, 0);
 }
 
-void completeRWFileIO(RWFileRequest *r1, uintptr_t v0){
+void completeRWFileIO(RWFileRequest *r1, uintptr_t rwByteCount, uintptr_t addOffset){
 	assert(r1->mappedPage != NULL);
 	unmapPages(kernelLinear, r1->mappedPage);
 	r1->mappedPage = NULL;
-	completeFileIO(&r1->fior, 1, v0);
+	if(r1->updateOffset){
+		addFileOffset(r1->fior.file, addOffset);
+	}
+	completeFileIO(&r1->fior, 1, rwByteCount);
 }
+
 
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1){
 	completeFileIO(&r2->fior, 2, v0, v1);
@@ -636,6 +662,15 @@ void dummyClose(_UNUSED CloseFileRequest *cfr, _UNUSED OpenedFile *of){
 }
 #undef _UNUSED
 
+int seekReadByOffset(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+	return of->fileFunctions.seekRead(rwfr, of, buffer, getFileOffset(of), bufferSize);
+}
+
+int seekWriteByOffset(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize){
+	return of->fileFunctions.seekWrite(rwfr, of, buffer, getFileOffset(of), bufferSize);
+}
+
+
 #define NULL_OR(R) ((R) == NULL? (NULL): &(R)->fior)
 // arg0 = str; arg1 = strLen
 static IORequest *dispatchFileNameCommand(
@@ -675,6 +710,7 @@ static IORequest *dispatchFileNameCommand(
 }
 
 static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam *p){
+	const uintptr_t scNumber = SYSTEM_CALL_NUMBER(p);
 	const uintptr_t buffer = SYSTEM_CALL_ARGUMENT_1(p);
 	const uintptr_t size = SYSTEM_CALL_ARGUMENT_2(p);
 	void *mappedPage;
@@ -682,8 +718,10 @@ static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam
 	// see completeRWFileIO
 	int bufferOK = mapBufferToKernel((const void*)buffer, size, &mappedPage, &mappedBuffer);
 	EXPECT(bufferOK);
+	const int isWrite = (scNumber == SYSCALL_WRITE_FILE || scNumber == SYSCALL_SEEK_WRITE_FILE);
+	const int updateOffset = (scNumber == SYSCALL_READ_FILE || scNumber == SYSCALL_WRITE_FILE);
 	const FileFunctions *f = &of->fileFunctions;
-	RWFileRequest *rwfr = createRWFileIO(of, mappedPage);
+	RWFileRequest *rwfr = createRWFileIO(of, isWrite, updateOffset, mappedPage);
 	EXPECT(rwfr != NULL);
 	int rwOK;
 	switch(SYSTEM_CALL_NUMBER(p)){

@@ -89,6 +89,7 @@ AcceptFileIO defaultAcceptFileIO;
 
 typedef struct FileIORequest0 FileIORequest0;
 typedef struct RWFileRequest RWFileRequest;
+typedef struct SeekRWFileRequest SeekRWFileRequest;
 typedef struct FileIORequest2 FileIORequest2;
 typedef struct OpenFileRequest OpenFileRequest;
 typedef struct CloseFileRequest CloseFileRequest;
@@ -105,7 +106,7 @@ void pendCloseFileIO(CloseFileRequest *r);
 void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO);
 
 void completeFileIO0(FileIORequest0 *r0);
-void completeRWFileIO(RWFileRequest *r1, uintptr_t v0);
+void completeRWFileIO(RWFileRequest *r1, uintptr_t rwByteCount, uintptr_t addOffset);
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
 void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
 void failOpenFile(OpenFileRequest *r1);
@@ -131,13 +132,16 @@ struct FileFunctions{
 	void (*close)(CloseFileRequest *cfr, OpenedFile *of);
 };
 
-// always return NULL
+// always return 0
 int dummyRead(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
 int dummyWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 int dummySeekRead(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 int dummySeekWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 int dummySizeOf(FileIORequest2 *fior2, OpenedFile *of);
 void dummyClose(CloseFileRequest *cfr, OpenedFile *of);
+
+int seekReadByOffset(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
+int seekWriteByOffset(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 
 // use macro to check number of arguments
 #define INITIAL_FILE_FUNCTIONS \
@@ -152,6 +156,7 @@ void addToOpenFileList(OpenFileManager *ofm, OpenedFile *ofr);
 void removeFromOpenFileList(OpenedFile *of);
 uintptr_t getFileHandle(OpenedFile *of);
 void *getFileInstance(OpenedFile *of);
+uint64_t getFileOffset(OpenedFile *of);
 // assume no pending IO requests
 void closeAllOpenFileRequest(OpenFileManager *ofm);
 

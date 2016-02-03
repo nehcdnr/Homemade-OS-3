@@ -411,7 +411,6 @@ static int addFATFileReference(FATFile *ff, int refCnt){
 
 typedef struct{
 	OpenFileMode mode;
-	uint32_t offset;
 	FATDirEntry dirEntry;
 	FATFile *shared;
 }OpenedFATFile;
@@ -423,7 +422,6 @@ static OpenedFATFile *createOpenedFATFile(
 	OpenedFATFile *NEW(f);
 	EXPECT(f != NULL);
 	f->mode = ofm;
-	f->offset = 0;
 	f->dirEntry = (*dir);
 	f->shared = searchCreateFATFile(dp, getBeginCluster(dir), 1);
 	EXPECT(f->shared != NULL);
@@ -475,26 +473,24 @@ static int openFAT(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLen
 typedef struct{
 	void *buffer;
 	uintptr_t inputRWSize;
-	uint64_t offset;
 	OpenedFATFile *file;
-	int updateOffset;
+	uint32_t inputOffset;
 	RWFileRequest *rwfr;
 }RWFATRequest;
 
 static void rwFATTask(void *rwfrPtr);
 
-static int _seekReadFAT(
+static int seekReadFAT(
 	RWFileRequest *rwfr, OpenedFile *of,
-	uint8_t *buffer, uint64_t offset, uintptr_t readSize, int updateOffset
+	uint8_t *buffer, uint64_t offset, uintptr_t readSize
 ){
 	RWFATRequest *NEW(rwfr2);
 	EXPECT(rwfr2 != NULL);
 	rwfr2->rwfr = rwfr;
 	rwfr2->file = getFileInstance(of);
 	rwfr2->inputRWSize = readSize;
+	rwfr2->inputOffset = (uint32_t)offset;
 	rwfr2->buffer = buffer;
-	rwfr2->offset = offset;
-	rwfr2->updateOffset = updateOffset;
 	Task *t = createSharedMemoryTask(rwFATTask, &rwfr2, sizeof(rwfr2), fat32List.mainTask);
 	EXPECT(t != NULL);
 	pendRWFileIO(rwfr);
@@ -507,17 +503,17 @@ static int _seekReadFAT(
 	return 0;
 }
 
-static int seekReadFAT(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t offset, uintptr_t readSize){
-	return _seekReadFAT(rwfr, of, buffer, offset, readSize, 0);
+static int readFAT(
+	RWFileRequest *rwfr, OpenedFile *of,
+	uint8_t *buffer, uintptr_t readSize
+){
+	return seekReadFAT(rwfr, of, buffer, getFileOffset(of), readSize);
 }
 
-static int readFAT(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
-	OpenedFATFile *f = getFileInstance(of);
-	return _seekReadFAT(rwfr, of, buffer, f->offset, readSize, 1);
-}
-
-static uintptr_t readByFAT(const FAT32DiskPartition *dp, void *buffer, uint32_t beginCluster,
-	uint32_t readOffset, uint32_t readSize){
+static uintptr_t readByFAT(
+	const FAT32DiskPartition *dp, void *buffer, uint32_t beginCluster,
+	uint32_t readOffset, uint32_t readSize
+){
 	const uint32_t readFileEnd = readOffset + readSize;
 	const uintptr_t clusterSize = getClusterSize(dp);
 	void *clusterBuffer = systemCall_allocateHeap(clusterSize, USER_NON_CACHED_PAGE);
@@ -556,6 +552,7 @@ static void rwFATTask(void *rwfrPtr){
 	OpenedFATFile *f = rwfr->file;
 	acquireReaderLock(f->shared->rwLock);
 	uintptr_t outputRWSize = 0;
+	uint32_t offset = rwfr->inputOffset;
 	// IMPROVE: f->offset is not locked
 	if(f->mode.enumeration){
 		outputRWSize = 0;
@@ -564,13 +561,14 @@ static void rwFATTask(void *rwfrPtr){
 			FileEnumeration *fileEnum = rwfr->buffer;
 			while(1){
 				FATDirEntry dir;
+				assert(offset % sizeof(dir) == 0);
 				uintptr_t readDirSize = readByFAT(f->shared->diskPartition,
-						&dir, f->shared->beginCluster, rwfr->offset, sizeof(dir));
+						&dir, f->shared->beginCluster, offset, sizeof(dir));
 				if(readDirSize != sizeof(dir) || isEndOfDirEntry(&dir)){
 					fileEnum->nameLength = 0;
 					break;
 				}
-				rwfr->offset += readDirSize;
+				offset += readDirSize;
 				if(isEmptyDirEntry(&dir))
 					continue;
 				assert(sizeof(fileEnum->name) >= sizeof(dir.fileName));
@@ -581,17 +579,14 @@ static void rwFATTask(void *rwfrPtr){
 		}
 	}
 	else{
-		uint32_t readFileSize = MIN(rwfr->inputRWSize, f->dirEntry.fileSize - rwfr->offset);
+		uint32_t readFileSize = MIN(rwfr->inputRWSize, f->dirEntry.fileSize - rwfr->inputOffset);
 		outputRWSize = readByFAT(f->shared->diskPartition,
-			rwfr->buffer, f->shared->beginCluster, rwfr->offset, readFileSize);
-		rwfr->offset += outputRWSize;
-	}
-	if(rwfr->updateOffset){
-		f->offset = rwfr->offset;
+			rwfr->buffer, f->shared->beginCluster, offset, readFileSize);
+		offset += outputRWSize;
 	}
 	releaseReaderWriterLock(f->shared->rwLock);
 
-	completeRWFileIO(rwfr->rwfr, outputRWSize);
+	completeRWFileIO(rwfr->rwfr, outputRWSize, offset - rwfr->inputOffset);
 	DELETE(rwfr);
 	systemCall_terminate();
 }
@@ -672,6 +667,7 @@ static void openFATTask(void *p){
 		nameIndex = nextNameIndex;
 	}
 	// if open in enumeration mode, the file has to be a directory
+	// if not in enumeration, what is the size of the directory?
 	EXPECT(ok && (ofr->mode.enumeration == 0 || (d.attribute & FAT_DIRECTORY) != 0));
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
