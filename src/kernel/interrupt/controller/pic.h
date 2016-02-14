@@ -11,6 +11,7 @@ typedef struct InterruptController{
 	};
 	int numberOfProcessors;
 	InterruptVector *(*irqToVector)(struct InterruptController *pic, enum IRQ irq);
+	// on = 0; off = 1
 	void (*setPICMask)(struct InterruptController *pic, enum IRQ irq, int setMask);
 	void (*endOfInterrupt)(InterruptParam *p);
 	void (*interruptAllOther)(struct InterruptController *pic, InterruptVector *vector);
