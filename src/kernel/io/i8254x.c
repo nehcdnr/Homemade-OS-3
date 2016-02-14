@@ -267,7 +267,7 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 	r->taskHead = 0;
 	// see regs[RECEIVE_DESCRITPROS_TAIL]
 	r->taskTail = r->receiveDescCnt - 1;
-	r->semaphore = createSemaphore();
+	r->semaphore = createSemaphore(0);
 	EXPECT(r->semaphore != NULL);
 	// set mac address
 	// device->regs[RECEIVE_ADDRESS_0_HIGH] =
@@ -379,7 +379,7 @@ static int initI8254xTransmit(I8254xTransmit *t, volatile uint32_t *regs){
 	t->intHead = 0;
 	t->taskHead = 0;
 	t->taskTail = 0;
-	t->semaphore = createSemaphore();
+	t->semaphore = createSemaphore(0);
 	EXPECT(t->semaphore != NULL);
 	// iniI8254xReceive also sets LINK_STATUS
 	regs[INTERRUPT_MASK_CLEAR] |=

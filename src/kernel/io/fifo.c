@@ -114,7 +114,7 @@ FIFO *createFIFO(uintptr_t length, uintptr_t elementSize){
 	fifo->begin = 0;
 	fifo->dataSize = 0;
 	fifo->elmtSize = elementSize;
-	fifo->semaphore = createSemaphore();
+	fifo->semaphore = createSemaphore(0);
 	EXPECT(fifo->semaphore != NULL);
 	return fifo;
 	//DELETE(fifo->semaphore);

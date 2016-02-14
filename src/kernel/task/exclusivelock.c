@@ -117,11 +117,11 @@ int getSemaphoreValue(Semaphore *s){
 	return v;
 }
 
-Semaphore *createSemaphore(){
+Semaphore *createSemaphore(int initialValue){
 	Semaphore *NEW(s);
 	if(s == NULL)
 		return NULL;
-	s->quota = 0;
+	s->quota = initialValue;
 	s->taskQueue = initialTaskQueue;
 	initExclusiveLock(&s->exLock, s);
 	return s;

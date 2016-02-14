@@ -653,7 +653,7 @@ struct DiskRequestList{
 
 static int initDiskRequestList(struct DiskRequestList *drList){
 	drList->lock = initialSpinlock;
-	drList->semaphore = createSemaphore();
+	drList->semaphore = createSemaphore(0);
 	if(drList->semaphore == NULL)
 		return 0;
 	drList->head = NULL;

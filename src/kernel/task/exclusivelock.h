@@ -3,7 +3,7 @@
 typedef struct Semaphore Semaphore;
 
 // Semaphore must be in global kernel memory
-Semaphore *createSemaphore(void);
+Semaphore *createSemaphore(int initialValue);
 
 void deleteSemaphore(Semaphore *s);
 /*

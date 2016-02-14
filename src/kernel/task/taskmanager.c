@@ -315,7 +315,7 @@ static Task *createTask(
 	t->espInterrupt = espInterrupt;
 	t->userStackBottom = INVALID_PAGE_ADDRESS;
 
-	t->ioSemaphore = createSemaphore();
+	t->ioSemaphore = createSemaphore(0);
 	EXPECT(t->ioSemaphore != NULL);
 	t->ioListLock = initialSpinlock;
 	t->pendingIOList = NULL;
