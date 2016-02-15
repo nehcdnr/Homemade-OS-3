@@ -25,7 +25,9 @@ struct IORequest{
 	// handling and cancel() may run concurrently.
 };
 void pendIO(IORequest *ior);
-IORequest *waitIO(Task *t, IORequest *ioNumber);
+IORequest *waitAnyIO(void);
+void waitIO(IORequest *expected);
+int tryCancelIO(IORequest *ior);
 void completeIO(IORequest *ior); // IORequestHandler
 
 // call with UINTPTR_NULL to wait for any I/O request
@@ -34,6 +36,7 @@ uintptr_t systemCall_waitIO(uintptr_t ioNumber);
 uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
 int systemCall_cancelIO(uintptr_t io);
 
+int isCancellable(IORequest *ior);
 void setCancellable(IORequest *ior, int value);
 
 CancelIO notSupportCancelIO;

@@ -214,6 +214,32 @@ typedef struct{
 	Semaphore *semaphore;
 }I8254xTransmit;
 
+#define MAC_ADDRESS_SIZE (6)
+#define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
+
+
+#define TO_BIG_ENDIAN_16(X) ((uint16_t)((((X) << 16) & 0xff00) | (((X) >> 16) & 0xff)))
+
+#define ETHERTYPE_IPV4 TO_BIG_ENDIAN_16(0x0800)
+#define ETHERTYPE_ARP TO_BIG_ENDIAN_16(0x0806)
+
+typedef struct{
+	// big endian
+	uint8_t dstMACAddress[MAC_ADDRESS_SIZE];
+	uint8_t srcMACAddress[MAC_ADDRESS_SIZE];
+	// IPv4 = 0x0800; ARP = 0x0806 in big endian
+	uint16_t etherType;
+	uint8_t payload[0];
+}EthernetHeader;
+
+static void toMACAddress(uint8_t *outAddress, uint64_t macAddress){
+	int a;
+	for(a = 0; a < MAC_ADDRESS_SIZE; a++){
+		outAddress[a] = ((macAddress >> (a * 8)) & 0xff);
+	}
+}
+
+static_assert(sizeof(EthernetHeader) == 14);
 
 typedef struct I8254xReadRequest{
 	RWFileRequest *rwfr;
@@ -270,8 +296,9 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 	r->semaphore = createSemaphore(0);
 	EXPECT(r->semaphore != NULL);
 	// set mac address
-	// device->regs[RECEIVE_ADDRESS_0_HIGH] =
-	// device->regs[RECEIVE_ADDRESS_0_LOW] =
+	// regs[RECEIVE_ADDRESS_0_HIGH] =
+	// regs[RECEIVE_ADDRESS_0_LOW] =
+	// printk("%x %x\n", regs[RECEIVE_ADDRESS_0_HIGH], regs[RECEIVE_ADDRESS_0_LOW]);
 	// clear multicast table array
 	uintptr_t i;
 	for(i = 0; i < MULTICAST_TABLE_ARRAY_LENGTH; i++){
@@ -309,8 +336,8 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 	rc.value = 0;
 	rc.enabled = 1;
 	// do not filter destination address
-	rc.unicastPromiscuous = 1;
-	rc.multicastPromiscuous = 1;
+	// rc.unicastPromiscuous = 0;
+	// rc.multicastPromiscuous = 0;
 	// 0 = 1/2 of descriptor array; 1 = 1/4; 2 = 1/8
 	// 4096/16/8=32
 	rc.receiveDescThreshold = 2;
@@ -505,7 +532,11 @@ static void i8254xTransmitTask(void *arg){
 	I8254xDevice *d = *(I8254xDevice**)arg;
 	I8254xTransmit *t = &d->transmit;
 
-	printk("transmitter started %d\n", t->transmitDescCnt);
+	if(((t->regs[RECEIVE_ADDRESS_0_HIGH] >> 31) & 1) == 0){
+		assert(0);
+	}
+	uint64_t srcMAC = COMBINE64(t->regs[RECEIVE_ADDRESS_0_HIGH] & 0xffff, t->regs[RECEIVE_ADDRESS_0_LOW]);
+	printk("transmitter started %d\n", d->serialNumber);
 	// TODO: this is test
 	sleep(500);
 	unsigned i;
@@ -515,11 +546,16 @@ static void i8254xTransmitTask(void *arg){
 		t->taskTail = (tail + 1) % t->transmitDescCnt;
 		t->legacy[t->taskTail].status = 0;
 		// TODO: process rw file request
-		int j;
-		for(j = 0; j < 60; j++){
-			t->transmitBuffer[tail][j] = i + '0';
+		const uintptr_t payloadSize = 60;
+		EthernetHeader *h = (EthernetHeader*)t->transmitBuffer[tail];
+		toMACAddress(h->dstMACAddress, BROADCAST_MAC_ADDRESS);
+		toMACAddress(h->srcMACAddress, srcMAC);
+		h->etherType = ETHERTYPE_IPV4;
+		unsigned j;
+		for(j = 0; j < payloadSize; j++){
+			h->payload[j] = i + '0';
 		}
-		if(initTransmitDescriptor(&t->legacy[tail], t->transmitBuffer[tail], 60) == 0){
+		if(initTransmitDescriptor(&t->legacy[tail], t->transmitBuffer[tail], sizeof(*h) + payloadSize) == 0){
 			printk("init transmit desc error\n");
 		}
 		assert(t->regs[TRANSMIT_DESCRIPTORS_TAIL] == tail);
@@ -533,6 +569,7 @@ static void i8254xTransmitTask(void *arg){
 	}
 	printk("test transmit ok\n");
 	acquireSemaphore(t->semaphore);
+	panic("transmit semaphore");
 	systemCall_terminate();
 }
 
@@ -603,7 +640,7 @@ static int i8254xTransmitHandler(I8254xTransmit *tran){
 			reachedHead = 1;
 		if(reachedHead && (tran->legacy[tran->intHead].status & 1) == 0)
 			break;
-		printk("--transmit handler: %d--\n", tran->intHead);
+		printk("--transmit handler: %d %d--\n", tran->intHead, (int)tran->legacy[tran->intHead].status);
 		tran->intHead = (tran->intHead + 1) % tran->transmitDescCnt;
 		releaseSemaphore(tran->semaphore);
 		handled = 1;
@@ -665,7 +702,6 @@ static I8254xDevice *searchI8254xDeviceList(int number){
 	return d;
 }
 
-
 static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLength, OpenFileMode mode){
 	if(mode.writable){
 		//TODO:
@@ -687,7 +723,6 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 	if(device == NULL){
 		return 0;
 	}
-	pendOpenFileIO(ofr);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	//ff.read = readI8254x;
 	completeOpenFile(ofr, device, &ff);

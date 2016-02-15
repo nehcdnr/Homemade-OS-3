@@ -285,13 +285,11 @@ static int seekReadPCIConfigSpace(
 	uintptr_t beginPos = (uintptr_t)position;
 	uintptr_t endPos = MIN(beginPos + bufferSize, cs->regsSize);
 	memcpy(buffer, ((const uint8_t*)&cs->regs) + beginPos, endPos - beginPos);
-	pendRWFileIO(rwfr);
 	completeRWFileIO(rwfr, endPos - beginPos, 0);
 	return 1;
 }
 
 static void closePCIConfigSpace(CloseFileRequest *cfr, __attribute__((__unused__)) OpenedFile *of){
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	// do not delete of->instance
 }
@@ -313,7 +311,6 @@ static int openPCIConfigSpace(OpenFileRequest *ofr, const char *fileName, uintpt
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.seekRead = seekReadPCIConfigSpace;
 	ff.close = closePCIConfigSpace;
-	pendOpenFileIO(ofr);
 	completeOpenFile(ofr, (void*)cs, &ff);
 	return 1;
 	ON_ERROR;
@@ -346,14 +343,12 @@ static int readEnumPCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uin
 			break;
 		}
 	}
-	pendRWFileIO(rwfr);
 	completeRWFileIO(rwfr, readCount, 0);
 	return 1;
 }
 
 static void closeEnumPCI(CloseFileRequest *cfr, OpenedFile *of){
 	PCIEnumerator *pe = getFileInstance(of);
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	DELETE(pe);
 }
@@ -376,7 +371,6 @@ static int openEnumPCI(OpenFileRequest *ofr, const char *fileName, uintptr_t len
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.close = closeEnumPCI;
 	ff.read = readEnumPCI;
-	pendOpenFileIO(ofr);
 	completeOpenFile(ofr, pe, &ff);
 	return 1;
 	// DELETE(pe);

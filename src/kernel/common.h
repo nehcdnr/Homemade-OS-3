@@ -52,7 +52,7 @@ void printAndHalt(const char *condition, const char *file, int line);
 
 #define LOW64(V) ((V) & 0xffffffff)
 #define HIGH64(V) ((((uint64_t)(V)) >> 32) & 0xffffffff)
-#define COMBINE64(L,H) ((uint64_t)(L) + ((uint64_t)(H) << 32))
+#define COMBINE64(H,L) ((uint64_t)(L) + ((uint64_t)(H) << 32))
 
 int isStringEqual(const char *s1, uintptr_t len1, const char *s2, uintptr_t len2);
 uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c);

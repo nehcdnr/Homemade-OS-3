@@ -898,7 +898,6 @@ static int seekReadAHCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 	);
 	EXPECT(dr != NULL);
 	// send DiskRequest
-	pendRWFileIO(rwfr);
 	//setRWFileIOFunctions(rwfr, dr, cancelRWAHCI);
 	acquireLock(dr->lock);
 	addToPortQueue(dr, /*hba, */dr->portIndex);
@@ -916,7 +915,6 @@ static int seekReadAHCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 }
 
 static void closeAHCI(CloseFileRequest *cfr, __attribute__((__unused__)) OpenedFile *of){
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	// do not delete of->instance
 }
@@ -939,7 +937,6 @@ static int openAHCI(
 	//	ff.write = seekWriteAHCI;
 	//}
 	ff.close = closeAHCI;
-	pendOpenFileIO(ofr);
 	completeOpenFile(ofr, (void*)index, &ff);
 	return 1;
 }
@@ -997,7 +994,6 @@ void ahciDriver(void){
 		if(nextPCIConfigRegisters(enumPCI, &pciConfig, sizeof(*regs0)) != sizeof(*regs0))
 			break;
 		AHCIInterruptArgument *arg = initAHCI(&ahciManager, regs0);
-
 		int p;
 		for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
 			if(hasPort(arg, p) == 0){
@@ -1038,7 +1034,7 @@ void testAHCI(void){
 	HBAPortIndex pi;
 	uintptr_t sectorSize;
 	uintptr_t r = systemCall_waitIOReturn(d, 4, &lbaLow, &lbaHigh, &pi.value, &sectorSize);
-	lba = COMBINE64(lbaLow, lbaHigh);
+	lba = COMBINE64(lbaHigh, lbaLow);
 	assert(r == d);
 	char s[20];
 	snprintf(s, 20, "ahci:%x", pi.value);

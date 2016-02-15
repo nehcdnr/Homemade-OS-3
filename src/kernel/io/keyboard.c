@@ -217,7 +217,6 @@ static int readPS2Event(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, u
 				break;
 		}
 	}
-	pendRWFileIO(fior1);
 	completeRWFileIO(fior1, readCount, readCount);
 	return 1;
 	ON_ERROR;
@@ -226,7 +225,6 @@ static int readPS2Event(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, u
 
 static void closePS2(CloseFileRequest *cfr, OpenedFile *of){
 	OpenedPS2 *ops2 = getFileInstance(of);
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	DELETE(ops2);
 }
@@ -258,7 +256,6 @@ static int openPS2(OpenFileRequest *ofr, const char *name, uintptr_t nameLength,
 	ff.read = readPS2Event;
 	ff.close = closePS2;
 
-	pendOpenFileIO(ofr);
 	completeOpenFile(ofr, ops2, &ff);
 	return 1;
 	//DELETE(ops2);

@@ -88,7 +88,7 @@ static void addTimerEvent(TimerEventList* tel, uint64_t waitTicks, TimerEvent *t
 }
 
 static void setAlarmHandler(InterruptParam *p){
-	uint64_t millisecond = COMBINE64(SYSTEM_CALL_ARGUMENT_0(p), SYSTEM_CALL_ARGUMENT_1(p));
+	uint64_t millisecond = COMBINE64(SYSTEM_CALL_ARGUMENT_1(p), SYSTEM_CALL_ARGUMENT_0(p));
 	uintptr_t isPeriodic = SYSTEM_CALL_ARGUMENT_2(p);
 	// not check overflow
 	uint64_t tick = (millisecond * TIMER_FREQUENCY) / 1000;

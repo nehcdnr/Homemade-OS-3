@@ -25,7 +25,6 @@ static int seekReadKFS(
 ){
 	OpenedBLOBFile *f = getFileInstance(of);
 
-	pendRWFileIO(fior1);
 	uintptr_t copySize = computeCopySize(f, offset64, bufferSize);
 	memcpy(buffer, (void*)(f->blob->begin + ((uintptr_t)offset64)), copySize);
 
@@ -39,7 +38,6 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 
 	OpenedBLOBFile *f = getFileInstance(of);;
 
-	pendRWFileIO(fior1);
 	BLOBAddress *entry = (BLOBAddress*)(f->blob->begin + (uintptr_t)getFileOffset(of));
 	assert((f->blob->end - (uintptr_t)entry) % sizeof(*entry) == 0);
 	uintptr_t readSize;
@@ -56,14 +54,12 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 
 static int sizeOfKFS(FileIORequest2 *fior2, OpenedFile *of){
 	OpenedBLOBFile *f = getFileInstance(of);
-	pendFileIO2(fior2);
 	completeFileIO64(fior2, f->blob->end - f->blob->begin);
 	return 1;
 }
 
 static void closeKFS(CloseFileRequest *cfr, OpenedFile *of){
 	OpenedBLOBFile *f = getFileInstance(of);
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	DELETE(f);
 }
@@ -114,7 +110,6 @@ static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length
 	}
 	func.close = closeKFS;
 
-	pendOpenFileIO(fior);
 	completeOpenFile(fior, f, &func);
 	return 1;
 	//DELETE(f);

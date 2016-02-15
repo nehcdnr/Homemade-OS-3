@@ -418,17 +418,16 @@ static_assert(MEMBER_OFFSET(struct FileIORequest, returnValues) ==
 void defaultAcceptFileIO(__attribute__((__unused__)) void *instance){
 }
 
-void notSupportCancelFileIO(__attribute__((__unused__)) void *instance){
-	panic("notSupportCancelFileIO");
+void defaultCancelFileIO(__attribute__((__unused__)) void *instance){
 }
 
-static void cancelFileIORequest(void *instance){
+static void cancelDeleteFileIO(void *instance){
 	struct FileIORequest *r0 = instance;
 	r0->cancelFileIO(r0->acceptCancelArg);
 	DELETE(r0->instance);
 }
 
-static int acceptFileIORequest(void *instance, uintptr_t *returnValue){
+static int acceptDeleteFileIO(void *instance, uintptr_t *returnValue){
 	struct FileIORequest *r0 = instance;
 	int r = r0->returnCount, i;
 	for(i = 0; i < r; i++){
@@ -441,13 +440,13 @@ static int acceptFileIORequest(void *instance, uintptr_t *returnValue){
 }
 
 static void initFileIO(struct FileIORequest *fior, void *instance, OpenedFile *file){
-	initIORequest(&fior->ior, fior, cancelFileIORequest, acceptFileIORequest);
+	initIORequest(&fior->ior, fior, cancelDeleteFileIO, acceptDeleteFileIO);
 	//fior->ofr = ofr;
 	fior->instance = instance;
 	fior->file = file;
 	assert(file != NULL);
 	fior->acceptCancelArg = fior;
-	fior->cancelFileIO = notSupportCancelFileIO;
+	fior->cancelFileIO = defaultCancelFileIO;
 	fior->acceptFileIO = defaultAcceptFileIO;
 }
 
@@ -507,24 +506,17 @@ void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFi
 	setFileIOFunctions(&rwfr->fior, arg, cancelFileIO, acceptFileIO);
 }
 
-void pendOpenFileIO(OpenFileRequest *r){
-	pendIO(&r->ofior.ior);
+static void pendFileIO(struct FileIORequest *fior){
+	pendIO(&fior->ior);
 }
 
-void pendFileIO0(FileIORequest0 *r){
-	pendIO(&r->fior.ior);
-}
-
-void pendRWFileIO(RWFileRequest *r){
-	pendIO(&r->fior.ior);
-}
-
-void pendFileIO2(FileIORequest2 *r){
-	pendIO(&r->fior.ior);
-}
-
-void pendCloseFileIO(CloseFileRequest *r){
-	pendIO(&r->cfior.ior);
+// also delete FileIORequest. see cancelDeleteFileIO
+static void cancelFailedFileIO(struct FileIORequest *fior){
+	assert(isCancellable(&fior->ior) == 0);
+	setCancellable(&fior->ior, 1);
+	if(tryCancelIO(&fior->ior) == 0){
+		panic("cannot cancel failed file io");
+	}
 }
 
 static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
@@ -688,11 +680,12 @@ static IORequest *dispatchFileNameCommand(
 			int ok = createOpenFileRequests(&openingFile, &cfr, &ofr, mappedNamePage);
 			if(!ok)
 				break;
+			pendFileIO(&ofr->ofior);
 			OpenFileMode m = {value: SYSTEM_CALL_ARGUMENT_2(p)};
 			ok = ff->open(ofr, fileName, nameLen, m);
 
 			if(!ok){
-				DELETE(ofr);
+				cancelFailedFileIO(&ofr->ofior);
 				DELETE(cfr);
 				DELETE(openingFile);
 				break;
@@ -723,6 +716,7 @@ static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam
 	const FileFunctions *f = &of->fileFunctions;
 	RWFileRequest *rwfr = createRWFileIO(of, isWrite, updateOffset, mappedPage);
 	EXPECT(rwfr != NULL);
+	pendFileIO(&rwfr->fior);
 	int rwOK;
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_READ_FILE:
@@ -733,11 +727,11 @@ static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam
 		break;
 	case SYSCALL_SEEK_READ_FILE:
 		rwOK = f->seekRead(rwfr, of, (uint8_t*)mappedBuffer,
-			COMBINE64(SYSTEM_CALL_ARGUMENT_3(p), SYSTEM_CALL_ARGUMENT_4(p)), size);
+			COMBINE64(SYSTEM_CALL_ARGUMENT_4(p), SYSTEM_CALL_ARGUMENT_3(p)), size);
 		break;
 	case SYSCALL_SEEK_WRITE_FILE:
 		rwOK = f->seekWrite(rwfr, of, (uint8_t*)mappedBuffer,
-			COMBINE64(SYSTEM_CALL_ARGUMENT_3(p), SYSTEM_CALL_ARGUMENT_4(p)), size);
+			COMBINE64(SYSTEM_CALL_ARGUMENT_4(p), SYSTEM_CALL_ARGUMENT_3(p)), size);
 		break;
 	default:
 		panic("impossible");
@@ -745,7 +739,7 @@ static RWFileRequest *dispatchRWFileCommand(OpenedFile *of, const InterruptParam
 	EXPECT(rwOK);
 	return rwfr;
 	ON_ERROR;
-	DELETE(rwfr);
+	cancelFailedFileIO(&rwfr->fior);
 	ON_ERROR;
 	unmapPages(kernelLinear, mappedPage);
 	ON_ERROR;
@@ -771,9 +765,10 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	case SYSCALL_CLOSE_FILE:
 		cfr = of->cfr;
 		// close cannot fail or be cancelled unless file does not exist
+		pendFileIO(&cfr->cfior);
 		f->close(cfr, of);
 		fior = &cfr->cfior;
-		assert(fior->ior.cancellable == 0);
+		assert(isCancellable(&fior->ior) == 0);
 		break;
 	case SYSCALL_READ_FILE:
 	case SYSCALL_WRITE_FILE:
@@ -787,9 +782,10 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	case SYSCALL_SIZE_OF_FILE:
 		r2 = createFileIO2(of);
 		if(r2 != NULL){
+			pendFileIO(&r2->fior);
 			int ok = f->sizeOf(r2, of);
 			if(!ok){
-				DELETE(r2);
+				cancelFailedFileIO(&r2->fior);
 				break;
 			}
 			fior = &r2->fior;
@@ -902,7 +898,7 @@ uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
 		return r;
 	if(r != systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh))
 		return IO_REQUEST_FAILURE;
-	*size = COMBINE64(sizeLow, sizeHigh);
+	*size = COMBINE64(sizeHigh, sizeLow);
 	return handle;
 }
 

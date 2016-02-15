@@ -458,7 +458,6 @@ static int openFAT(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLen
 	ofr2->ofr = ofr;
 	Task *t = createSharedMemoryTask(openFATTask, &ofr2, sizeof(ofr2), fat32List.mainTask);
 	EXPECT(t != NULL);
-	pendOpenFileIO(ofr);
 	resume(t);
 	return 1;
 	// delete task
@@ -493,7 +492,6 @@ static int seekReadFAT(
 	rwfr2->buffer = buffer;
 	Task *t = createSharedMemoryTask(rwFATTask, &rwfr2, sizeof(rwfr2), fat32List.mainTask);
 	EXPECT(t != NULL);
-	pendRWFileIO(rwfr);
 	resume(t);
 	return 1;
 	// delete task
@@ -595,7 +593,6 @@ static void rwFATTask(void *rwfrPtr){
 
 static int sizeOfFAT(FileIORequest2 *fior2, OpenedFile *of){
 	OpenedFATFile *f = getFileInstance(of);
-	pendFileIO2(fior2);
 	completeFileIO64(fior2, f->dirEntry.fileSize);
 	return 1;
 }
@@ -605,7 +602,6 @@ static int sizeOfFAT(FileIORequest2 *fior2, OpenedFile *of){
 static void closeFAT(CloseFileRequest *cfr, OpenedFile *of){
 	OpenedFATFile *f = getFileInstance(of);
 	// assume there are pending io request. see file.c
-	pendCloseFileIO(cfr);
 	completeCloseFile(cfr);
 	deleteOpenedFATFile(f);
 }
@@ -721,7 +717,7 @@ void fatService(void){
 		snprintf(s, 20, "ahci:%x", diskCode); // TODO: enumerate disk service names
 		uintptr_t diskFile = syncOpenFile(s);
 		assert(diskFile != IO_REQUEST_FAILURE);
-		FAT32DiskPartition *dp = createFATPartition(diskFile, COMBINE64(startLBALow, startLBAHigh), sectorSize, i);
+		FAT32DiskPartition *dp = createFATPartition(diskFile, COMBINE64(startLBAHigh, startLBALow), sectorSize, i);
 		if(dp == NULL){
 			continue;
 		}
