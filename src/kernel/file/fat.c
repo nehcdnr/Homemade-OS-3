@@ -307,7 +307,7 @@ static FAT32DiskPartition *createFATPartition(uintptr_t fileHandle, uint64_t sta
 	ON_ERROR;
 	DELETE(dp);
 	ON_ERROR;
-	printk("warning: read FAT32 failed\n");
+	printk("warning: read FAT32 partition failed\n");
 	return NULL;
 }
 

@@ -361,20 +361,19 @@ static HBAPortMemory *initAHCIPort(volatile HBAPortRegister *pr, const volatile 
 typedef struct AHCIInterruptArgument{
 	volatile HBARegisters *hbaRegisters;
 
-	struct DiskDescription{
-		uintptr_t sectorSize;
-		uint64_t sectorCount;
-	}desc;
-
 	Spinlock lock;
 	struct AHCIPortQueue{
+		struct DiskDescription{
+			uintptr_t sectorSize;
+			uint64_t sectorCount;
+		}desc;
 		HBAPortMemory *hbaPortMemory;
 		struct DiskRequest *pendingRequest;
 		struct DiskRequest *servingRequest;
 	}port[HBA_MAX_PORT_COUNT];
 
 	// manager
-	struct AHCIInterruptArgument *next;
+	struct AHCIInterruptArgument **prev, *next;
 	uint16_t hbaIndex;
 }AHCIInterruptArgument;
 
@@ -406,10 +405,10 @@ static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 	EXPECT(hba->ahciVersion >= 0x10000);
 	arg->hbaRegisters = hba;
 	arg->lock = initialSpinlock;
-	arg->desc.sectorSize = DEFAULT_SECTOR_SIZE;
-	//arg->desc.sectorCount = 1;
-	//arg->hbaIndex = 0xffff;
-	//arg->next = NULL;
+	// see initAHCI
+	arg->hbaIndex = 0xffff;
+	arg->prev = NULL;
+	arg->next = NULL;
 	//resetAHCI(hba);
 	hba->globalHostControl |= ((1<<31)/*AHCI mode*/ | (1 << 1) /*enable interrupt*/);
 	//printk("bar5: %x %x\n",bar, hba);
@@ -419,6 +418,9 @@ static AHCIInterruptArgument *initAHCIRegisters(uint32_t bar){
 	int p;
 	uint32_t portImpl = hba->portsImplemented;
 	for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
+		// see initDiskDescription
+		arg->port[p].desc.sectorCount = 0;
+		arg->port[p].desc.sectorSize = DEFAULT_SECTOR_SIZE;
 		arg->port[p].hbaPortMemory = NULL;
 		arg->port[p].pendingRequest = NULL;
 		arg->port[p].servingRequest = NULL;
@@ -496,7 +498,8 @@ static int sendDiskRequest(DiskRequest *dr){
 	case DMA_READ_EXT:
 	case DMA_WRITE_EXT:
 		return issueDMACommand(
-			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory, a->desc.sectorSize,
+			&a->hbaRegisters->port[dr->portIndex], a->port[dr->portIndex].hbaPortMemory,
+			a->port[dr->portIndex].desc.sectorSize,
 			diskPhysicalSectorBuffer(dr), dr->lba, dr->sectorCount, dr->isWrite
 		);
 	case IDENTIFY_DEVICE:
@@ -535,7 +538,7 @@ static DiskRequest *createRWDiskRequest(
 	void *buffer, uintptr_t bufferSize, uint64_t position,
 	AHCIInterruptArgument *a, int portIndex, char isWrite
 ){
-	const uintptr_t sectorSize = a->desc.sectorSize;
+	const uintptr_t sectorSize = a->port[portIndex].desc.sectorSize;
 	const uintptr_t sectorBufferSize = CEIL(position + bufferSize, sectorSize) - FLOOR(position, sectorSize);
 	// assert(PAGE_SIZE % a->desc.sectorSize == 0);
 	// TODO: allocate continuous physical pages or send multiple commands
@@ -556,9 +559,9 @@ static DiskRequest *createRWDiskRequest(
 
 	// buffer aligned to sector && size aligned to sector && resides in one page && position aligned to sector
 	if(
-		((uintptr_t)buffer) % a->desc.sectorSize == 0 &&
+		((uintptr_t)buffer) % a->port[portIndex].desc.sectorSize == 0 &&
 		bufferSize == sectorBufferSize &&
-		position % a->desc.sectorSize == 0
+		position % a->port[portIndex].desc.sectorSize == 0
 	){ // aligned
 		dr->sectorBufferOffset =
 		dr->bufferOffset = ((uintptr_t)buffer) % PAGE_SIZE;
@@ -795,7 +798,7 @@ static HBAPortIndex toDiskCode(int a, int p){
 	return i;
 }
 
-static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument *arg){
+static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument *arg, int portIndex){
 	uint16_t *buffer = systemCall_allocateHeap(DEFAULT_SECTOR_SIZE, KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
 	memset(buffer, 0, DEFAULT_SECTOR_SIZE);
@@ -803,7 +806,7 @@ static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument 
 
 	DiskRequest *dr = createIdentifyDiskRequest(
 		IDENTIFY_DEVICE, &ior,
-		buffer, DEFAULT_SECTOR_SIZE, arg, arg->hbaIndex
+		buffer, DEFAULT_SECTOR_SIZE, arg, portIndex
 	);
 	EXPECT(dr != NULL);
 	pendIO(dr->ior);
@@ -869,8 +872,7 @@ static AHCIInterruptArgument *initAHCI(AHCIManager *am, const PCIConfigRegisters
 	// add to manager
 	acquireLock(&am->lock);
 	arg->hbaIndex = (uint16_t)am->ahciCount;
-	arg->next = am->ahciList;
-	am->ahciList = arg;
+	ADD_TO_DQUEUE(arg, &am->ahciList);
 	am->ahciCount++;
 	releaseLock(&am->lock);
 
@@ -888,9 +890,8 @@ static int seekReadAHCI(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 	index.value = (uintptr_t)getFileInstance(of);
 	AHCIInterruptArgument *hba = searchHBAByPortIndex(&ahciManager, index);
 	EXPECT(hba != NULL);
-
-	EXPECT(position < hba->desc.sectorCount * hba->desc.sectorSize &&
-		position + bufferSize <= hba->desc.sectorCount * hba->desc.sectorSize);
+	const uint64_t diskSize = hba->port[index.portIndex].desc.sectorCount * hba->port[index.portIndex].desc.sectorSize;
+	EXPECT(bufferSize <= diskSize && position <= diskSize - bufferSize);
 	DiskRequest *dr = createRWDiskRequest(
 		(0? DMA_WRITE_EXT: DMA_READ_EXT), rwfr,
 		buffer, bufferSize, position,
@@ -1002,17 +1003,17 @@ void ahciDriver(void){
 			const HBAPortIndex diskCode = toDiskCode(arg->hbaIndex, p);
 			char fileName[20];
 			snprintf(fileName, 20, "%s:%x", driverName, diskCode.value);
-			if(initDiskDescription(&arg->desc, arg) == 0){
+			if(initDiskDescription(&arg->port[p].desc, arg, p) == 0){
 				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
 			}
-			if(PAGE_SIZE % arg->desc.sectorSize != 0){
-				printk("warning: unsupported ahci disk sector size: %u\n", arg->desc.sectorSize);
+			if(PAGE_SIZE % arg->port[p].desc.sectorSize != 0){
+				printk("warning: unsupported ahci disk sector size: %u\n", arg->port[p].desc.sectorSize);
 			}
 			uintptr_t fileHandle = syncOpenFile(fileName);
 			assert(fileHandle != IO_REQUEST_FAILURE);
 			readPartitions(driverName, fileHandle, 0,
-			arg->desc.sectorCount, arg->desc.sectorSize, diskCode.value);
+			arg->port[p].desc.sectorCount, arg->port[p].desc.sectorSize, diskCode.value);
 			uintptr_t r = syncCloseFile(fileHandle);
 			assert(r != IO_REQUEST_FAILURE);
 		}
