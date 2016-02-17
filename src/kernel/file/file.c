@@ -867,6 +867,16 @@ uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t b
 	return systemCall4(SYSCALL_WRITE_FILE, handle, (uintptr_t)buffer, bufferSize);
 }
 
+uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize){
+	uintptr_t r;
+	r = systemCall_writeFile(handle, buffer, *bufferSize);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, bufferSize))
+		return IO_REQUEST_FAILURE;
+	return handle;
+}
+
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize){
 	return systemCall6(SYSCALL_SEEK_READ_FILE, handle, (uintptr_t)buffer, bufferSize,
 		LOW64(position), HIGH64(position));

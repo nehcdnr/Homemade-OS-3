@@ -56,7 +56,7 @@ uintptr_t syncEnumerateFile(const char * fileName);
 uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t bufferSize);
-//uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
+uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t *bufferSize);
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
