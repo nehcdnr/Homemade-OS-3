@@ -49,6 +49,10 @@ static int blockToIndex(MemoryBlockManager *m, const MemoryBlock *mb){
 	return elementToIndex(m, blockToElement(m, mb));
 }
 
+static MemoryBlock *indexToBlock(MemoryBlockManager *m, int index){
+	return elementToBlock(m, indexToElement(m, index));
+}
+
 void *addressToElement(MemoryBlockManager *m, uintptr_t address){
 	return indexToElement(m, addressToIndex(m, address));
 }
@@ -84,6 +88,18 @@ size_t ceilAllocateOrder(size_t s){
 	return i;
 }
 
+static MemoryBlock *findFreeBlock(MemoryBlockManager *m, size_t minOrder){
+	size_t o;
+	for(o = minOrder; 1; o++){
+		if(o > MAX_BLOCK_ORDER){
+			return NULL;
+		}
+		if(m->freeBlock[o - MIN_BLOCK_ORDER] != NULL){
+			return m->freeBlock[o - MIN_BLOCK_ORDER];
+		}
+	}
+}
+
 int isAddressInRange(MemoryBlockManager *m, uintptr_t address){
 	if(address % MIN_BLOCK_SIZE != 0)
 		return 0;
@@ -94,33 +110,42 @@ int isAddressInRange(MemoryBlockManager *m, uintptr_t address){
 	return 1;
 }
 
-MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size){
+MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t size, size_t splitSize){
 	assert(isAcquirable(&m->lock) == 0);
-	size_t i = ceilAllocateOrder(*size), i2;
-	if(i > MAX_BLOCK_ORDER){
+	size_t ao = ceilAllocateOrder(size), so;
+	if(ao > MAX_BLOCK_ORDER){
 		return NULL;
 	}
-	for(i2 = i; 1; i2++){
-		if(m->freeBlock[i2 - MIN_BLOCK_ORDER] != NULL)
-			break;
-		if(i2 == MAX_BLOCK_ORDER){
-			return NULL;
+	MemoryBlock *const b0 = findFreeBlock(m, ao);
+	if(b0 == NULL){
+		return NULL;
+	}
+	if(splitSize >= size){
+		so = ao;
+		splitSize = (1 << so);
+	}
+	else{
+		so = ceilAllocateOrder(splitSize);
+		assert((unsigned)(1 << so) == splitSize);
+	}
+	const int blockBegin = blockToIndex(m, b0);
+	const int splitBlockCount = DIV_CEIL(size, splitSize);
+	int s;
+	for(s = 0; s < splitBlockCount; s++){
+		MemoryBlock *const b = indexToBlock(m, blockBegin + s * (splitSize / MIN_BLOCK_SIZE));
+		assert(IS_IN_DQUEUE(b));
+		REMOVE_FROM_DQUEUE(b);
+		while(b->sizeOrder != so){
+			// split b and get buddy
+			b->sizeOrder--;
+			MemoryBlock *b2 = getBuddy(m, b);
+			assert(b2 != NULL && ((uintptr_t)b2) > ((uintptr_t)b));
+			assert(IS_IN_DQUEUE(b2) == 0 && b2->sizeOrder == b->sizeOrder);
+			ADD_TO_DQUEUE(b2, &m->freeBlock[b2->sizeOrder - MIN_BLOCK_ORDER]);
 		}
 	}
-	MemoryBlock *const b = m->freeBlock[i2 - MIN_BLOCK_ORDER];
-	REMOVE_FROM_DQUEUE(b);
-	while(i2 != i){
-		// split b and get buddy
-		b->sizeOrder--;
-		MemoryBlock *b2 = getBuddy(m, b);
-		assert(b2 != NULL);
-		assert(IS_IN_DQUEUE(b2) == 0 && b2->sizeOrder == b->sizeOrder);
-		ADD_TO_DQUEUE(b2, &m->freeBlock[b2->sizeOrder - MIN_BLOCK_ORDER]);
-		i2--;
-	}
-	m->freeSize -= (1 << i);
-	(*size) = (size_t)(1 << i);
-	return b;
+	m->freeSize -= splitBlockCount * splitSize;
+	return b0;
 }
 
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b){

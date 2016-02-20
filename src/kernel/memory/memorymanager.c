@@ -68,32 +68,18 @@ int checkAndReleaseKernelPages(void *linearAddress){
 	return checkAndReleasePages(kernelLinear, linearAddress);
 }
 
-// Physical
-PhysicalAddress _allocatePhysicalPages(PhysicalMemoryBlockManager *physical, size_t size){
-	size_t p_size = size;
-	PhysicalAddress p_address = {allocatePhysicalBlock(physical, &p_size)};
-	//if(p_address.value == INVALID_PAGE_ADDRESS){
-	//}
-	return p_address;
-}
-
-void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress address){
-	releasePhysicalBlock(physical, address.value);
-}
-
 // LinearMemoryManager
 
 void *mapPages(LinearMemoryManager *m, PhysicalAddress physicalAddress, size_t size, PageAttribute attribute){
 	assert(size % PAGE_SIZE == 0);
 	assert(m->page != NULL && m->linear != NULL);
 	// linear
-	size_t l_size = size;
-	uintptr_t linearAddress = allocateLinearBlock(m, &l_size);
+	uintptr_t linearAddress = allocateLinearBlock(m, size);
 	EXPECT(linearAddress != INVALID_PAGE_ADDRESS);
-	assert(linearAddress % PAGE_SIZE == 0 && l_size != 0);
+	assert(linearAddress % PAGE_SIZE == 0 && size != 0);
 	// assume linear memory manager and page table are consistent
-	// linearAddess[0 ~ l_size] are guaranteed to be available
-	// it is safe to map pages of l_size
+	// linearAddess[0 ~ size] are available
+	// it is safe to map pages in the range
 	int result = _mapPage_LP(m->page, m->physical, (void*)linearAddress, physicalAddress, size, attribute);
 	EXPECT(result == 1);
 
@@ -138,8 +124,7 @@ void *checkAndMapExistingPages(
 		src = kernelLinear;
 	}
 	assert(dst == kernelLinear || src == kernelLinear);
-	size_t l_size = size;
-	uintptr_t dstLinear = allocateLinearBlock(dst, &l_size);
+	uintptr_t dstLinear = allocateLinearBlock(dst, size);
 	EXPECT(dstLinear != INVALID_PAGE_ADDRESS);
 	uintptr_t s;
 	for(s = 0; s < size; s += PAGE_SIZE){
@@ -176,10 +161,10 @@ int checkAndUnmapPages(LinearMemoryManager *m, void *linearAddress){
 }
 
 void releaseReservedPage(LinearMemoryManager *m, PhysicalAddress physicalAddress){
-	_releasePhysicalPages(m->physical, physicalAddress);
+	releasePhysicalBlock(m->physical, physicalAddress.value);
 }
 
-
+/* unused functions
 static void _deleteBufferPhysicalAddressArray(PhysicalAddressArray *pa, uintptr_t paLength){
 	while(paLength != 0){
 		paLength--;
@@ -197,7 +182,8 @@ PhysicalAddressArray *checkAndReservePages(LinearMemoryManager *lm, const void *
 	pa->physicalManager = lm->physical;
 	uintptr_t a = 0;
 	for(a = 0; a < pageLength; a++){
-		pa->address[a] = checkAndReservePage(lm, (void*)(((uintptr_t)linearAddress) + a * PAGE_SIZE), 0/*TODO*/);
+		// TODO: attribute
+		pa->address[a] = checkAndReservePage(lm, (void*)(((uintptr_t)linearAddress) + a * PAGE_SIZE), 0);
 		if(pa->address[a].value == INVALID_PAGE_ADDRESS)
 			break;
 	}
@@ -235,14 +221,19 @@ void *mapReservedPages(LinearMemoryManager *lm, const PhysicalAddressArray *pa, 
 	ON_ERROR;
 	return NULL;
 }
-
-void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
+*/
+static void *_allocatePages(LinearMemoryManager *m, size_t size, int contiguous, PageAttribute attribute){
 	// linear
-	size_t l_size = size;
-	uintptr_t linearAddress = allocateLinearBlock(m, &l_size);
+	uintptr_t linearAddress = allocateLinearBlock(m, size);
 	EXPECT(linearAddress != INVALID_PAGE_ADDRESS);
 	// physical
-	int ok = _mapPage_L(m->page, m->physical, (void*)linearAddress, size, attribute);
+	int ok;
+	if(contiguous){
+		ok = _mapContiguousPage_L(m->page, m->physical, (void*)linearAddress, size, attribute);
+	}
+	else{
+		ok = _mapPage_L(m->page, m->physical, (void*)linearAddress, size, attribute);
+	}
 	EXPECT(ok);
 
 	commitAllocatingLinearBlock(m, linearAddress);
@@ -252,6 +243,14 @@ void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute
 	releaseLinearBlock(m->linear, (uintptr_t)linearAddress);
 	ON_ERROR;
 	return NULL;
+}
+
+void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
+	return _allocatePages(m, size, 0, attribute);
+}
+
+void *allocateContiguousPages(LinearMemoryManager *m, size_t size, PageAttribute attribute){
+	return _allocatePages(m, size, 1, attribute);
 }
 
 void *allocateKernelPages(size_t size, PageAttribute attribute){
@@ -435,12 +434,12 @@ void testMemoryManager2(void){
 	for(a=0;a<TEST_N;a++){
 		size_t s=r*MIN_BLOCK_SIZE;
 		r=(r*31+5)%197;
-		p[a]=_allocatePhysicalPages(kernelLinear->physical, s);
+		p[a].value=allocatePhysicalBlock(kernelLinear->physical, s, s);
 		if(p[a].value == INVALID_PAGE_ADDRESS)continue;
 	}
 	for(a=0;a<TEST_N;a++){
 		if(p[a].value == INVALID_PAGE_ADDRESS)continue;
-		_releasePhysicalPages(kernelLinear->physical, p[a]);
+		releasePhysicalBlock(kernelLinear->physical, p[a].value);
 	}
 }
 
@@ -457,6 +456,45 @@ void testMemoryManager3(void){
 		assert(chk.value == INVALID_PAGE_ADDRESS);
 	}
 	releaseKernelMemory(m1);
+}
+
+void testMemoryManager4(void){
+	uint8_t *a[TEST_N];
+	size_t s[TEST_N];
+	int i;
+	unsigned r = 3893;
+	for(i = 0; i < TEST_N; i++){
+		r = (r * 47 + 5) % 10001;
+		s[i] = r;
+		a[i] = allocateContiguousPages(kernelLinear, PAGE_SIZE * r, KERNEL_PAGE);
+		if(a[i] == NULL)
+			continue;
+		size_t j;
+		for(j = 0; j < s[i]; j++){
+			a[i][j * PAGE_SIZE] = (uint8_t)i;
+		}
+	}
+	for(i = 0; i < TEST_N; i++){
+		int i2=(i*7)%TEST_N;
+		if(a[i2] == NULL)
+			continue;
+		size_t j;
+		for(j = 0; j < s[i2]; j++){
+			uint8_t *a2 = &a[i2][j * PAGE_SIZE];
+			assert(a2[0] == (uint8_t)i2);
+			a2[0]= 0;
+		}
+		for(j = 0; j < s[i2]; j++){
+			uint8_t *a2 = &a[i2][j * PAGE_SIZE];
+			if(j == 0 && checkAndReleasePages(kernelLinear, a2) == 0){
+				assert(0);
+			}
+			if(checkAndReleasePages(kernelLinear, a2) != 0){
+				assert(0);
+			}
+		}
+	}
+
 }
 
 #undef TEST_N

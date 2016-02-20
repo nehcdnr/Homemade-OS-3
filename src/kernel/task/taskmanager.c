@@ -216,25 +216,25 @@ static_assert(KERNEL_STACK_SIZE % PAGE_SIZE == 0);
 
 //TODO: v8086Loader
 static int initV8086Memory(void){
-	PageManager *p = processorLocalTask()->taskMemory->manager.page;
+	LinearMemoryManager *m = &processorLocalTask()->taskMemory->manager;
 	PhysicalAddress biosLow = {0x0}, // ~ 0x500: BIOS reserved
 	v8086Stack = {V8086_STACK_BOTTOM}, // ~ 0x7c00: free
 	v8086Text = {V8086_STACK_TOP}, // ~ 0x80000: free (OS)
 	// biosHigh = {0x80000}, ~0x100000: reserved
 	v8086End ={0x100000 + 0x10000};
 //FIXME: buddy allocation
-	int ok = mapPage_LP(p, (void*)biosLow.value, biosLow, v8086Stack.value - biosLow.value, USER_WRITABLE_PAGE);
+	int ok = _mapPage_LP(m->page, m->physical, (void*)biosLow.value, biosLow, v8086Stack.value - biosLow.value, USER_WRITABLE_PAGE);
 	EXPECT(ok);
-	ok = mapPage_L(p, (void*)v8086Stack.value, v8086Text.value - v8086Stack.value, USER_WRITABLE_PAGE);
+	ok = _mapPage_L(m->page, m->physical, (void*)v8086Stack.value, v8086Text.value - v8086Stack.value, USER_WRITABLE_PAGE);
 	EXPECT(ok);
-	ok = mapPage_LP(p, (void*)v8086Text.value, v8086Text, v8086End.value - v8086Text.value, USER_WRITABLE_PAGE);
+	ok = _mapPage_LP(m->page, m->physical, (void*)v8086Text.value, v8086Text, v8086End.value - v8086Text.value, USER_WRITABLE_PAGE);
 	EXPECT(ok);
 	return 1;
 	// unmapPage_LP(p, (void*)v8086Text.value, v8086End.value - v8086Text.value);
 	ON_ERROR;
-	unmapPage_L(p, (void*)v8086Stack.value, v8086Text.value - v8086Stack.value);
+	_unmapPage_L(m->page, m->physical, (void*)v8086Stack.value, v8086Text.value - v8086Stack.value);
 	ON_ERROR;
-	unmapPage_LP(p, (void*)biosLow.value, v8086Stack.value - biosLow.value);
+	_unmapPage_LP(m->page, m->physical, (void*)biosLow.value, v8086Stack.value - biosLow.value);
 	ON_ERROR;
 	return 0;
 }

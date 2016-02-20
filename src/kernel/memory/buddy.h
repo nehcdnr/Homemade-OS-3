@@ -41,7 +41,7 @@ size_t getFreeBlockSize(MemoryBlockManager *m);
 int isAddressInRange(MemoryBlockManager *m, uintptr_t address);
 
 // return NULL if fail
-MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t *size);
+MemoryBlock *allocateBlock_noLock(MemoryBlockManager *m, size_t size, size_t splitSize);
 void releaseBlock_noLock(MemoryBlockManager *m, MemoryBlock *b);
 
 typedef void(*InitMemoryBlockFunction)(void*);

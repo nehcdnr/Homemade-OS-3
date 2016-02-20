@@ -295,7 +295,7 @@ static int setPage(
 	while(isPDEPresent(pde) == 0){
 		pdeOK = 0;
 		assert(physical != NULL && linearAddress < KERNEL_LINEAR_BEGIN);
-		PhysicalAddress pt_physical = _allocatePhysicalPages(physical, sizeof(PageTable));
+		PhysicalAddress pt_physical = {allocatePhysicalBlock(physical, sizeof(PageTable), sizeof(PageTable))};
 		if(pt_physical.value == INVALID_PAGE_ADDRESS){
 			break;
 		}
@@ -363,7 +363,7 @@ static void releaseInvalidatedPage(
 	assert(isPTEPresent(pt_linear->entry + i2) == 0);
 #endif
 	PhysicalAddress page_physical = getPTEAddress(pt_linear->entry + i2);
-	_releasePhysicalPages(physical, page_physical);
+	releasePhysicalBlock(physical, page_physical.value);
 	/* release PageTable and set PD
 	acquireLock(pdLock);
 	if(pt_attribute->external == 0){
@@ -657,7 +657,7 @@ void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
 				continue;
 			}
 			if(isPDEPresent(deletePage->page->pd.entry + p)){
-				releasePhysicalPages(getPDEAddress(deletePage->page->pd.entry + p));
+				releasePhysicalBlock(kernelLinear->physical, getPDEAddress(deletePage->page->pd.entry + p).value);
 			}
 		}
 	}
@@ -665,7 +665,7 @@ void invalidatePageTable(PageManager *deletePage, PageManager *loadPage){
 		setCR3(toCR3(loadPage));
 	}
 	for(i = 0; i * PAGE_SIZE < evalSize; i++){
-		releasePhysicalPages(reservedPhysical[i]);
+		releasePhysicalBlock(kernelLinear->physical, reservedPhysical[i].value);
 	}
 }
 
@@ -699,17 +699,17 @@ int _mapPage_L(
 	void *linearAddress, size_t size,
 	PageAttribute attribute
 ){
-	uintptr_t l_addr = (uintptr_t)linearAddress;
 	assert(size % PAGE_SIZE == 0);
+	uintptr_t l_addr = (uintptr_t)linearAddress;
 	size_t s;
 	for(s = 0; s < size; s += PAGE_SIZE){
-		PhysicalAddress p_addr = _allocatePhysicalPages(physical, PAGE_SIZE);
+		PhysicalAddress p_addr = {allocatePhysicalBlock(physical, PAGE_SIZE, PAGE_SIZE)};
 		if(p_addr.value == INVALID_PAGE_ADDRESS){
 			break;
 		}
-		int result = setPage(p, physical, l_addr + s, p_addr, attribute);
-		if(result != 1){
-			_releasePhysicalPages(physical, p_addr);
+		int ok = setPage(p, physical, l_addr + s, p_addr, attribute);
+		if(ok == 0){
+			releasePhysicalBlock(physical, p_addr.value);
 			break;
 		}
 	}
@@ -717,8 +717,36 @@ int _mapPage_L(
 	return 1;
 
 	ON_ERROR;
-
 	_unmapPage_L(p, physical, linearAddress, s);
+	return 0;
+}
+
+int _mapContiguousPage_L(
+	PageManager *p, PhysicalMemoryBlockManager *physical,
+	void *linearAddress, size_t size,
+	PageAttribute attribute
+){
+	assert(size % PAGE_SIZE == 0);
+	uintptr_t l_addr = (uintptr_t)linearAddress;
+	uintptr_t p_addr0 = allocatePhysicalBlock(physical, size, PAGE_SIZE);
+	EXPECT(p_addr0 != INVALID_PAGE_ADDRESS);
+	size_t s;
+	for(s = 0; s < size; s += PAGE_SIZE){
+		PhysicalAddress p_addr = {p_addr0 + s};
+		int ok = setPage(p, physical, l_addr + s, p_addr, attribute);
+		if(ok == 0)
+			break;
+	}
+	EXPECT(s >= size);
+	return 1;
+	ON_ERROR;
+	size_t a = size;
+	while(a > s){
+		a -= PAGE_SIZE;
+		releasePhysicalBlock(physical, p_addr0 + a);
+	}
+	_unmapPage_L(p, physical, linearAddress, s);
+	ON_ERROR;
 	return 0;
 }
 

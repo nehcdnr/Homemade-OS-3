@@ -173,17 +173,16 @@ static int extendLinearBlock_noLock(LinearMemoryManager *m, int exCount){
 	return bm->b.blockCount >= newBlockCount;
 }
 
-uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size){
+uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t size){
 	LinearMemoryBlockManager *bm = m->linear;
-	size_t l_size = *size;
 	LinearMemoryBlock *lmb;
 	MemoryBlock *block;
 	acquireLock(&bm->b.lock);
-	block = allocateBlock_noLock(&bm->b, &l_size);
+	block = allocateBlock_noLock(&bm->b, size, size);
 	if(block != NULL){ // ok
 		goto allocate_return;
 	}
-	int exCount = getExtendBlockCount(bm, *size);
+	int exCount = getExtendBlockCount(bm, size);
 	if(exCount == 0){ // error
 		goto allocate_return;
 	}
@@ -191,15 +190,14 @@ uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size){
 		// printk("warning: extendLinearBlock failed");
 		goto allocate_return;
 	}
-	l_size = *size;
-	block = allocateBlock_noLock(&bm->b, &l_size);
+	block = allocateBlock_noLock(&bm->b, size, size);
 	//if(block != NULL){
 	//	goto allocate_return;
 	//}
 	allocate_return:
 	if(block != NULL){
 		lmb = blockToElement(&bm->b, block);
-		lmb->mappedSize = (*size);
+		lmb->mappedSize = size;
 		assert(lmb->status == MEMORY_FREE_OR_COVERED);
 		lmb->status = MEMORY_LOCKED;
 	}
@@ -208,9 +206,7 @@ uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size){
 		return INVALID_PAGE_ADDRESS;
 	}
 
-	(*size) = l_size;
 	uintptr_t linearAddress = elementToAddress(&bm->b, lmb);
-
 	return linearAddress;
 }
 
@@ -280,7 +276,7 @@ void releaseAllLinearBlocks(LinearMemoryManager *m){
 	uintptr_t rlsPageBegin = CEIL(getInitialLinearBlockEnd(bm), PAGE_SIZE);
 	uintptr_t rlsPageEnd = CEIL((uintptr_t)indexToElement(&bm->b, bm->b.blockCount), PAGE_SIZE);
 	// see extendLinearBlock_noLock
-	unmapPage_L(m->page, (void*)rlsPageBegin, rlsPageEnd - rlsPageBegin);
+	_unmapPage_L(m->page, m->physical, (void*)rlsPageBegin, rlsPageEnd - rlsPageBegin);
 	resetBlockArray(&bm->b, bm->initialBlockCount, initLinearMemoryBlock);
 }
 

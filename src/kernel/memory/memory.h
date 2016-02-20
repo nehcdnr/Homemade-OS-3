@@ -10,12 +10,6 @@ typedef struct{
 
 typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
 
-// if failure, return NULL, which is not a usable physical address
-PhysicalAddress _allocatePhysicalPages(PhysicalMemoryBlockManager *physical, size_t size);
-#define allocatePhysicalPages(SIZE) _allocatePhysicalPages(kernelLinear->physical, (SIZE))
-void _releasePhysicalPages(PhysicalMemoryBlockManager *physical, PhysicalAddress address);
-#define releasePhysicalPages(ADDRESS) _releasePhysicalPages(kernelLinear->physical, (ADDRESS))
-
 // return free size
 //size_t physicalMemoryUsage(size_t *totalSize);
 //size_t getKernelMemoryUsage(size_t *totalSize);
@@ -50,31 +44,28 @@ typedef enum PageAttribute{
 }PageAttribute;
 
 uint32_t toCR3(PageManager *p);
+
 int _mapPage_L(
 	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, size_t size,
 	PageAttribute attribute
 );
-#define mapPage_L(PAGE, LINEAR, SIZE, ATTRIBUTE) \
-	_mapPage_L(PAGE, kernelLinear->physical, LINEAR, SIZE, ATTRIBUTE)
+
+int _mapContiguousPage_L(
+	PageManager *p, PhysicalMemoryBlockManager *physical,
+	void *linearAddress, size_t size,
+	PageAttribute attribute
+);
 
 int _mapPage_LP(
 	PageManager *p, PhysicalMemoryBlockManager *physical,
 	void *linearAddress, PhysicalAddress physicalAddress, size_t size,
 	PageAttribute attribute
 );
-#define mapPage_LP(PAGE, LINEAR, PHYSICAL, SIZE, ATTRIBUTE) \
-	_mapPage_LP(PAGE, kernelLinear->physical, LINEAR, PHYSICAL, SIZE, ATTRIBUTE)
 
 void _unmapPage(PageManager *p, PhysicalMemoryBlockManager *physical, void *linearAddress, size_t size);
-
 #define _unmapPage_L _unmapPage
-#define unmapPage_L(PAGE, LINEAR, SIZE) \
-	_unmapPage_L(PAGE, kernelLinear->physical, LINEAR, SIZE)
-
 #define _unmapPage_LP _unmapPage
-#define unmapPage_LP(PAGE, LINEAR, SIZE) \
-	_unmapPage_LP(PAGE, kernelLinear->physical, LINEAR, SIZE)
 
 // kernel linear memory
 void initKernelMemory(void);
@@ -134,6 +125,7 @@ int isKernelLinearAddress(uintptr_t address);
 
 // allocate new linear memory and new physical memory
 void *allocatePages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
+void *allocateContiguousPages(LinearMemoryManager *m, size_t size, PageAttribute attriute);
 void *allocateKernelPages(size_t size, PageAttribute attribute);
 //void releasePages(LinearMemoryManager *m, void *linearAddress);
 //void releaseKernelPages(void *linearAddress);
@@ -148,6 +140,7 @@ int checkAndReleaseKernelPages(void *linearAddress);
 void testMemoryManager(void);
 void testMemoryManager2(void);
 void testMemoryManager3(void);
+void testMemoryManager4(void);
 void testMemoryTask(void);
 void testCreateThread(void *arg);
 #endif

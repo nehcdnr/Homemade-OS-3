@@ -19,7 +19,7 @@ int getPhysicalBlockCount(PhysicalMemoryBlockManager *m);
 size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m);
 
 // change reference count from 0 to 1
-uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size);
+uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t size, size_t splitSize);
 // if referenceCount == MAX_REFERENCE_COUNT, do not increase it and return 0
 // otherwise, increase and return 1
 int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address);
@@ -53,7 +53,7 @@ size_t getAllocatedBlockSize(LinearMemoryBlockManager *m, uintptr_t address);
 void releaseLinearBlock(LinearMemoryBlockManager *m, uintptr_t address);
 
 // allocate linear blocks only
-uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t *size);
+uintptr_t allocateLinearBlock(LinearMemoryManager *m, size_t size);
 void commitAllocatingLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);
 // release linear blocks, pages, and physical blocks
 int checkAndReleaseLinearBlock(LinearMemoryManager *m, uintptr_t linearAddress);

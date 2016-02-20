@@ -52,18 +52,24 @@ size_t getFreePhysicalBlockSize(PhysicalMemoryBlockManager *m){
 	return m->b.freeSize;
 }
 
-uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t *size){
-	MemoryBlock *b;
-	PhysicalMemoryBlock *pmb;
+uintptr_t allocatePhysicalBlock(PhysicalMemoryBlockManager *m, size_t size, size_t splitSize){
 	acquireLock(&m->b.lock);
-	b = allocateBlock_noLock(&m->b, size);
-	if(b != NULL){
-		pmb = blockToElement(&m->b, b);
-		assert(pmb->referenceCount == 0);
-		pmb->referenceCount = 1;
+	MemoryBlock *b = allocateBlock_noLock(&m->b, size, splitSize);
+	uintptr_t a;
+	if(b == NULL){
+		a = INVALID_PAGE_ADDRESS;
+	}
+	else{
+		a = blockToAddress(&m->b, b);
+		size_t i;
+		for(i = 0; i < size; i += splitSize){
+			PhysicalMemoryBlock *pmb = addressToElement(&m->b, a + i);
+			assert(pmb->referenceCount == 0);
+			pmb->referenceCount = 1;
+		}
 	}
 	releaseLock(&m->b.lock);
-	return (b == NULL? INVALID_PAGE_ADDRESS: elementToAddress(&m->b, pmb));
+	return a;
 }
 
 int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){
@@ -72,6 +78,7 @@ int addPhysicalBlockReference(PhysicalMemoryBlockManager *m, uintptr_t address){
 	// allow out of range
 	if(isAddressInRange(&m->b, address)){
 		PhysicalMemoryBlock *pmb = addressToElement(&m->b, address);
+		// if the block is covered by a larger one, the assertion fails
 		assert(pmb->referenceCount > 0);
 		ok = (pmb->referenceCount < MAX_REFERENCE_COUNT);
 		if(ok){

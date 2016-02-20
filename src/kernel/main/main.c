@@ -28,6 +28,7 @@ static void initService(void){
 		//testKFS,
 		//testFAT,
 		//testAHCI
+		//testI8254xTransmit
 	};
 	unsigned int i;
 	Task *t;
@@ -65,6 +66,7 @@ void c_entry(void){
 		//testMemoryManager();
 		//testMemoryManager2();
 		//testMemoryManager3();
+		//testMemoryManager4();
 #endif
 	}
 	// 3. GDT
