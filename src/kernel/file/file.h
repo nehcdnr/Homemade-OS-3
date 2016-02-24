@@ -42,6 +42,7 @@ typedef union{
 	struct{
 		uintptr_t enumeration: 1;
 		uintptr_t writable: 1;
+		// uintptr_t noRead: 1;
 	};
 }OpenFileMode;
 

@@ -27,8 +27,10 @@ static void afterExLock(Task *t, uintptr_t exLockPtr){
 }
 
 static int acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLockQueue)(void*, Task *), int doBlock){
+	// cannot block when interrupt is off
+	assert(getEFlags().bit.interrupt != 0);
 	int interruptEnabled = getEFlags().bit.interrupt;
-	// turn off interrupt to prevent sti in releaseLock in pushSemaphoreQueue
+	// turn off interrupt to prevent sti in releaseLock in pushLockQueue
 	if(interruptEnabled){
 		cli();
 	}
@@ -89,9 +91,7 @@ static Task *_releaseSemaphore(void *inst){
 	Semaphore *s = inst;
 	Task *t = popQueue(&s->taskQueue);
 	if(t == NULL){
-		//if(s->quota + 1 == 0xffffffff){
-		//	assert(0);
-		//}
+		assert(s->quota + 1 != 0x7fffffff);
 		s->quota += 1;
 	}
 	return t;
@@ -103,6 +103,15 @@ int tryAcquireSemaphore(Semaphore *s){
 
 void acquireSemaphore(Semaphore *s){
 	acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue, 1);
+}
+
+int acquireAllSemaphore(Semaphore *s){
+	acquireSemaphore(s);
+	int r;
+	for(r = 1; 1; r++){
+		if(tryAcquireSemaphore(s) == 0)
+			return r;
+	}
 }
 
 void releaseSemaphore(Semaphore *s){

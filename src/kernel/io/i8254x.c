@@ -13,16 +13,31 @@ typedef struct{
 
 static_assert(sizeof(GenericDescriptor) == 16);
 
+typedef union{
+	uint8_t value;
+	struct{
+		uint8_t done: 1;
+		uint8_t endOfPacket: 1;
+		uint8_t ignoreChecksum: 1;
+		uint8_t vlanPacket: 1;
+		uint8_t reserved: 1;
+		uint8_t tcpChecksum: 1;
+		uint8_t ipChecksum: 1;
+		uint8_t passedInExactFilter: 1;
+	};
+}ReceiveStatus;
+
 typedef struct{
 	uint64_t address;
 	uint16_t length;
 	uint16_t checksum; // not supported in some chips
-	uint8_t status;
+	ReceiveStatus status;
 	uint8_t errors;
 	uint16_t special; // not support in some chips
 }ReceiveDescriptor;
 
 static_assert(sizeof(ReceiveDescriptor) == 16);
+static_assert(sizeof(ReceiveStatus) == 1);
 
 static void initReceiveDescriptor(volatile ReceiveDescriptor *r, volatile void *buffer){
 	const uintptr_t offset = ((uintptr_t)buffer) % PAGE_SIZE;
@@ -32,33 +47,46 @@ static void initReceiveDescriptor(volatile ReceiveDescriptor *r, volatile void *
 	r->address = physicalAddress.value + offset;
 }
 
+typedef union{
+	uint8_t value;
+	struct{
+		uint8_t endOfPacket: 1;
+		uint8_t insertFCS: 1;
+		uint8_t insertChecksum: 1;
+		uint8_t reportStatus: 1;
+		uint8_t reportPacketSent: 1;
+		uint8_t extension: 1;
+		uint8_t vlanEnable: 1;
+		uint8_t delayInterrupt: 1;
+	};
+}TransmitCommand;
+
+typedef union{
+	uint8_t value;
+	struct{
+		uint8_t done: 1;
+		uint8_t excessCollision: 1;
+		uint8_t lastCollision: 1;
+		uint8_t transmitUnderrun: 1;
+		uint8_t reserved: 4;
+	};
+}TransmitStatus;
+
 typedef struct{
 	uint64_t address;
 	uint16_t length;
 	uint8_t checksumOffset;
-	uint8_t command;
-	uint8_t status: 4;
-	uint8_t reserved: 4;
+	TransmitCommand command;
+	TransmitStatus status;
 	uint8_t checksumStart;
 	uint16_t special;
 }LegacyTransmitDescriptor;
 
 static_assert(sizeof(LegacyTransmitDescriptor) == 16);
+static_assert(sizeof(TransmitCommand) == 1);
+static_assert(sizeof(TransmitStatus) == 1);
 
 static int initTransmitDescriptor(volatile LegacyTransmitDescriptor *td, volatile void *buffer, uintptr_t length){
-	union TransmitCommand{
-		uint8_t value;
-		struct{
-			uint8_t endOfPacket: 1;
-			uint8_t insertFCS: 1;
-			uint8_t insertChecksum: 1;
-			uint8_t reportStatus: 1;
-			uint8_t reportPacketSent: 1;
-			uint8_t extension: 1;
-			uint8_t vlanEnable: 1;
-			uintptr_t delayInterrupt: 1;
-		};
-	};
 	if(length > 1522 || length < 64){
 		return 0;
 	}
@@ -67,7 +95,7 @@ static int initTransmitDescriptor(volatile LegacyTransmitDescriptor *td, volatil
 	if(pa.value == INVALID_PAGE_ADDRESS){
 		return 0;
 	}
-	union TransmitCommand cmd = {value: 0};
+	TransmitCommand cmd = {value: 0};
 	cmd.endOfPacket = 1; // TODO: test
 	cmd.insertFCS = 1;
 	cmd.insertChecksum = 0;
@@ -80,9 +108,8 @@ static int initTransmitDescriptor(volatile LegacyTransmitDescriptor *td, volatil
 	td->length = length;
 	td->checksumOffset = 0;
 	td->checksumStart = 0;
-	td->command = cmd.value;
-	td->reserved = 0;
-	td->status = 0;
+	td->command = cmd;
+	td->status.value = 0;
 	td->special = 0;
 	return 1;
 }
@@ -225,6 +252,8 @@ typedef union{
 	};
 }TransmitControlRegister;
 
+static_assert(sizeof(TransmitControlRegister) == sizeof(uint32_t));
+
 typedef union{
 	uint32_t value;
 	struct{
@@ -235,7 +264,7 @@ typedef union{
 	};
 }InterPacketGapRegister;
 
-static_assert(sizeof(TransmitControlRegister) == sizeof(uint32_t));
+static_assert(sizeof(InterPacketGapRegister) == sizeof(uint32_t));
 
 typedef struct RWI8254xRequest{
 	RWFileRequest *rwfr;
@@ -259,6 +288,7 @@ static RWI8254xRequest *createRWI8254xRequest(RWFileRequest *rwfr, uint8_t *buff
 }
 
 #define RECEIVE_DESCRIPTOR_BUFFER_SIZE (256)
+#define TRANSMIT_DESCRIPTOR_BUFFER_SIZE (512)
 
 typedef struct{
 	uintptr_t descriptorCount; // size is multiple of 128 bytes
@@ -269,7 +299,12 @@ typedef struct{
 		volatile DataTransmitDescriptor *data;
 		volatile ReceiveDescriptor *receive;
 	}; // aligned to 16-bit
-	uintptr_t bufferSize;
+	uintptr_t bufferCount;
+	// ring buffer queue
+	// bufferTail > descriptors written by hardware >= bufferHead
+	// bufferHead > descriptors r/w by software >= bufferTail
+	uintptr_t bufferTail, bufferHead;
+	uintptr_t maxBufferSize;
 	volatile uint8_t *bufferArray;
 
 	// HEAD >= intHead >= taskHead > taskTail >= TAIL
@@ -284,10 +319,6 @@ typedef struct{
 	RWI8254xRequest *pending;
 	Semaphore *reqSemaphore;
 }I8254xTransmit;
-
-typedef struct{
-	I8254xDescriptorQueue queue;
-}I8254xReceive;
 
 static void addPendingRWI8254xRequest(I8254xTransmit *q, RWI8254xRequest *r){
 	acquireLock(&q->lock);
@@ -306,15 +337,56 @@ static RWI8254xRequest *removeRWI8254xRequest(I8254xTransmit *q){
 	return r;
 }
 
+typedef struct I8254xReader{
+	RWI8254xRequest *pending;
+	// I8254xReceive.bufferHead >= bufferIndex >= I8254xReceive.bufferTail
+	uintptr_t bufferIndex;
+	uintptr_t offset;
+
+	Semaphore *semaphore;
+	struct I8254xReader **prev, *next;
+}I8254xReader;
+
+typedef struct{
+	I8254xDescriptorQueue queue;
+	uintptr_t *bufferSize;
+	// protect bufferHead and reader
+	Semaphore *readerSemaphore;
+	I8254xReader *reader;
+}I8254xReceive;
+
+static void initI8254xReader(I8254xReader *r, I8254xReceive *q){
+	r->pending = NULL;
+	r->semaphore = q->readerSemaphore;
+	r->prev = NULL;
+	r->next = NULL;
+	acquireSemaphore(r->semaphore);
+	r->bufferIndex = q->queue.bufferHead;
+	r->offset = 0;
+	ADD_TO_DQUEUE(r, &q->reader);
+	releaseSemaphore(r->semaphore);
+}
+
+static void addReadI8254xRequest(I8254xReader *r, RWI8254xRequest *req){
+	acquireSemaphore(r->semaphore);
+	ADD_TO_DQUEUE(req, &r->pending);
+	releaseSemaphore(r->semaphore);
+}
+
+static void destroyI8254xReader(I8254xReader *r){
+	assert(r->pending == NULL);
+	acquireSemaphore(r->semaphore);
+	REMOVE_FROM_DQUEUE(r);
+	releaseSemaphore(r->semaphore);
+}
+
 #define MAC_ADDRESS_SIZE (6)
 #define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
-
 
 #define TO_BIG_ENDIAN_16(X) ((uint16_t)((((X) << 8) & 0xff00) | (((X) >> 8) & 0xff)))
 
 #define ETHERTYPE_IPV4 TO_BIG_ENDIAN_16(0x0800)
 #define ETHERTYPE_ARP TO_BIG_ENDIAN_16(0x0806)
-
 
 typedef struct{
 	// big endian
@@ -351,40 +423,62 @@ typedef struct I8254xDevice{
 	struct I8254xDevice *next, **prev;
 }I8254xDevice;
 
-static int initDescriptorQueue(I8254xDescriptorQueue *r){
-	const uintptr_t descArraySize = PAGE_SIZE;
-	// 4096 / 16 = 256
-	r->descriptorCount = descArraySize / sizeof(r->generic[0]);
-	r->receive = allocatePages(kernelLinear, descArraySize, KERNEL_NON_CACHED_PAGE);
-	EXPECT(r->receive != NULL);
-	// 256 * 256 = 65536
-	r->bufferSize = RECEIVE_DESCRIPTOR_BUFFER_SIZE;
-	r->bufferArray = allocatePages(kernelLinear, r->bufferSize * r->descriptorCount, KERNEL_NON_CACHED_PAGE);
-	EXPECT(r->bufferArray != NULL);
+typedef struct{
+	I8254xDevice *device;
+	I8254xReader reader;
+}OpenedI8254xDevice;
+
+static OpenedI8254xDevice *createOpenedI8254xDevice(I8254xDevice *d){
+	OpenedI8254xDevice *NEW(od);
+	if(od == NULL){
+		return NULL;
+	}
+	od->device = d;
+	initI8254xReader(&od->reader, &d->receive);
+	return od;
+}
+
+static int initDescriptorQueue(I8254xDescriptorQueue *q, uintptr_t descCnt, uintptr_t bSize, uintptr_t bCnt){
+	const uintptr_t descArraySize = descCnt * sizeof(q->generic[0]);
+	q->descriptorCount = descCnt;
+	q->generic = allocateContiguousPages(kernelLinear, descArraySize, KERNEL_NON_CACHED_PAGE);
+	EXPECT(q->generic != NULL);
+	q->bufferCount = bCnt;
+	q->bufferHead = 0;
+	q->bufferTail = 0;
+	q->maxBufferSize = bSize;
+	assert(PAGE_SIZE % bSize == 0);
+	q->bufferArray = allocatePages(kernelLinear, q->maxBufferSize * q->bufferCount, KERNEL_NON_CACHED_PAGE);
+	EXPECT(q->bufferArray != NULL);
 	// see regs[RECEIVE_DESCRIPTORS_HEAD] or regs[TRANSMIT_DESCRIPTORS_HEAD]
-	r->intHead = 0;
-	r->taskHead = 0;
-	r->taskTail = 0;
-	r->intSemaphore = createSemaphore(0);
-	EXPECT(r->intSemaphore != NULL);
+	q->intHead = 0;
+	q->taskHead = 0;
+	q->taskTail = 0;
+	q->intSemaphore = createSemaphore(0);
+	EXPECT(q->intSemaphore != NULL);
 
 	return 1;
 	//deleteSemaphore(r->intSemaphore);
 	ON_ERROR;
-	checkAndReleasePages(kernelLinear, (void*)r->bufferArray);
+	checkAndReleasePages(kernelLinear, (void*)q->bufferArray);
 	ON_ERROR;
-	checkAndReleasePages(kernelLinear, (void*)r->receive);
+	checkAndReleasePages(kernelLinear, (void*)q->receive);
 	ON_ERROR;
 	return 0;
 }
 
 static uint64_t getDescriptorQueueBase(I8254xDescriptorQueue *q){
-	uint64_t p = checkAndTranslatePage(kernelLinear, (void*)q->legacy).value;
+	uint64_t p = checkAndTranslatePage(kernelLinear, (void*)q->generic).value;
 	assert((uintptr_t)p != INVALID_PAGE_ADDRESS);
 	return p;
 }
+
+static volatile uint8_t *getDescriptorQueueBuffer(const I8254xDescriptorQueue *q, uintptr_t i){
+	volatile uint8_t *r = q->bufferArray + i * q->maxBufferSize;
+	return r;
+}
+
 static void destroyDescriptorQueue(I8254xDescriptorQueue *q){
-	// reset register
 	assert(getSemaphoreValue(q->intSemaphore) == 0 &&
 		q->bufferArray != NULL && q->receive != NULL);
 	deleteSemaphore(q->intSemaphore);
@@ -393,9 +487,16 @@ static void destroyDescriptorQueue(I8254xDescriptorQueue *q){
 }
 
 static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
+	const uintptr_t descCnt = PAGE_SIZE / sizeof(GenericDescriptor);
 	I8254xDescriptorQueue *q = &r->queue;
-	int ok = initDescriptorQueue(q);
+	// half of the buffers are for hardware, the other half for reader
+	int ok = initDescriptorQueue(q, descCnt, RECEIVE_DESCRIPTOR_BUFFER_SIZE, descCnt * 2);
 	EXPECT(ok);
+	NEW_ARRAY(r->bufferSize, q->bufferCount);
+	EXPECT(r->bufferSize != NULL);
+	r->readerSemaphore = createSemaphore(1);
+	EXPECT(r->readerSemaphore != NULL);
+	r->reader = NULL;
 	// set mac address
 	// regs[RECEIVE_ADDRESS_0_HIGH] =
 	// regs[RECEIVE_ADDRESS_0_LOW] =
@@ -422,12 +523,14 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 	regs[RECEIVE_DESCRIPTORS_BASE_HIGH] = HIGH64(rdPhysical);
 	regs[RECEIVE_DESCRIPTORS_LENGTH] = descArraySize;
 	// descriptor buffer address
-	for(i = 0; i < q->descriptorCount; i++){
-		initReceiveDescriptor(&q->receive[i], q->bufferArray + i * q->bufferSize);
-	}
+	q->bufferTail = q->descriptorCount - 1;
 	q->taskTail = q->descriptorCount - 1;
+	for(i = 0; i < q->taskTail; i++){
+		initReceiveDescriptor(&q->receive[i], getDescriptorQueueBuffer(q, i));
+	}
+	q->receive[q->bufferTail].status.value = 0;
 	regs[RECEIVE_DESCRIPTORS_HEAD] = 0;
-	regs[RECEIVE_DESCRIPTORS_TAIL] = q->descriptorCount - 1;
+	regs[RECEIVE_DESCRIPTORS_TAIL] = q->taskTail;
 	ReceiveControlRegister rc;
 	rc.value = 0;
 	rc.enabled = 1;
@@ -442,7 +545,7 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 	// accept broadcast
 	rc.broadacastAcceptMode = 1;
 	// 0 = 2048; 1 = 1024; 2 = 512; 3 = 256
-	switch(q->bufferSize){
+	switch(q->maxBufferSize){
 	case 256:
 	case 256*16:
 		rc.receiveBufferSize = 3;
@@ -463,23 +566,31 @@ static int initI8254Receive(I8254xReceive *r, volatile uint32_t *regs){
 		assert(0);
 	}
 	//0 = 1 byte; 1 = 16 bytes
-	rc.bufferSizeExtension = (q->bufferSize >= 4096? 1: 0);
+	rc.bufferSizeExtension = (q->maxBufferSize >= 4096? 1: 0);
 	rc.stripEthernetCRC = 1;
 	regs[RECEIVE_CONTROL] = rc.value;
 
 	return 1;
-	//destroyDescriptorQueue(q);
+	// deleteSemaphore(r->readerSemaphore);
+	ON_ERROR;
+	DELETE(r->bufferSize);
+	ON_ERROR;
+	destroyDescriptorQueue(q);
 	ON_ERROR;
 	return 0;
 }
 
 static void destroyI8254xReceive(I8254xReceive *r){
+	assert(r->reader == NULL);
+	deleteSemaphore(r->readerSemaphore);
+	DELETE(r->bufferSize);
 	destroyDescriptorQueue(&r->queue);
 }
 
 static int initI8254xTransmit(I8254xTransmit *t, volatile uint32_t *regs){
+	const uintptr_t descCnt = PAGE_SIZE / sizeof(GenericDescriptor);
 	I8254xDescriptorQueue *q = &t->queue;
-	int ok = initDescriptorQueue(q);
+	int ok = initDescriptorQueue(q, descCnt, TRANSMIT_DESCRIPTOR_BUFFER_SIZE, descCnt);
 	EXPECT(ok);
 	t->lock = initialSpinlock;
 	t->pending = NULL;
@@ -493,12 +604,12 @@ static int initI8254xTransmit(I8254xTransmit *t, volatile uint32_t *regs){
 		(TRANSMIT_INTERRUPT_BITS | LINK_STATUS_CHANGE_BIT);
 	// descriptor array
 	const uintptr_t tdArraySize = q->descriptorCount * sizeof(q->legacy[0]);
-	uint64_t tdAddress = checkAndTranslatePage(kernelLinear, (void*)q->legacy).value;
+	uint64_t tdAddress = getDescriptorQueueBase(q);
 	regs[TRANSMIT_DESCRIPTORS_BASE_LOW] = LOW64(tdAddress);
 	regs[TRANSMIT_DESCRIPTORS_BASE_HIGH] = HIGH64(tdAddress);
 	regs[TRANSMIT_DESCRIPTORS_LENGTH] = tdArraySize;
 	// TAIL status must be 0. see i8254xTransmitHandler
-	q->legacy[0].status = 0;
+	q->legacy[0].status.value = 0;
 	regs[TRANSMIT_DESCRIPTORS_HEAD] = 0;
 	regs[TRANSMIT_DESCRIPTORS_TAIL] = 0;
 
@@ -519,7 +630,7 @@ static int initI8254xTransmit(I8254xTransmit *t, volatile uint32_t *regs){
 	tc.collisionDistance = 0x40;
 	regs[TRANSMIT_CONTROL] = tc.value;
 	return 1;
-	deleteSemaphore(t->reqSemaphore);
+	//deleteSemaphore(t->reqSemaphore);
 	ON_ERROR;
 	destroyDescriptorQueue(q);
 	ON_ERROR;
@@ -532,6 +643,59 @@ static void destroyI8254xTransmit(I8254xTransmit *tran){
 	destroyDescriptorQueue(&tran->queue);
 }
 
+// call this function after increasing DescriptorQueue.bufferHead
+static void copyI8254xReadBuffer(I8254xReader *reader, const I8254xReceive *r){
+	assert(getSemaphoreValue(r->readerSemaphore) == 0);
+	const I8254xDescriptorQueue *q = &r->queue;
+
+	RWI8254xRequest *rw = reader->pending;
+	uintptr_t rwOffset = 0;
+	int isRead = 0;
+	while(rw != NULL && reader->bufferIndex != q->bufferHead){
+		volatile EthernetHeader *header = (volatile EthernetHeader*)getDescriptorQueueBuffer(q, reader->bufferIndex);
+		// both payloadSize and rwSize can be 0
+		// if the driver receives 0-length frame, it returns 0 to RWFileRequest
+		// bufferSize is set in i8254xReceiveTask
+		assert(r->bufferSize[reader->bufferIndex] >= sizeof(*header));
+		uintptr_t payloadSize = r->bufferSize[reader->bufferIndex] - sizeof(*header);
+		uintptr_t readSize = MIN(rw->rwSize, payloadSize - reader->offset);
+		memcpy(rw->buffer + rwOffset, ((uint8_t*)header->payload) + reader->offset, readSize);
+		isRead = 1;
+		rwOffset += readSize;
+		reader->offset += readSize;
+		if(rwOffset == rw->rwSize){
+			REMOVE_FROM_DQUEUE(rw);
+			completeRWFileIO(rw->rwfr, rwOffset, 0);
+			DELETE(rw);
+			rw = reader->pending;
+			rwOffset = 0;
+			isRead = 0;
+		}
+		if(reader->offset == payloadSize){
+			reader->bufferIndex = (reader->bufferIndex + 1) % q->bufferCount;
+			reader->offset = 0;
+		}
+	}
+	if(isRead){
+		REMOVE_FROM_DQUEUE(rw);
+		completeRWFileIO(rw->rwfr, rwOffset, 0);
+		DELETE(rw);
+	}
+}
+
+// call this function before increasing DescriptorQueue.bufferTail
+static void dropI8254xReadBuffer(I8254xReader *reader, const I8254xReceive *r, uintptr_t addTail){
+	assert(getSemaphoreValue(r->readerSemaphore) == 0);
+	const I8254xDescriptorQueue *q = &r->queue;
+	uintptr_t newBufferTail = (q->bufferTail + addTail) % q->bufferCount;
+	uintptr_t readerDiff = (q->bufferCount + reader->bufferIndex - q->bufferTail) % q->bufferCount;
+	if(readerDiff < addTail){
+		reader->bufferIndex = newBufferTail;
+		reader->offset = 0;
+		// printk("warning: i8254x dropped received frames\n");
+	}
+}
+
 static void i8254xReceiveTask(void *arg){
 	I8254xDevice *d = *(I8254xDevice**)arg;
 	I8254xReceive *r = &d->receive;
@@ -539,25 +703,48 @@ static void i8254xReceiveTask(void *arg){
 
 	printk("receiver %d started\n", d->serialNumber);
 	while(1){
-		acquireSemaphore(q->intSemaphore);
-		const uintptr_t head = q->taskHead;
-		//unsigned a;
-		//volatile EthernetHeader *h = (volatile EthernetHeader*)&q->bufferArray[head * q->bufferSize];
-		//for(a = 0; a < q->receive[head].length - sizeof(*h); a++){
-		//	printk("%c", (int)h->payload[a]);
-		//}
-		//printk("received:%d bytes\n", (int)q->receive[head].length);
-		q->taskHead = (head + 1) % q->descriptorCount;
+		int doneCnt = acquireAllSemaphore(q->intSemaphore);
+		assert(doneCnt > 0);
+		// for debug
+		int a;
+		for(a = 0; a < doneCnt; a++){
+			uintptr_t bHead = (q->bufferHead + a) % q->bufferCount;
+			uintptr_t dHead = (q->taskHead + a) % q->descriptorCount;
+			r->bufferSize[bHead] = q->receive[dHead].length;
+			// testing code
+			volatile EthernetHeader *h =
+				(volatile EthernetHeader*)getDescriptorQueueBuffer(q, bHead);
+			unsigned c;
+			for(c = 0; c < q->receive[bHead].length - sizeof(*h); c++){
+				printk("%c", (int)h->payload[c]);
+			}
+			printk("received: %d bytes; status = %x\n", (int)q->receive[dHead].length, (int)q->receive[dHead].status.value);
+		}
 
-		assert(q->receive[q->taskTail].status == 0);
-		q->taskTail = (q->taskTail + 1) % q->descriptorCount;
-		const uintptr_t tail = q->taskTail;
+		acquireSemaphore(r->readerSemaphore);
+		q->bufferHead = (q->bufferHead + doneCnt) % q->descriptorCount;
+		I8254xReader *reader;
+		for(reader = r->reader; reader != NULL; reader = reader->next){
+			copyI8254xReadBuffer(reader, r);
+			dropI8254xReadBuffer(reader, r, doneCnt);
+		}
+		releaseSemaphore(r->readerSemaphore);
+		q->bufferTail = (q->bufferTail + doneCnt) % q->bufferCount;
 
-		//memset((void*)&r->receiveDesc[t], 0 ,sizeof(r->receiveDesc[t]));
-		//r->receiveDesc[t].buffer =
-		q->receive[tail].status = 0;
-		d->regs[RECEIVE_DESCRIPTORS_TAIL] = tail;
-		assert(tail == d->regs[RECEIVE_DESCRIPTORS_TAIL]);
+		assert(d->regs[RECEIVE_DESCRIPTORS_TAIL] == q->taskTail);
+		assert(q->receive[q->taskTail].status.value == 0);
+		//next buffer
+		int i;
+		for(i = 0; i < doneCnt; i++){
+			uintptr_t dTail = (q->taskTail + i) % q->descriptorCount;
+			uintptr_t bTail = (q->bufferTail + i) % q->bufferCount;
+			initReceiveDescriptor(&q->receive[dTail], getDescriptorQueueBuffer(q, bTail));
+		}
+		q->receive[q->taskTail].status.value = 0;
+		q->taskHead = (q->taskHead + doneCnt) % q->descriptorCount;
+		q->taskTail = (q->taskTail + doneCnt) % q->descriptorCount;
+
+		d->regs[RECEIVE_DESCRIPTORS_TAIL] = q->taskTail;
 	}
 	systemCall_terminate();
 }
@@ -571,49 +758,55 @@ static void i8254xTransmitTask(void *arg){
 		assert(0);
 	}
 	uint64_t srcMAC = COMBINE64(d->regs[RECEIVE_ADDRESS_0_HIGH] & 0xffff, d->regs[RECEIVE_ADDRESS_0_LOW]);
-	const uintptr_t maxPayloadSize = MIN(MAX_PAYLOAD_SIZE, q->bufferSize - sizeof(EthernetHeader));
+	const uintptr_t maxPayloadSize = MIN(MAX_PAYLOAD_SIZE, q->maxBufferSize - sizeof(EthernetHeader));
 	printk("8254x (%d) transmitter started\n", d->serialNumber);
 	while(1){
 		RWI8254xRequest *req = removeRWI8254xRequest(t);
-		// at most 65536 - 1 frames
-		const uintptr_t availableFrameCnt = (q->descriptorCount - 1 + q->taskHead - q->taskTail) % q->descriptorCount;
+		// at most head - tail - 1 frames
+		const uintptr_t availableFrameCnt = (q->descriptorCount + q->taskHead - q->taskTail - 1) % q->descriptorCount;
 		if(availableFrameCnt * maxPayloadSize < req->rwSize){
 			completeRWFileIO(req->rwfr, 0, 0);
 			DELETE(req);
 			continue;
 		}
-		const uintptr_t writeFrameCnt = DIV_CEIL(req->rwSize, maxPayloadSize);
-		const uintptr_t oldTail = q->taskTail;
-		q->taskTail = (oldTail + writeFrameCnt) % q->descriptorCount;
-		uintptr_t tail, writtenSize = 0;
-		for(tail = oldTail; tail != q->taskTail; tail = (tail + 1) % q->descriptorCount){
+		const uintptr_t writeDescCnt = DIV_CEIL(req->rwSize, maxPayloadSize);
+		// TODO: still send 1 frame if writeDescCnt == 0
+		// write descriptors
+		uintptr_t writtenSize = 0;
+		uintptr_t i;
+		for(i = 0; i < writeDescCnt; i++){
+			uintptr_t dtail = (q->taskTail + i) % q->descriptorCount;
+			uintptr_t bTail = (q->bufferTail + i) % q->bufferCount;
 			const uintptr_t payloadSize = MIN(req->rwSize - writtenSize, maxPayloadSize);
-			volatile EthernetHeader *h = (volatile EthernetHeader*)(q->bufferArray + tail * q->bufferSize);
+			volatile EthernetHeader *h = (volatile EthernetHeader*)getDescriptorQueueBuffer(q, bTail);
 			toMACAddress(h->dstMACAddress, BROADCAST_MAC_ADDRESS); // TODO:
 			toMACAddress(h->srcMACAddress, srcMAC);
 			h->etherType = ETHERTYPE_IPV4;
-			if(payloadSize < MIN_PAYLOAD_SIZE){
-				memset((uint8_t*)h->payload, 0, MIN_PAYLOAD_SIZE);
-			}
 			memcpy((uint8_t*)h->payload, req->buffer + writtenSize, payloadSize);
+			if(payloadSize < MIN_PAYLOAD_SIZE){
+				memset(((uint8_t*)h->payload) + payloadSize, 0, MIN_PAYLOAD_SIZE - payloadSize);
+			}
 			writtenSize += payloadSize;
-			if(initTransmitDescriptor(&q->legacy[tail], h, sizeof(*h) + MAX(payloadSize, MIN_PAYLOAD_SIZE)) == 0){
-				printk("init transmit desc error\n");
+			if(initTransmitDescriptor(&q->legacy[dtail], h, sizeof(*h) + MAX(payloadSize, MIN_PAYLOAD_SIZE)) == 0){
+				panic("init transmit desc error\n");
 			}
 		}
-		q->legacy[q->taskTail].status = 0;
-		assert(d->regs[TRANSMIT_DESCRIPTORS_TAIL] == oldTail);
+		assert(q->taskTail == q->bufferTail);
+		assert(d->regs[TRANSMIT_DESCRIPTORS_TAIL] == q->taskTail);
+		q->taskTail = (q->taskTail + writeDescCnt) % q->descriptorCount;
+		q->bufferTail = (q->bufferTail + writeDescCnt) % q->bufferCount;
+		// put a done == 0 descriptor at tail. see descriptor queue handler
+		q->legacy[q->taskTail].status.value = 0;
 		d->regs[TRANSMIT_DESCRIPTORS_TAIL] = q->taskTail;
-
 		// wait for interrupt
-		for(tail = oldTail; tail != q->taskTail; tail = (tail + 1) % q->descriptorCount){
+		for(i = 0; i < writeDescCnt; i++){
 			//TODO: reduce number of calls
 			acquireSemaphore(q->intSemaphore);
 		}
-
-		// TODO: complete write file
-		q->taskHead = (q->taskHead + writeFrameCnt) % q->descriptorCount;
-		assert(q->legacy[q->taskTail].status == 0);
+		assert(q->taskHead == q->bufferHead);
+		q->taskHead = (q->taskHead + writeDescCnt) % q->descriptorCount;
+		q->bufferHead = (q->bufferHead + writeDescCnt) % q->descriptorCount;
+		assert(q->legacy[q->taskTail].status.value == 0);
 		completeRWFileIO(req->rwfr, writtenSize, 0);
 		DELETE(req);
 	}
@@ -692,24 +885,25 @@ static int i8254xHandler(const InterruptParam *p){
 	}
 	return handled;
 }
-/*
-int readI8254x(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
-	I8254xDevice *device = getFileInstance(of);
 
-	I8254xReadRequest *r = createReadRequest(rwfr, buffer, readSize);
+static int readI8254x(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
+	OpenedI8254xDevice *od = getFileInstance(of);
+
+	RWI8254xRequest *r = createRWI8254xRequest(rwfr, buffer, readSize);
 	if(r == NULL){
 		return 0;
 	}
-	ADD_TO_DQUEUE(r, &device->pending);
+	addReadI8254xRequest(&od->reader, r);
 
 	completeRWFileIO(rwfr, readSize, 0);
+	return 1;
 }
-*/
+
 static int writeI8254x(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t writeSize){
-	I8254xDevice *device = getFileInstance(of);
+	OpenedI8254xDevice *od = getFileInstance(of);
 	RWI8254xRequest *w = createRWI8254xRequest(rwfr, (uint8_t *)buffer, writeSize);
 	EXPECT(w != NULL);
-	addPendingRWI8254xRequest(&device->transmit, w);
+	addPendingRWI8254xRequest(&od->device->transmit, w);
 	return 1;
 
 	ON_ERROR;
@@ -741,9 +935,10 @@ static I8254xDevice *searchI8254xDeviceList(int number){
 }
 
 static void closeI8254x(CloseFileRequest *cfr, __attribute__((__unused__)) OpenedFile *of){
-	// delete buffer...
+	OpenedI8254xDevice *od = getFileInstance(of);
+	destroyI8254xReader(&od->reader);
+	DELETE(od);
 	completeCloseFile(cfr);
-	// do not delete of->instance
 }
 
 static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLength, OpenFileMode mode){
@@ -765,13 +960,17 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 	if(device == NULL){
 		return 0;
 	}
+	OpenedI8254xDevice *od = createOpenedI8254xDevice(device);
+	if(od == NULL){
+		return 0;
+	}
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
-	//ff.read = readI8254x;
+	ff.read = readI8254x;
 	if(mode.writable){
 		ff.write = writeI8254x;
 	}
 	ff.close = closeI8254x;
-	completeOpenFile(ofr, device, &ff);
+	completeOpenFile(ofr, od, &ff);
 
 	return 1;
 }
