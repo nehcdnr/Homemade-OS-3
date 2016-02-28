@@ -11,21 +11,31 @@ static_assert(sizeof(uint32_t) == 4);
 static_assert(sizeof(uint64_t) == 8);
 static_assert(sizeof(uintptr_t) == sizeof(void*));
 
+static_assert(sizeof(unsigned char) == 1);
+
+#define MEMSET(D, I, V, SIZE) \
+size_t (I);\
+for((I) = 0; (I) < (SIZE); (I)++){\
+	((unsigned char*)(D))[(I)] = (V);\
+}\
+return (D)
+
 void *memset(void *ptr, unsigned char value, size_t size){
-	size_t a;
-	for(a = 0; a < size; a++){
-		((uint8_t*)ptr)[a] = value;
-	}
-	return ptr;
+	MEMSET(ptr, i, value, size);
+}
+
+volatile void *memset_volatile(volatile void *ptr, unsigned char value, size_t size){
+	MEMSET(ptr, i, value, size);
 }
 
 void *memcpy(void *dst, const void *src, size_t size){
-	size_t a;
-	for(a = 0; a < size; a++){
-		((uint8_t*)dst)[a] = ((uint8_t*)src)[a];
-	}
-	return dst;
+	MEMSET(dst, i, ((unsigned char*)src)[i], size);
 }
+
+volatile void *memcpy_volatile(volatile void *dst, volatile const void *src, size_t size){
+	MEMSET(dst, i, ((volatile unsigned char*)src)[i], size);
+}
+#undef MEMSET
 
 int strlen(const char *s){
 	int len;

@@ -6,9 +6,11 @@
 
 // memory.h
 void *memset(void *ptr, unsigned char value, size_t size);
+volatile void *memset_volatile(volatile void *ptr, unsigned char value, size_t size);
 // MEMSET0 is not applicable to array
 #define MEMSET0(P) memset((P), 0, sizeof(*(P)))
 void *memcpy(void *dst, const void *src, size_t size);
+volatile void *memcpy_volatile(volatile void *dst, volatile const void *src, size_t size);
 
 // string.h
 int strlen(const char *s);
