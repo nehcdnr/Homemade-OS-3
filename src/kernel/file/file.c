@@ -380,11 +380,6 @@ struct FileIORequest{
 	uintptr_t returnValues[0];
 };
 
-struct FileIORequest0{
-	struct FileIORequest fior;
-	//uintptr_t returnValues[0];
-};
-
 struct RWFileRequest{
 	int isWrite: 1;
 	int updateOffset: 1;
@@ -536,7 +531,7 @@ static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
 	completeIO(&fior->ior);
 }
 
-void completeFileIO0(FileIORequest0 *r0){
+void completeFileIO0(FileIORequest2 *r0){
 	completeFileIO(&r0->fior, 0);
 }
 
@@ -550,6 +545,9 @@ void completeRWFileIO(RWFileRequest *r1, uintptr_t rwByteCount, uintptr_t addOff
 	completeFileIO(&r1->fior, 1, rwByteCount);
 }
 
+void completeFileIO1(FileIORequest2 *r2, uintptr_t v0){
+	completeFileIO(&r2->fior, 1, v0);
+}
 
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1){
 	completeFileIO(&r2->fior, 2, v0, v1);
@@ -646,7 +644,7 @@ int dummySeekRead(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED u
 int dummySeekWrite(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED const uint8_t *buffer, _UNUSED uint64_t position, _UNUSED uintptr_t bufferSize){
 	return 0;
 }
-int dummySizeOf(_UNUSED FileIORequest2 *fior2, _UNUSED OpenedFile *of){
+int dummyGetParameter(_UNUSED FileIORequest2 *fior2, _UNUSED OpenedFile *of, _UNUSED uintptr_t parameterCode){
 	return 0;
 }
 void dummyClose(_UNUSED CloseFileRequest *cfr, _UNUSED OpenedFile *of){
@@ -779,11 +777,11 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 			fior = &rwfr->fior;
 		}
 		break;
-	case SYSCALL_SIZE_OF_FILE:
+	case SYSCALL_GET_FILE_PARAMETER:
 		r2 = createFileIO2(of);
 		if(r2 != NULL){
 			pendFileIO(&r2->fior);
-			int ok = f->sizeOf(r2, of);
+			int ok = f->getParameter(r2, of, SYSTEM_CALL_ARGUMENT_1(p));
 			if(!ok){
 				cancelFailedFileIO(&r2->fior);
 				break;
@@ -897,18 +895,29 @@ uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t posi
 		LOW64(position), HIGH64(position));
 }
 
-uintptr_t systemCall_sizeOfFile(uintptr_t handle){
-	return systemCall2(SYSCALL_SIZE_OF_FILE, handle);
+uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter parameterCode){
+	return systemCall3(SYSCALL_GET_FILE_PARAMETER, handle, parameterCode);
 }
 
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
 	uintptr_t r, sizeLow, sizeHigh;
-	r = systemCall_sizeOfFile(handle);
+	r = systemCall_getFileParameter(handle, FILE_PARAM_SIZE);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
 	if(r != systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh))
 		return IO_REQUEST_FAILURE;
 	*size = COMBINE64(sizeHigh, sizeLow);
+	return handle;
+}
+
+uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size){
+	uintptr_t r, writableSize;
+	r = systemCall_getFileParameter(handle, FILE_PARAM_WRITABLE_SIZE);
+	if(r == IO_REQUEST_FAILURE)
+		return r;
+	if(r != systemCall_waitIOReturn(r, 1, &writableSize))
+		return IO_REQUEST_FAILURE;
+	*size = writableSize;
 	return handle;
 }
 
@@ -963,5 +972,5 @@ void initFile(SystemCallTable *s){
 	registerSystemCall(s, SYSCALL_WRITE_FILE, FileHandleCommandHandler, 3);
 	registerSystemCall(s, SYSCALL_SEEK_READ_FILE, FileHandleCommandHandler, 5);
 	registerSystemCall(s, SYSCALL_SEEK_WRITE_FILE, FileHandleCommandHandler, 6);
-	registerSystemCall(s, SYSCALL_SIZE_OF_FILE, FileHandleCommandHandler, 7);
+	registerSystemCall(s, SYSCALL_GET_FILE_PARAMETER, FileHandleCommandHandler, 7);
 }

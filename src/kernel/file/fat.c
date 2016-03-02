@@ -591,9 +591,15 @@ static void rwFATTask(void *rwfrPtr){
 
 // sizeOfFAT
 
-static int sizeOfFAT(FileIORequest2 *fior2, OpenedFile *of){
+static int getFATParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode){
 	OpenedFATFile *f = getFileInstance(of);
-	completeFileIO64(fior2, f->dirEntry.fileSize);
+	switch(parameterCode){
+	case FILE_PARAM_SIZE:
+		completeFileIO64(fior2, f->dirEntry.fileSize);
+		break;
+	default:
+		return 0;
+	}
 	return 1;
 }
 
@@ -671,7 +677,7 @@ static void openFATTask(void *p){
 	if(ofr->mode.enumeration == 0){
 		ff.seekRead = seekReadFAT;
 	}
-	ff.sizeOf = sizeOfFAT;
+	ff.getParameter = getFATParameter;
 	ff.close = closeFAT;
 	OpenedFATFile *file = createOpenedFATFile(ofr->mode, dp, &d);
 	EXPECT(file != NULL);

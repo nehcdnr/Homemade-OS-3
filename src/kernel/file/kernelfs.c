@@ -52,9 +52,15 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	return 1;
 }
 
-static int sizeOfKFS(FileIORequest2 *fior2, OpenedFile *of){
+static int getKFSParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode){
 	OpenedBLOBFile *f = getFileInstance(of);
-	completeFileIO64(fior2, f->blob->end - f->blob->begin);
+	switch(parameterCode){
+	case FILE_PARAM_SIZE:
+		completeFileIO64(fior2, f->blob->end - f->blob->begin);
+		break;
+	default:
+		return 0;
+	}
 	return 1;
 }
 
@@ -103,7 +109,7 @@ static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length
 	if(mode.enumeration == 0){
 		func.read = seekReadByOffset;
 		func.seekRead = seekReadKFS;
-		func.sizeOf = sizeOfKFS;
+		func.getParameter = getKFSParameter;
 	}
 	else{
 		func.read = enumReadKFS;
@@ -174,7 +180,9 @@ void testKFS(void){
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
 	//sizeOf
-	r = systemCall_sizeOfFile(file);
+	r = systemCall_getFileParameter(file, FILE_PARAM_WRITABLE_SIZE);
+	assert(r == IO_REQUEST_FAILURE);
+	r = systemCall_getFileParameter(file, FILE_PARAM_SIZE);
 	uintptr_t sizeLow, sizeHigh;
 	r2 = systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh);
 	printk("size = %d:%d\n",sizeHigh, sizeLow);

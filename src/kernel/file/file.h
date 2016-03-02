@@ -48,6 +48,11 @@ typedef union{
 
 #define OPEN_FILE_MODE_0 ((OpenFileMode)(uintptr_t)0)
 
+enum FileParameter{
+	FILE_PARAM_SIZE = 0x10,
+	FILE_PARAM_WRITABLE_SIZE = 0x20
+};
+
 // if failed, return IO_REQUEST_FAILURE
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
@@ -61,8 +66,9 @@ uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferS
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t *bufferSize);
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
-uintptr_t systemCall_sizeOfFile(uintptr_t handle);
+uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter parameterCode);
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
+uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size);
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
 
@@ -88,7 +94,6 @@ typedef void AcceptFileIO(void *arg);
 CancelFileIO defaultCancelFileIO;
 AcceptFileIO defaultAcceptFileIO;
 
-typedef struct FileIORequest0 FileIORequest0;
 typedef struct RWFileRequest RWFileRequest;
 typedef struct SeekRWFileRequest SeekRWFileRequest;
 typedef struct FileIORequest2 FileIORequest2;
@@ -100,8 +105,9 @@ typedef struct FileFunctions FileFunctions;
 
 void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO);
 
-void completeFileIO0(FileIORequest0 *r0);
 void completeRWFileIO(RWFileRequest *r1, uintptr_t rwByteCount, uintptr_t addOffset);
+void completeFileIO0(FileIORequest2 *r0);
+void completeFileIO1(FileIORequest2 *r1, uintptr_t v0);
 void completeFileIO2(FileIORequest2 *r2, uintptr_t v0, uintptr_t v1);
 void completeFileIO64(FileIORequest2 *r2, uint64_t v0);
 void failOpenFile(OpenFileRequest *r1);
@@ -123,7 +129,7 @@ struct FileFunctions{
 	int (*write)(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 	int (*seekRead)(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	int (*seekWrite)(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-	int (*sizeOf)(FileIORequest2 *fior2, OpenedFile *of);
+	int (*getParameter)(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode);
 	void (*close)(CloseFileRequest *cfr, OpenedFile *of);
 };
 
@@ -132,7 +138,7 @@ int dummyRead(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bu
 int dummyWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize);
 int dummySeekRead(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 int dummySeekWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
-int dummySizeOf(FileIORequest2 *fior2, OpenedFile *of);
+int dummyGetParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode);
 void dummyClose(CloseFileRequest *cfr, OpenedFile *of);
 
 int seekReadByOffset(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
@@ -140,7 +146,7 @@ int seekWriteByOffset(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer
 
 // use macro to check number of arguments
 #define INITIAL_FILE_FUNCTIONS \
-	{dummyRead, dummyWrite, dummySeekRead, dummySeekWrite, dummySizeOf, dummyClose}
+	{dummyRead, dummyWrite, dummySeekRead, dummySeekWrite, dummyGetParameter, dummyClose}
 
 typedef struct OpenFileManager OpenFileManager;
 
