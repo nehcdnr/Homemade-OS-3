@@ -4,6 +4,7 @@
 #include"keyboard.h"
 #include"memory/memory.h"
 #include"file/file.h"
+#include"resource/resource.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"assembly/assembly.h"
@@ -385,14 +386,10 @@ static void kernelConsoleLoop(void){
 		printk("cannot allocate memory for kernel console\n");
 		systemCall_terminate();
 	}
-	int a;
-	uintptr_t kb = IO_REQUEST_FAILURE;
-	for(a = 0; a < 10 && kb == IO_REQUEST_FAILURE; a++){
-		kb = syncOpenFile("ps2:keyboard");
-		sleep(500);
-	}
+	waitForFirstResource("ps2", RESOURCE_FILE_SYSTEM);
+	uintptr_t kb = syncOpenFile("ps2:keyboard");
 	if(kb == IO_REQUEST_FAILURE){
-		printk("cannot open ps/2 keyboard\n");
+		printk("cannot open PS/2 keyboard\n");
 		systemCall_terminate();
 	}
 	struct KeyboardState kbState = {0};

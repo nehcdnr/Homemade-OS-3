@@ -33,20 +33,31 @@ struct MBR{
 static_assert(sizeof(struct MBR) == 512);
 static_assert(sizeof(struct PartitionEntry) == 16);
 
-typedef struct DiskPartition DiskPartition;
-struct DiskPartition{
-	Resource resource;
-	DiskPartitionType type;
-	ServiceName driverName;
-	uintptr_t diskCode; // assigned by disk driver
-	uint64_t startLBA;
-	uint64_t sectorCount;
-	uintptr_t sectorSize;
-};
+// assume all arguments are valid
+static int addDiskPartition(
+	const char *fileName, uintptr_t nameLength,
+	DiskPartitionType diskType, uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize
+){
+	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE && nameLength <= MAX_FILE_ENUM_NAME_LENGTH);
+	FileEnumeration fe;
+	initFileEnumeration(&fe, fileName, nameLength);
+	fe.diskPartition.type = diskType;
+	fe.diskPartition.startLBA = startLBA;
+	fe.diskPartition.sectorCount = sectorCount;
+	fe.diskPartition.sectorSize = sectorSize;
+	int ok = createAddResource(RESOURCE_DISK_PARTITION, &fe);
+	EXPECT(ok);
+	return 1;
 
-void readPartitions(
-	const char *driverName, uintptr_t fileHandle, uint64_t relativeLBA,
-	uint64_t sectorCount, uintptr_t sectorSize, uintptr_t diskCode
+	ON_ERROR;
+	ON_ERROR;
+	return 0;
+}
+
+static void _readPartitions(
+	uintptr_t fileHandle, uint64_t relativeLBA,
+	const char *fileName, uintptr_t nameLength,
+	uint64_t sectorCount, uintptr_t sectorSize
 ){
 	struct MBR *buffer = systemCall_allocateHeap(sizeof(*buffer), KERNEL_NON_CACHED_PAGE);
 	EXPECT(buffer != NULL);
@@ -55,7 +66,7 @@ void readPartitions(
 	EXPECT(ior1 != IO_REQUEST_FAILURE && sectorSize == readSize);
 
 	if(buffer->signature != MBR_SIGNATRUE){
-		printk(" disk %x LBA %u is not a bootable partition\n", fileHandle, relativeLBA);
+		printk("disk %x LBA %u is not a bootable partition\n", fileHandle, (int)relativeLBA);
 	}
 
 	int i;
@@ -77,11 +88,10 @@ void readPartitions(
 		}
 		//printk("\n");
 		if(pe->systemID == MBR_EXTENDED){
-			readPartitions(driverName, fileHandle, lba, pe->sectorCount, sectorSize, diskCode);
+			_readPartitions(fileHandle, lba, fileName, nameLength, pe->sectorCount, sectorSize);
 		}
-		if(addDiskPartition(pe->systemID, driverName,
-			lba, pe->sectorCount, sectorSize, diskCode) == 0){
-			printk("warning: cannot register disk code %x to file system\n", fileHandle);
+		if(addDiskPartition(fileName, nameLength, pe->systemID, lba, pe->sectorCount, sectorSize) == 0){
+			printk("warning: cannot register disk %x to RESOURCE_DISK_PARTITION\n", fileHandle);
 		}
 	}
 
@@ -93,93 +103,72 @@ void readPartitions(
 	printk("cannot read partitions\n");
 }
 
-// file system interface
-static int returnDiskValues(Resource *resource, uintptr_t *returnValues){
-	DiskPartition *dp = resource->instance;
-	returnValues[0] = LOW64(dp->startLBA);
-	returnValues[1] = HIGH64(dp->startLBA);
-	returnValues[2] = dp->diskCode;
-	returnValues[3] = dp->sectorSize;
-	return 4;
+void readPartitions(const char *fileName, uintptr_t nameLength, uint64_t sectorCount, uintptr_t sectorSize){
+	uintptr_t fileHandle = syncOpenFile(fileName);
+	assert(fileHandle != IO_REQUEST_FAILURE);
+	_readPartitions(fileHandle, 0, fileName, nameLength, sectorCount, sectorSize);
+	uintptr_t r = syncCloseFile(fileHandle);
+	assert(r != IO_REQUEST_FAILURE);
 }
 
-static int matchDiskType(Resource *resource, const uintptr_t *arguments){
-	DiskPartition *dp = resource->instance;
-	if(dp->type != (DiskPartitionType)arguments[1])
-		return 0;
-	return 1;
+static int matchDiskType(const FileEnumeration *fe, uintptr_t t){
+	return fe->diskPartition.type == t;
 }
 
-uintptr_t systemCall_discoverDisk(DiskPartitionType diskType){
-	return systemCall3(SYSCALL_DISCOVER_RESOURCE, RESOURCE_DISK_PARTITION, diskType);
-}
-
-// assume all arguments are valid
-int addDiskPartition(
-	DiskPartitionType diskType, const char *driverName,
-	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
-	uintptr_t diskCode
-){
-	EXPECT(diskType >= 0 && diskType < MAX_DISK_TYPE);
-	DiskPartition *NEW(dp);
-	EXPECT(dp != NULL);
-	initResource(&dp->resource, dp, matchDiskType, returnDiskValues);
-	dp->type = diskType;
-	strncpy(dp->driverName, driverName, MAX_NAME_LENGTH);
-	dp->diskCode = diskCode;
-	dp->startLBA = startLBA;
-	dp->sectorCount = sectorCount;
-	dp->sectorSize = sectorSize;
-	addResource(RESOURCE_DISK_PARTITION, &dp->resource);
-	return 1;
-	// DELETE(dp);
-	ON_ERROR;
-	ON_ERROR;
-	return 0;
+uintptr_t enumNextDiskPartition(uintptr_t f, DiskPartitionType t, FileEnumeration *fe){
+	return enumNextResource(f, fe, t, matchDiskType);
 }
 
 #define MAX_FILE_SERVICE_NAME_LENGTH (8)
 
 typedef struct FileSystem{
-	Resource resource;
 	FileNameFunctions fileNameFunctions;
 	char name[MAX_FILE_SERVICE_NAME_LENGTH];
+	uintptr_t nameLength;
+
+	struct FileSystem **prev, *next;
 }FileSystem;
 
-static int matchFileSystemName(Resource *resource, const uintptr_t *arguments){
-	FileSystem *fs = resource->instance;
-	uintptr_t name32[MAX_FILE_SERVICE_NAME_LENGTH / sizeof(uintptr_t)] = {arguments[1], arguments[2]};
-	if(strncmp(fs->name, (const char*)name32, MAX_FILE_SERVICE_NAME_LENGTH) == 0)
-		return 1;
-	return 0;
-}
-
-static int returnFileService(Resource *resource, uintptr_t *returnValues){
-	returnValues[0] = (uintptr_t)resource->instance;
-	return 1;
-}
+static struct{
+	FileSystem *head;
+	Spinlock lock;
+}fsList = {NULL, INITIAL_SPINLOCK};
 
 int addFileSystem(const FileNameFunctions *fileNameFunctions, const char *name, size_t nameLength){
 	EXPECT(nameLength <= MAX_FILE_SERVICE_NAME_LENGTH);
 	FileSystem *NEW(fs);
 	EXPECT(fs != NULL);
-	initResource(&fs->resource, fs, matchFileSystemName, returnFileService);
-	memset(fs->name, 0, sizeof(fs->name));
+	MEMSET0(fs);
 	strncpy(fs->name, name, nameLength);
+	fs->nameLength = nameLength;
 	fs->fileNameFunctions = *fileNameFunctions;
-	addResource(RESOURCE_FILE_SYSTEM, &fs->resource);
+	acquireLock(&fsList.lock);
+	ADD_TO_DQUEUE(fs, &fsList.head);
+	releaseLock(&fsList.lock);
+	FileEnumeration fe;
+	initFileEnumeration(&fe, name, nameLength);
+	int ok = createAddResource(RESOURCE_FILE_SYSTEM, &fe);
+	EXPECT(ok);
 	return 1;
-	//DELETE(fs);
+
+	ON_ERROR;
+	// TODO: remove fs
+	// DELETE(fs);
 	ON_ERROR;
 	ON_ERROR;
 	return 0;
 }
 
-uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength){
-	uintptr_t name32[MAX_FILE_SERVICE_NAME_LENGTH / sizeof(uintptr_t)];
-	memset(name32, 0, sizeof(name32));
-	strncpy((char*)name32, name, nameLength);
-	return systemCall4(SYSCALL_DISCOVER_RESOURCE, RESOURCE_FILE_SYSTEM, name32[0], name32[1]);
+static FileSystem *searchFileSystem(const char *name, uintptr_t nameLength){
+	acquireLock(&fsList.lock);
+	FileSystem *fs;
+	for(fs = fsList.head; fs != NULL; fs = fs->next){
+		if(isStringEqual(fs->name, fs->nameLength, name, nameLength)){
+			break;
+		}
+	}
+	releaseLock(&fsList.lock);
+	return fs;
 }
 
 // OpenedFile
@@ -921,9 +910,9 @@ uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size){
 	return handle;
 }
 
-void initFileEnumeration(FileEnumeration *fileEnum, const char *name){
-	fileEnum->nameLength = strlen(name);
-	strncpy(fileEnum->name, name, fileEnum->nameLength);
+void initFileEnumeration(FileEnumeration *fileEnum, const char *name, uintptr_t nameLength){
+	fileEnum->nameLength = nameLength;
+	memcpy(fileEnum->name, name, sizeof(name[0]) * fileEnum->nameLength);
 }
 
 static void FileNameCommandHandler(InterruptParam *p){
@@ -940,17 +929,18 @@ static void FileNameCommandHandler(InterruptParam *p){
 	uintptr_t i;
 	for(i = 0; i < nameLength && fileName[i] != ':'; i++);
 	EXPECT(i < nameLength);
-	uintptr_t r = systemCall_discoverFileSystem(fileName, i);
-	EXPECT(r != IO_REQUEST_FAILURE);
-	uintptr_t fileSystem;
-	uintptr_t r2 = systemCall_waitIOReturn(r, 1, &fileSystem);
-	assert(r == r2);
-	r2 = systemCall_cancelIO(r);
-	assert(r2 != 0);
-	IORequest *ior = dispatchFileNameCommand((FileSystem*)fileSystem, fileName + i + 1, nameLength - i - 1, p, mappedPage);
+	FileSystem *fileSystem = searchFileSystem(fileName, i);
+	//if(fileSystem == NULL){
+	//	for(i = 0; i < nameLength && fileName[i] != ':'; i++)
+	//		printk("%c",fileName[i]);
+	//	printk("\n");
+	//}
+	EXPECT(fileSystem != NULL);
+	IORequest *ior = dispatchFileNameCommand(fileSystem, fileName + i + 1, nameLength - i - 1, p, mappedPage);
 	EXPECT(ior != IO_REQUEST_FAILURE);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ior;
 	return;
+
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;

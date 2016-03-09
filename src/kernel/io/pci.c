@@ -395,7 +395,9 @@ void pciDriver(void){
 
 	FileNameFunctions f = INITIAL_FILE_NAME_FUNCTIONS;
 	f.open = openPCI;
-	addFileSystem(&f, "pci", strlen("pci"));
+	if(addFileSystem(&f, "pci", strlen("pci")) == 0){
+		printk("cannot register PCI as file system");
+	}
 	while(1){
 		sleep(1000);
 	}
@@ -403,9 +405,12 @@ void pciDriver(void){
 
 #ifndef NDEBUG
 #include"task/task.h"
+#include"resource/resource.h"
 
 void testPCI(void);
 void testPCI(void){
+	int ok = waitForFirstResource("pci", RESOURCE_FILE_SYSTEM);
+	assert(ok);
 	uintptr_t r, enumHandle = enumeratePCI(0x01060100, 0xffffff00);
 	//("pci:0/0");
 	assert(enumHandle != IO_REQUEST_FAILURE);
@@ -439,6 +444,7 @@ void testPCI(void){
 	}
 	r = syncCloseFile(enumHandle);
 	assert(r != IO_REQUEST_FAILURE);
+	printk("testPCI ok\n");
 	systemCall_terminate();
 }
 #endif

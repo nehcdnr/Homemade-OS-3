@@ -43,7 +43,7 @@ static int enumReadKFS(RWFileRequest *fior1, OpenedFile *of, uint8_t *buffer, ui
 	uintptr_t readSize;
 	if(f->blob->end > (uintptr_t)entry){
 		readSize = sizeof(FileEnumeration);
-		initFileEnumeration((FileEnumeration*)buffer, entry->name);
+		initFileEnumeration((FileEnumeration*)buffer, entry->name, strlen(entry->name));
 	}
 	else{
 		readSize = 0;
@@ -133,6 +133,7 @@ void kernelFileService(void){
 	ff.open = openKFS;
 	int ok = addFileSystem(&ff, "kernelfs", strlen("kernelfs"));
 	if(!ok){
+		printk("cannot register kernel image as file system\n");
 		systemCall_terminate();
 	}
 	while(1){

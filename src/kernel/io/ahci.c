@@ -8,6 +8,7 @@
 #include"task/task.h"
 #include"task/exclusivelock.h"
 #include"multiprocessor/spinlock.h"
+#include"resource/resource.h"
 
 typedef struct{
 	uint32_t commandBaseLow/*1KB aligned*/, commandBaseHigh, fisBaseLow/*256 byte aligned*/, fisBaseHigh;
@@ -719,7 +720,6 @@ static int AHCIHandler(const InterruptParam *param){
 	AHCIInterruptArgument *arg = (AHCIInterruptArgument*)param->argument;
 	uint32_t hostStatus = arg->hbaRegisters->interruptStatus;
 	// software writes 1 to indicate the interrupt has been handled
-	arg->hbaRegisters->interruptStatus = hostStatus;
 	int handled = 0;
 	int p;
 	for(p = 0; p < HBA_MAX_PORT_COUNT; p++){
@@ -744,6 +744,8 @@ static int AHCIHandler(const InterruptParam *param){
 		// see completeDiskRequestTask
 		addToDiskRequestList(&finishInterrupt, dr);
 	}
+	// VirtualBox requires clearing host status after clearing port status
+	arg->hbaRegisters->interruptStatus = hostStatus;
 	//processorLocalPIC()->endOfInterrupt(param);
 	return handled;
 	// printk("end of AHCI interrupt\n");
@@ -974,14 +976,20 @@ static void completeDiskRequestTask(__attribute__((__unused__)) void *arg){
 void ahciDriver(void){
 	const char *driverName = "ahci";
 	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
+	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM) == 0){
+		printk("cannot find PCI driver\n");
+		systemCall_terminate();
+	}
 	uintptr_t enumPCI = enumeratePCI(0x01060100, 0xffffff00);
 	assert(enumPCI != IO_REQUEST_FAILURE);
+
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openAHCI;
 	if(initDiskRequestList(&finishInterrupt) == 0){
 		systemCall_terminate();
 	}
 	if(addFileSystem(&ff, driverName, strlen(driverName)) == 0){
+		printk("cannot register AHCI as file system");
 		systemCall_terminate();
 	}
 	Task * task2 = createSharedMemoryTask(completeDiskRequestTask, NULL , 0, processorLocalTask());
@@ -1002,7 +1010,7 @@ void ahciDriver(void){
 			}
 			const HBAPortIndex diskCode = toDiskCode(arg->hbaIndex, p);
 			char fileName[20];
-			snprintf(fileName, 20, "%s:%x", driverName, diskCode.value);
+			int nameLength = snprintf(fileName, 20, "%s:%x", driverName, diskCode.value);
 			if(initDiskDescription(&arg->port[p].desc, arg, p) == 0){
 				printk("identify hba %d port %d failed\n", arg->hbaIndex, p);
 				continue;
@@ -1010,12 +1018,7 @@ void ahciDriver(void){
 			if(PAGE_SIZE % arg->port[p].desc.sectorSize != 0){
 				printk("warning: unsupported ahci disk sector size: %u\n", arg->port[p].desc.sectorSize);
 			}
-			uintptr_t fileHandle = syncOpenFile(fileName);
-			assert(fileHandle != IO_REQUEST_FAILURE);
-			readPartitions(driverName, fileHandle, 0,
-			arg->port[p].desc.sectorCount, arg->port[p].desc.sectorSize, diskCode.value);
-			uintptr_t r = syncCloseFile(fileHandle);
-			assert(r != IO_REQUEST_FAILURE);
+			readPartitions(fileName, nameLength, arg->port[p].desc.sectorCount, arg->port[p].desc.sectorSize);
 		}
 	}
 	syncCloseFile(enumPCI);
@@ -1025,22 +1028,22 @@ void ahciDriver(void){
 }
 
 #ifndef NDEBUG
+
 void testAHCI(void);
 void testAHCI(void){
 	printk("test ahci driver...\n");
-	uintptr_t d = systemCall_discoverDisk(MBR_FAT32);
-	assert(d != IO_REQUEST_FAILURE);
-	uintptr_t lbaLow = 0, lbaHigh = 0;
-	uint64_t lba;
-	HBAPortIndex pi;
-	uintptr_t sectorSize;
-	uintptr_t r = systemCall_waitIOReturn(d, 4, &lbaLow, &lbaHigh, &pi.value, &sectorSize);
-	lba = COMBINE64(lbaHigh, lbaLow);
-	assert(r == d);
-	char s[20];
-	snprintf(s, 20, "ahci:%x", pi.value);
+	int ok = waitForFirstResource("ahci", RESOURCE_FILE_SYSTEM);
+	assert(ok);
+	uintptr_t enumDisk = syncEnumerateFile(resourceTypeToFileName(RESOURCE_DISK_PARTITION));
+	assert(enumDisk != IO_REQUEST_FAILURE);
+	FileEnumeration fe;
+	uintptr_t readSize = enumNextDiskPartition(enumDisk, MBR_FAT32, &fe);
+	assert(readSize == sizeof(fe));
+	uintptr_t r = syncCloseFile(enumDisk);
+	assert(r != IO_REQUEST_FAILURE);
 	//printk("open %s\n",s);
-	uintptr_t h = syncOpenFile(s);
+	OpenFileMode ofm = OPEN_FILE_MODE_0;
+	uintptr_t h = syncOpenFileN(fe.name, fe.nameLength, ofm);
 	assert(h != IO_REQUEST_FAILURE);
 	int i;
 	uint8_t *buffer = systemCall_allocateHeap(PAGE_SIZE, USER_WRITABLE_PAGE);
@@ -1048,7 +1051,8 @@ void testAHCI(void){
 	for(i = 0; i < 30; i++){
 		uintptr_t bs = PAGE_SIZE;
 		memset(buffer, 9, PAGE_SIZE);
-		r = syncSeekReadFile(h, buffer, lba * sectorSize + i * PAGE_SIZE, &bs);
+		uint64_t offset = fe.diskPartition.startLBA * fe.diskPartition.sectorSize + i * PAGE_SIZE;
+		r = syncSeekReadFile(h, buffer, offset, &bs);
 		assert(r != IO_REQUEST_FAILURE && bs == PAGE_SIZE);
 		uintptr_t j;
 		for(j = 0; j < bs; j++){
@@ -1063,7 +1067,7 @@ void testAHCI(void){
 			uintptr_t j2 = ((j + 19) * (i + 11) % PAGE_SIZE);
 			uint8_t buffer1[3] = {9, 9, 9};
 			bs = 1;
-			r = syncSeekReadFile(h, &buffer1[1], lba * sectorSize + i * PAGE_SIZE + j2, &bs);
+			r = syncSeekReadFile(h, &buffer1[1], offset + j2, &bs);
 			assert(r != IO_REQUEST_FAILURE && bs == 1);
 			assert(buffer1[0] == 9 && buffer1[1] == buffer[j2] && buffer1[2] == 9);
 		}

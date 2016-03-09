@@ -2,6 +2,7 @@
 #include"memory/memory.h"
 #include"io/io.h"
 #include"file.h"
+#include"resource/resource.h"
 #include"interrupt/systemcall.h"
 #include"task/exclusivelock.h"
 #include"task/task.h"
@@ -700,30 +701,29 @@ static void openFATTask(void *p){
 void fatService(void){
 	fat32List.mainTask = processorLocalTask();
 	//slab = createUserSlabManager();
-	uintptr_t discoverFAT = systemCall_discoverDisk(MBR_FAT32);
-	assert(discoverFAT != IO_REQUEST_FAILURE);
-	uintptr_t startLBALow;
-	uintptr_t startLBAHigh;
+	uintptr_t enumDiskPartition = syncEnumerateFile(resourceTypeToFileName(RESOURCE_DISK_PARTITION));
+	if(enumDiskPartition == IO_REQUEST_FAILURE){
+		printk("cannot enumerate disk partition\n");
+		systemCall_terminate();
+	}
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openFAT;
 	if(addFileSystem(&ff, "fat", strlen("fat")) != 1){
-		printk("add file system failure\n");
+		printk("cannot register FAT32 as file system\n");
+		systemCall_terminate();
 	}
 	int i;
 	for(i = 'C'; i <= 'Z'; i++){
-		uintptr_t diskCode, sectorSize;
-		uintptr_t discoverFAT2 = systemCall_waitIOReturn(
-			discoverFAT, 4,
-			&startLBALow, &startLBAHigh, &diskCode, &sectorSize);
-		if(discoverFAT != discoverFAT2){
-			printk("discover disk failure\n");
+		FileEnumeration fe;
+		uintptr_t r = enumNextDiskPartition(enumDiskPartition, MBR_FAT32, &fe);
+		assert(r == sizeof(fe));
+		OpenFileMode ofm = OPEN_FILE_MODE_0;
+		uintptr_t diskFile = syncOpenFileN(fe.name, fe.nameLength, ofm);
+		if(diskFile == IO_REQUEST_FAILURE){
+			printk("warning: failed to open disk\n");
 			continue;
 		}
-		char s[20];
-		snprintf(s, 20, "ahci:%x", diskCode); // TODO: enumerate disk service names
-		uintptr_t diskFile = syncOpenFile(s);
-		assert(diskFile != IO_REQUEST_FAILURE);
-		FAT32DiskPartition *dp = createFATPartition(diskFile, COMBINE64(startLBAHigh, startLBALow), sectorSize, i);
+		FAT32DiskPartition *dp = createFATPartition(diskFile, fe.diskPartition.startLBA, fe.diskPartition.sectorSize, i);
 		if(dp == NULL){
 			continue;
 		}

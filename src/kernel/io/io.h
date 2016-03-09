@@ -168,4 +168,7 @@ uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount,
 // intel8254x.c
 void i8254xDriver(void);
 
+// internet.c
+void internetService(void);
+
 #endif

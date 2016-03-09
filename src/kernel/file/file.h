@@ -1,3 +1,6 @@
+#ifndef FILE_H_INCLUDED
+#define FILE_H_INCLUDED
+
 #include<std.h>
 #include"memory/memory.h"
 #include"multiprocessor/spinlock.h"
@@ -21,20 +24,7 @@ enum MBR_SystemID{
 #define MAX_DISK_TYPE (0x10)
 typedef enum MBR_SystemID DiskPartitionType;
 
-int addDiskPartition(
-	DiskPartitionType systemID, const char *driverName,
-	uint64_t startLBA, uint64_t sectorCount, uintptr_t sectorSize,
-	uintptr_t diskCode
-);
-//int removeDiskPartition(int diskDriver, uintptr_t diskCode);
-
-void readPartitions(
-	const char *driverName, uintptr_t fileHandle,
-	uint64_t lba, uint64_t sectorCount, uintptr_t sectorSize, uintptr_t diskCode
-);
-
-uintptr_t systemCall_discoverDisk(DiskPartitionType diskType);
-uintptr_t systemCall_discoverFileSystem(const char* name, int nameLength);
+void readPartitions(const char *fileName, uintptr_t nameLength, uint64_t sectorCount, uintptr_t sectorSize);
 
 // file interface
 typedef union{
@@ -72,16 +62,29 @@ uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size);
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
 
+struct DiskPartitionEnumeration{
+	DiskPartitionType type;
+	uint64_t startLBA;
+	uint64_t sectorCount;
+	uintptr_t sectorSize;
+};
+
 #define MAX_FILE_ENUM_NAME_LENGTH (64)
 typedef struct FileEnumeration{
 	// type, access timestamp ...
 	uintptr_t  nameLength;
 	char name[MAX_FILE_ENUM_NAME_LENGTH];
+	union{
+		struct DiskPartitionEnumeration diskPartition;
+		// struct
+	};
 }FileEnumeration;
+
+uintptr_t enumNextDiskPartition(uintptr_t f, DiskPartitionType t, FileEnumeration *fe);
 
 // file service functions
 
-void initFileEnumeration(FileEnumeration *fileEnum, const char *name);
+void initFileEnumeration(FileEnumeration *fileEnum, const char *name, uintptr_t nameLength);
 
 typedef struct SystemCallTable SystemCallTable;
 void initFile(SystemCallTable *s);
@@ -166,3 +169,5 @@ void fatService(void);
 
 // kernel file
 void kernelFileService(void);
+
+#endif

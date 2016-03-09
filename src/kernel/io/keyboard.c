@@ -282,7 +282,9 @@ static void initPS2Driver(PIC* pic){
 	pic->setPICMask(pic, KEYBOARD_IRQ, 0);
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openPS2;
-	addFileSystem(&ff, "ps2", strlen("ps2"));
+	if(addFileSystem(&ff, "ps2", strlen("ps2")) == 0){
+		printk("cannot register PS/2 as file system");
+	}
 }
 
 void ps2Driver(void){

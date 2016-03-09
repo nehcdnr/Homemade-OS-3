@@ -4,6 +4,7 @@
 #include"interrupt/controller/pic.h"
 #include"task/exclusivelock.h"
 #include"file/file.h"
+#include"resource/resource.h"
 
 #define MAC_ADDRESS_SIZE (6)
 #define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
@@ -490,6 +491,7 @@ static int initDescriptorQueue(I8254xDescriptorQueue *q, uintptr_t descCnt, uint
 	q->bufferCount = bCnt;
 	q->bufferHead = 0;
 	q->bufferTail = 0;
+	assert(bSize <= MAX_FRAME_SIZE);
 	q->maxBufferSize = bSize;
 	assert(PAGE_SIZE % bSize == 0);
 	q->bufferArray = allocatePages(kernelLinear, q->maxBufferSize * q->bufferCount, KERNEL_NON_CACHED_PAGE);
@@ -1070,15 +1072,20 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 }
 
 void i8254xDriver(void){
-	uintptr_t pci = enumeratePCI(0x02000000, 0xffffff00);
-	if(pci == IO_REQUEST_FAILURE){
-		printk("failed to enum PCI");
+	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM) == 0){
+		printk("failed to find PCI driver\n");
 		systemCall_terminate();
 	}
+	uintptr_t pci = enumeratePCI(0x02000000, 0xffffff00);
+	if(pci == IO_REQUEST_FAILURE){
+		printk("failed to enum PCI\n");
+		systemCall_terminate();
+	}
+	const char *driverName = "8254x";
 	FileNameFunctions ff = INITIAL_FILE_NAME_FUNCTIONS;
 	ff.open = openI8254x;
-	if(addFileSystem(&ff, "8254x", strlen("8254x")) == 0){
-		printk("failed to create 8254x driver as file\n");
+	if(addFileSystem(&ff, driverName, strlen(driverName)) == 0){
+		printk("cannot register 8254x as file system\n");
 		systemCall_terminate();
 	}
 	int deviceNumber;
@@ -1112,6 +1119,13 @@ void i8254xDriver(void){
 		// set link up
 		i8254x->regs[DEVICE_CONTROL] |= (1 << 6);
 		printk("link status: %x\n", ((i8254x->regs[DEVICE_STATUS] >> 1) & 1));
+		{
+			FileEnumeration fe;
+			char name[20];
+			uintptr_t nameLength = snprintf(name, LENGTH_OF(name), "%s:eth%d", driverName, deviceNumber);
+			initFileEnumeration(&fe, name, nameLength);
+			createAddResource(RESOURCE_DATA_LINK_DEVICE, &fe);
+		}
 	}
 	syncCloseFile(pci);
 
@@ -1180,10 +1194,13 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 
 void testI8254xTransmit2(void);
 void testI8254xTransmit2(void){
-	sleep(1000);
 	const char *file0 = "8254x:eth0";
 	const char *file1 = "8254x:eth1";
-
+	int ok;
+	ok = waitForFirstResource(file0, RESOURCE_DATA_LINK_DEVICE);
+	assert(ok);
+	ok = waitForFirstResource(file1, RESOURCE_DATA_LINK_DEVICE);
+	assert(ok);
 	OpenFileMode ofm0 = OPEN_FILE_MODE_0;
 	OpenFileMode ofm1 = OPEN_FILE_MODE_0;
 	ofm1.writable = 1;
@@ -1214,14 +1231,18 @@ void testI8254xTransmit2(void){
 
 void testI8254xTransmit(void);
 void testI8254xTransmit(void){
-	sleep(1000);
+	int ok = waitForFirstResource("8254x:eth1", RESOURCE_DATA_LINK_DEVICE);
+	assert(ok);
+	sleep(600);
 	testRWI8254x("8254x:eth1", 1, 5, 1500);
 	systemCall_terminate();
 }
 
 void testI8254xReceive(void);
 void testI8254xReceive(void){
-	sleep(500);
+	int ok =waitForFirstResource("8254x:eth0", RESOURCE_DATA_LINK_DEVICE);
+	assert(ok);
+	sleep(100);
 	testRWI8254x("8254x:eth0", 0, 5, 1500);
 	systemCall_terminate();
 }
