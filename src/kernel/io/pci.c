@@ -150,6 +150,7 @@ static PCIConfigSpace *createPCIConfigSpace(uint8_t b, uint8_t d, uint8_t f){
 	cs->location.device = d;
 	cs->location.function = f;
 	cs->location.unused = 0;
+	cs->regs.types = readPCIConfig(b, d, f, MEMBER_OFFSET(typeof(cs->regs), types));
 	switch(cs->regs.headerType & 0x7f){
 	case 0x00:
 		cs->regsSize = sizeof(cs->regs0);
@@ -162,13 +163,13 @@ static PCIConfigSpace *createPCIConfigSpace(uint8_t b, uint8_t d, uint8_t f){
 		break;
 	default:
 		cs->regsSize = sizeof(cs->regs);
-		printk("warning: unrecognized PCI");
+		printk("warning: unrecognized PCI header type = %x\n", cs->regs.headerType);
 		break;
 	}
 	uint32_t *regs32 = (uint32_t*)&cs->regs;
 	regs32[0] = device_vendor;
 	uintptr_t i;
-	for(i = 1 ; i * sizeof(uint32_t) < cs->regsSize; i ++){
+	for(i = 0 ; i * sizeof(uint32_t) < cs->regsSize; i ++){
 		regs32[i] = readPCIConfig(b, d, f, i * sizeof(uint32_t));
 	}
 	return cs;

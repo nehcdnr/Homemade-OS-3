@@ -819,9 +819,9 @@ static int initDiskDescription(struct DiskDescription *d, AHCIInterruptArgument 
 		// TODO: how to handle?
 	}
 	releaseLock(dr->lock);
-
+	// dr is deleted here
 	uintptr_t waitIOR = systemCall_waitIO((uintptr_t)dr->ior);
-	assert(waitIOR == (uintptr_t)dr->ior);
+	assert(waitIOR == (uintptr_t)&ior);
 
 	// the driver requires 48-bit address
 	const uint16_t buffer83 = buffer[83];
