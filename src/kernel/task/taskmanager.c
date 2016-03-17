@@ -689,18 +689,15 @@ void completeIO(IORequest *ior){
 }
 
 // IORequest may not be valid
-static int searchIOList(Task *t, IORequest *ior){
-	int found = 0;
-	acquireLock(&t->ioListLock);
+static int searchIOList_noLock(IORequest *listHead, IORequest *ior){
 	IORequest *i;
-	for(i = t->pendingIOList; found == 0 && i != NULL; i = i->next){
-		found += (i == ior);
+	for(i = listHead; i != NULL; i = i->next){
+		if(i == ior){
+			assert(isAcquirable(&ior->task->ioListLock) == 0);
+			return 1;
+		}
 	}
-	for(i = t->completedIOList; found == 0 && i != NULL; i = i->next){
-		found += (i == ior);
-	}
-	releaseLock(&t->ioListLock);
-	return found;
+	return 0;
 }
 
 static IORequest *_waitIO(Task *t, IORequest *expected){
@@ -743,7 +740,10 @@ static void waitIOHandler(InterruptParam *p){
 	}
 	else{
 		Task *t = processorLocalTask();
-		if(searchIOList(t, ior) == 0){
+		acquireLock(&t->ioListLock);
+		int ok = (searchIOList_noLock(t->pendingIOList, ior) || searchIOList_noLock(t->completedIOList, ior));
+		releaseLock(&t->ioListLock);
+		if(ok == 0){
 			SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
 			return;
 		}
@@ -804,11 +804,19 @@ int tryCancelIO(IORequest *ior){
 static void cacnelIOHandler(InterruptParam *p){
 	sti();
 	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
-	SYSTEM_CALL_RETURN_VALUE_0(p) = (
-		searchIOList(processorLocalTask(), ior)?
-		(unsigned)tryCancelIO(ior):
-		0
-	);
+	Task *t = processorLocalTask();
+	acquireLock(&t->ioListLock);
+	int ok = searchIOList_noLock(t->pendingIOList, ior);
+	if(ok){
+		REMOVE_FROM_DQUEUE(ior);
+		ok = ior->cancellable;
+		ior->cancellable = 0;
+	}
+	releaseLock(&t->ioListLock);
+	if(ok){
+		ior->cancel(ior->instance);
+	}
+	SYSTEM_CALL_RETURN_VALUE_0(p) = ok;
 }
 
 int systemCall_cancelIO(uintptr_t io){
@@ -819,10 +827,18 @@ int isCancellable(IORequest *ior){
 	return ior->cancellable;
 }
 
-void setCancellable(IORequest *ior, int value){
+int setCancellable(IORequest *ior, int value){
+	int r;
 	acquireLock(&ior->task->ioListLock);
-	ior->cancellable = value;
+	if(value == 0 && ior->cancellable == 0){
+		r = 0;
+	}
+	else{
+		ior->cancellable = value;
+		r = 1;
+	}
 	releaseLock(&ior->task->ioListLock);
+	return r;
 }
 
 void notSupportCancelIO(void *instance){

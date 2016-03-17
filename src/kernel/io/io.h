@@ -15,6 +15,7 @@ struct IORequest{
 	// the request can be pending or completed
 	// instance and IORequest should be deleted in this function
 	CancelIO *cancel;
+	// cancellable is the critical section flag shared by the threads calling completeIO and cancelIO
 	int cancellable;
 	// return number of elements in returnValues
 	// instance and IORequest should be deleted in this function
@@ -37,7 +38,9 @@ uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
 int systemCall_cancelIO(uintptr_t io);
 
 int isCancellable(IORequest *ior);
-void setCancellable(IORequest *ior, int value);
+// if value == 0 and ior is being cancelled (see taskmanager.c), return 0
+// if value != 0 or ior is not being cancelled, return 1
+int setCancellable(IORequest *ior, int value);
 
 CancelIO notSupportCancelIO;
 

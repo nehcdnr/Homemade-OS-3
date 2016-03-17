@@ -168,6 +168,7 @@ static void testListKFS(void){
 
 void testKFS(void);
 void testKFS(void){
+	//waitForFirstFileSystem
 	uintptr_t r, r2;
 	testListKFS();
 	// file not exist

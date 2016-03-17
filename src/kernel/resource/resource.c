@@ -27,19 +27,22 @@ typedef struct ResourceList{
 	IsFileEnumEqual *isFileEnumEqual;
 }ResourceList;
 
-typedef struct ReadEnumRequest{
-	RWFileRequest *rwfr;
-	FileEnumeration *fe;
-	struct ReadEnumRequest *next, **prev;
-}ReadEnumRequest;
 
 typedef struct ResourceEnumerator{
 	Spinlock *lock; // protect currentWaiting, rwfrList, next, and prev
 	Resource *currentWaiting;
-	ReadEnumRequest *rwfrList;
+	struct ReadEnumRequest *rwfrList;
 
 	struct ResourceEnumerator *next, **prev;
 }ResourceEnumerator;
+
+typedef struct ReadEnumRequest{
+	RWFileRequest *rwfr;
+	FileEnumeration *fe;
+
+	Spinlock *lock;
+	struct ReadEnumRequest *next, **prev;
+}ReadEnumRequest;
 
 // see WaitingList->tail
 static int isWaitingListTail_noLock(ResourceEnumerator *re){
@@ -78,19 +81,29 @@ static ReadEnumRequest *iterateNext_noLock(ResourceEnumerator *re, int handleReq
 		return NULL;
 	}
 	struct Resource *resource = re->currentWaiting;
-	ReadEnumRequest *req = re->rwfrList;
-	if(handleRequest){
+	ReadEnumRequest *req;
+	if(handleRequest == 0){
+		req = NULL;
+	}
+	else{
+		for(req = re->rwfrList; req != NULL; req = req->next){
+			if(setRWFileIONotCancellable(req->rwfr)){
+				(*req->fe) = resource->description;
+				REMOVE_FROM_DQUEUE(req);
+				break;
+			}
+		}
 		if(req == NULL){
 			return NULL;
 		}
-		(*req->fe) = resource->description;
-		REMOVE_FROM_DQUEUE(req);
 	}
 	REMOVE_FROM_DQUEUE(re);
 	resource = resource->next;
 	re->currentWaiting = resource;
+	assert(re->lock == resource->lock);
 	ADD_TO_DQUEUE(re, &resource->waiting);
-	return (handleRequest? req: NULL);
+	// return NULL if handleRequest == 0
+	return req;
 }
 
 static ResourceList resourceList[MAX_RESOURCE_TYPE];
@@ -118,19 +131,29 @@ static Resource *searchWaitable_noLock(ResourceList *rl, const FileEnumeration *
 	return NULL;
 }
 
-static ReadEnumRequest *createEnumNextRequest(RWFileRequest *rwfr, FileEnumeration *fe){
+static ReadEnumRequest *createEnumNextRequest(RWFileRequest *rwfr, FileEnumeration *fe, ResourceEnumerator *re){
 	ReadEnumRequest *NEW(req);
 	if(req == NULL){
 		return NULL;
 	}
 	req->rwfr = rwfr;
 	req->fe = fe;
+	req->lock = re->lock;
 	req->next = NULL;
 	req->prev = NULL;
 	return req;
 }
 
+static void cancelReadEnumWaitable(void *arg){
+	ReadEnumRequest *req = arg;
+	acquireLock(req->lock);
+	REMOVE_FROM_DQUEUE(req);
+	releaseLock(req->lock);
+	DELETE(req);
+}
+
 static void completeEnumNextRequest(ReadEnumRequest *req){
+	assert(IS_IN_DQUEUE(req) == 0);
 	completeRWFileIO(req->rwfr, sizeof(*req->fe), 0);
 	DELETE(req);
 }
@@ -143,7 +166,6 @@ static void initWaitable(Resource *r, const FileEnumeration *fe){
 	r->description = *fe;
 }
 
-// TODO replace name and length with FileEnumeration
 void deleteResource(ResourceType rt, const FileEnumeration *fe){
 	ResourceList *rl = resourceList + rt;
 	acquireLock(&rl->lock);
@@ -174,7 +196,7 @@ static int addWaitable(Resource *r, ResourceList *rl){
 			re->currentWaiting = r;
 			ADD_TO_DQUEUE(re, &r->waiting);
 		}
-		// 2. move enumerator from newly added resource to tail if it has pending requests
+		// 2. move enumerator from newly added resource to tail if it has pending and not cancelled requests
 		ResourceEnumerator **rePrev = &r->waiting;
 		while(1){
 			ResourceEnumerator *re = (*rePrev);
@@ -220,18 +242,17 @@ static int readEnumWaitable(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer
 	EXPECT(bufferSize >= sizeof(FileEnumeration));
 	ResourceEnumerator *re = getFileInstance(of);
 	FileEnumeration *fe = (FileEnumeration*)buffer;
-	struct ReadEnumRequest *req = createEnumNextRequest(rwfr, fe);
+	struct ReadEnumRequest *req = createEnumNextRequest(rwfr, fe, re);
 	EXPECT(req != NULL);
 	acquireLock(re->lock);
 	ADD_TO_DQUEUE(req, &re->rwfrList);
+	setRWFileIOCancellable(req->rwfr, req, cancelReadEnumWaitable);
 	struct ReadEnumRequest *req2 = iterateNext_noLock(re, 1);
 	assert(req2 == NULL || req2 == req);
 	releaseLock(re->lock);
+	// if we want to support cancel by other thread, must lock RWFileRequest
 	if(req2 != NULL){
-		completeEnumNextRequest(req2);
-	}
-	else{
-		// TODO: setRWFileIOFunctions(rwfr);
+		completeEnumNextRequest(req);
 	}
 	return 1;
 	ON_ERROR;
@@ -303,10 +324,12 @@ int waitForFirstResource(const char *name, ResourceType t){
 	return 0;
 }
 
-static void initWaitableTail(Resource *r){
+static void initWaitableTail(Resource *r, ResourceList *rl){
 	FileEnumeration fe;
 	MEMSET0(&fe);
 	initWaitable(r, &fe);
+	rl->tail.lock = &rl->lock;
+	ADD_TO_DQUEUE(&rl->tail, &rl->head);
 }
 
 const char *resourceTypeToFileName(ResourceType rt){
@@ -322,9 +345,7 @@ static void initResourceList(ResourceType rt, const char *typeFileName, IsFileEn
 	rl->typeStringLength = strlen(rl->typeString);
 	rl->lock = initialSpinlock;
 	rl->head = NULL;
-	initWaitableTail(&rl->tail);
-	rl->tail.lock = &rl->lock;
-	ADD_TO_DQUEUE(&rl->tail, &rl->head);
+	initWaitableTail(&rl->tail, rl);
 	rl->isFileEnumEqual = func;
 }
 
@@ -347,26 +368,50 @@ void initWaitableResource(void){
 }
 
 #ifndef NDEBUG
+#include"multiprocessor/processorlocal.h"
 
-void testResource(void);
-void testResource(void){
+static void _testResource(void){
 	uintptr_t r;
 	uintptr_t f = syncEnumerateFile("resource:?");
 	assert(f != IO_REQUEST_FAILURE);
 	FileEnumeration fe1;
-	const char *testString = "TEST:xxyy";
-	fe1.nameLength = strlen(testString);
-	strncpy(fe1.name, testString, fe1.nameLength);
+	fe1.nameLength = snprintf(fe1.name, sizeof(fe1.name), "SERVICE:NAME%x", (int)processorLocalTask());
 	int ok = createAddResource(RESOURCE_UNKNOWN, &fe1);
 	assert(ok);
 	FileEnumeration fe2;
-	uintptr_t readSize = sizeof(fe2);
-	r = syncReadFile(f, &fe2, &readSize);
-	assert(r != IO_REQUEST_FAILURE && readSize == sizeof(fe2));
-	assert(isStringEqual(fe2.name, fe2.nameLength, fe1.name, fe1.nameLength));
-
+	// test normal read
+	uintptr_t readSize;
+	while(1){
+		MEMSET0(&fe2);
+		readSize = sizeof(fe2);
+		r = syncReadFile(f, &fe2, &readSize);
+		assert(r != IO_REQUEST_FAILURE && readSize == sizeof(fe2));
+		if(isStringEqual(fe2.name, fe2.nameLength, fe1.name, fe1.nameLength)){
+			break;
+		}
+	}
+	// test cancel
+	readSize = sizeof(fe2);
+	r = systemCall_readFile(f, &fe2, readSize);
+	assert(r != IO_REQUEST_FAILURE);
+	ok = systemCall_cancelIO(r);
+	if(!ok){
+		// IMPROVE: an system call to check whether io is completed
+		uintptr_t r2 = systemCall_waitIOReturn(r, 1, &readSize);
+		assert(r2 != IO_REQUEST_FAILURE && readSize == sizeof(fe2));
+	}
+	// finish
 	deleteResource(RESOURCE_UNKNOWN, &fe1);
-	syncCloseFile(f);
+	r = syncCloseFile(f);
+	assert(r != IO_REQUEST_FAILURE);
+}
+
+void testResource(void);
+void testResource(void){
+	uintptr_t x;
+	for(x = 0; x < 100; x++){
+		_testResource();
+	}
 	printk("testResource ok\n");
 	systemCall_terminate();
 }

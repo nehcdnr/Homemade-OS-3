@@ -94,8 +94,8 @@ void initFile(SystemCallTable *s);
 typedef void CancelFileIO(void *arg);
 typedef void AcceptFileIO(void *arg);
 
-CancelFileIO defaultCancelFileIO;
-AcceptFileIO defaultAcceptFileIO;
+//CancelFileIO defaultCancelFileIO;
+//AcceptFileIO defaultAcceptFileIO;
 
 typedef struct RWFileRequest RWFileRequest;
 typedef struct SeekRWFileRequest SeekRWFileRequest;
@@ -106,7 +106,8 @@ typedef struct CloseFileRequest CloseFileRequest;
 typedef struct OpenedFile OpenedFile;
 typedef struct FileFunctions FileFunctions;
 
-void setRWFileIOFunctions(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO, AcceptFileIO *acceptFileIO);
+void setRWFileIOCancellable(RWFileRequest *rwfr, void *arg, CancelFileIO *cancelFileIO);
+int setRWFileIONotCancellable(RWFileRequest *rwfr);
 
 void completeRWFileIO(RWFileRequest *r1, uintptr_t rwByteCount, uintptr_t addOffset);
 void completeFileIO0(FileIORequest2 *r0);
