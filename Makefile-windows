@@ -21,6 +21,9 @@ VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 # disk image
 MKDOSFS=./tool/mkdosfs/mkdosfs.exe
 
+# archive
+7ZA=./tool/7z1514-extra/7za.exe
+
 #directory
 BUILD_DIR=build
 SRC_DIR=src
@@ -92,3 +95,6 @@ runvbox: os3.img
 disk:
 	$(QEMU_IMG) create -f raw empty.raw 40M
 	$(MKDOSFS) -v -F 32 empty.raw
+
+archive:
+	$(7ZA) a -tzip src.zip src -xr!*.o
