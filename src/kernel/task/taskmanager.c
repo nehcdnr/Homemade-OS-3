@@ -808,8 +808,10 @@ static void cacnelIOHandler(InterruptParam *p){
 	acquireLock(&t->ioListLock);
 	int ok = searchIOList_noLock(t->pendingIOList, ior);
 	if(ok){
-		REMOVE_FROM_DQUEUE(ior);
 		ok = ior->cancellable;
+	}
+	if(ok){
+		REMOVE_FROM_DQUEUE(ior);if(ior->cancellable == 0)printk("err\n");
 		ior->cancellable = 0;
 	}
 	releaseLock(&t->ioListLock);

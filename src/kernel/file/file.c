@@ -424,8 +424,8 @@ static void defaultCancelFileIO(__attribute__((__unused__)) void *instance){
 
 static void cancelDeleteFileIO(void *instance){
 	struct FileIORequest *r0 = instance;
-	assert(r0->cancelFileIO != defaultCancelFileIO);
 	r0->cancelFileIO(r0->acceptCancelArg);
+	assert(r0->cancelFileIO != defaultCancelFileIO);
 	r0->beforeDeleteFileIO(r0->instance);
 	int ok = addFileIOCount(r0->file, -1);
 	assert(ok);

@@ -17,6 +17,7 @@ struct IORequest{
 	CancelIO *cancel;
 	// cancellable is the critical section flag shared by the threads calling completeIO and cancelIO
 	int cancellable;
+	// IMPROVE: status = PENDING, CANCELLABLE, CANCELLING, COMPLETED
 	// return number of elements in returnValues
 	// instance and IORequest should be deleted in this function
 	AcceptIO *accept;
