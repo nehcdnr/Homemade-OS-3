@@ -1072,7 +1072,7 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 }
 
 void i8254xDriver(void){
-	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM) == 0){
+	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM, matchName) == 0){
 		printk("failed to find PCI driver\n");
 		systemCall_terminate();
 	}
@@ -1197,9 +1197,9 @@ void testI8254xTransmit2(void){
 	const char *file0 = "8254x:eth0";
 	const char *file1 = "8254x:eth1";
 	int ok;
-	ok = waitForFirstResource(file0, RESOURCE_DATA_LINK_DEVICE);
+	ok = waitForFirstResource(file0, RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
-	ok = waitForFirstResource(file1, RESOURCE_DATA_LINK_DEVICE);
+	ok = waitForFirstResource(file1, RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
 	OpenFileMode ofm0 = OPEN_FILE_MODE_0;
 	OpenFileMode ofm1 = OPEN_FILE_MODE_0;
@@ -1231,7 +1231,7 @@ void testI8254xTransmit2(void){
 
 void testI8254xTransmit(void);
 void testI8254xTransmit(void){
-	int ok = waitForFirstResource("8254x:eth1", RESOURCE_DATA_LINK_DEVICE);
+	int ok = waitForFirstResource("8254x:eth1", RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
 	sleep(600);
 	testRWI8254x("8254x:eth1", 1, 5, 1500);
@@ -1240,7 +1240,7 @@ void testI8254xTransmit(void){
 
 void testI8254xReceive(void);
 void testI8254xReceive(void){
-	int ok =waitForFirstResource("8254x:eth0", RESOURCE_DATA_LINK_DEVICE);
+	int ok = waitForFirstResource("8254x:eth0", RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
 	sleep(100);
 	testRWI8254x("8254x:eth0", 0, 5, 1500);

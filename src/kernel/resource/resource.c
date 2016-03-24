@@ -290,9 +290,14 @@ static int enumWaitable(OpenFileRequest *ofr, const char *name, uintptr_t nameLe
 	return 0;
 }
 
-static int matchName(const FileEnumeration *fe, uintptr_t arg){
+int matchName(const FileEnumeration *fe, uintptr_t arg){
 	const char *name = (const char*)arg;
 	return isStringEqual(fe->name, fe->nameLength, name, strlen(name));
+}
+
+int matchWildcardName(const FileEnumeration *fe, uintptr_t arg){
+	const char *name = (const char*)arg;
+	return matchWildcardString(fe->name, fe->nameLength, name, strlen(name));
 }
 
 uintptr_t enumNextResource(
@@ -309,11 +314,11 @@ uintptr_t enumNextResource(
 	}
 }
 
-int waitForFirstResource(const char *name, ResourceType t){
+int waitForFirstResource(const char *name, ResourceType t, MatchFunction match){
 	uintptr_t waitFS = syncEnumerateFile(resourceTypeToFileName(t));
 	EXPECT(waitFS != IO_REQUEST_FAILURE);
 	FileEnumeration fe;
-	uintptr_t r = enumNextResource(waitFS, &fe, (uintptr_t)name, matchName);
+	uintptr_t r = enumNextResource(waitFS, &fe, (uintptr_t)name, match);
 	EXPECT(r == sizeof(fe));
 	r = syncCloseFile(waitFS);
 	return r != IO_REQUEST_FAILURE;
@@ -336,6 +341,7 @@ const char *resourceTypeToFileName(ResourceType rt){
 	return resourceList[rt].typeFileName;
 }
 
+// func is a function checking whether there is a existing resource
 static void initResourceList(ResourceType rt, const char *typeFileName, IsFileEnumEqual *func){
 	ResourceList *rl = resourceList + rt;
 	rl->typeFileName = typeFileName;

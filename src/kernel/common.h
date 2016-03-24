@@ -56,12 +56,21 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define HIGH64(V) ((((uint64_t)(V)) >> 32) & 0xffffffff)
 #define COMBINE64(H,L) ((uint64_t)(L) + ((uint64_t)(H) << 32))
 
+uint16_t changeEndian16(uint16_t v);
+uint32_t changeEndian32(uint32_t v);
+uint64_t changeEndian64(uint64_t v);
+
 int isStringEqual(const char *s1, uintptr_t len1, const char *s2, uintptr_t len2);
+// '*' for 0 or more characters
+int matchWildcardString(const char *str, uintptr_t sLen, const char *pat, uintptr_t pLen);
 uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c);
 uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 // return type of ternary operator is the 1st value
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))
+
+// see console.c
+int printString(const char *s, size_t length);
 
 int snprintf(char *str, size_t len, const char *format, ...);
 int printk(const char *format, ...);

@@ -22,7 +22,7 @@ VIRTUALBOX=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe
 MKDOSFS=./tool/mkdosfs/mkdosfs.exe
 
 # archive
-7ZA=./tool/7z1514-extra/7za.exe
+7ZA=./tool/7z1514-extra/x64/7za.exe
 
 #directory
 BUILD_DIR=build

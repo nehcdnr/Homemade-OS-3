@@ -410,7 +410,7 @@ void pciDriver(void){
 
 void testPCI(void);
 void testPCI(void){
-	int ok = waitForFirstResource("pci", RESOURCE_FILE_SYSTEM);
+	int ok = waitForFirstResource("pci", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	uintptr_t r, enumHandle = enumeratePCI(0x01060100, 0xffffff00);
 	//("pci:0/0");

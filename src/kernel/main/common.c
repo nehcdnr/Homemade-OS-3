@@ -95,8 +95,6 @@ int isspace(int c){
 	}
 }
 
-int printString(const char *s, size_t length);
-
 static int unsignedToString(char *str, unsigned number, int base){
 	int i = 0;
 	unsigned n2 = number;
@@ -170,11 +168,65 @@ static int stringToSigned(const char *buffer, int bufferLength, int *result, int
 	return i1 + i2;
 }
 
+#define TO_BIG_ENDIAN(V, L) \
+(((typeof(V))changeEndian##L((V) & ((((typeof(V))1) << (L)) - 1))) << (L)) + \
+(((typeof(V))changeEndian##L((V) >> (L))) & ((((typeof(V))1) << (L)) - 1))
+
+#define changeEndian8(V) (V)
+
+uint16_t changeEndian16(uint16_t v){
+	return TO_BIG_ENDIAN(v, 8);
+}
+
+uint32_t changeEndian32(uint32_t v){
+	return TO_BIG_ENDIAN(v, 16);
+}
+
+uint64_t changeEndian64(uint64_t v){
+	return TO_BIG_ENDIAN(v, 32);
+}
+
+#undef toBigEndian8
+#undef TO_BIG_ENDIAN
+
 int isStringEqual(const char *s1, uintptr_t len1, const char *s2, uintptr_t len2){
 	if(len1 != len2){
 		return 0;
 	}
 	return strncmp(s1, s2, len1) == 0;
+}
+
+int matchWildcardString(const char *str, uintptr_t sLen, const char *pat, uintptr_t pLen){
+	// match non wildcard at tail
+	const char wildcard = '*';
+	while(pLen > 0 && sLen > 0){
+		if(pat[pLen - 1] == wildcard)
+			break;
+		if(pat[pLen - 1] != str[sLen - 1])
+			return 0;
+		pLen--;
+		sLen--;
+	}
+	if(pLen == 0){
+		return sLen == 0;
+	}
+	// match pattern as a sequence of x...*...
+	uintptr_t s0 = 0, p0 = 0;
+	while(p0 < pLen){
+		uintptr_t p1;
+		for(p1 = p0; p1 < pLen && pat[p1] != wildcard; p1++);
+		while(1){
+			if(s0 + p1 - p0 > sLen)
+				return 0;
+			if(isStringEqual(str + s0, p1 - p0, pat + p0, p1 - p0)){
+				s0 += p1 - p0;
+				break;
+			}
+			s0++;
+		}
+		for(p0 = p1; p0 < pLen && pat[p0] == wildcard; p0++);
+	}
+	return 1;
 }
 
 uintptr_t indexOf(const char *s, uintptr_t i, uintptr_t len, char c){
@@ -571,4 +623,36 @@ void testSscanf(void){
 	c = sscanf(" aaa bbb ", "%s", s4);
 	assert(strlen(s4) == 3);
 }
+
+#define MATCH_WILDCARD(S, P) matchWildcardString((S), strlen(S), (P), strlen(P))
+void testWildcard(void);
+void testWildcard(void){
+	int r;
+	r = MATCH_WILDCARD("abc", "");
+	assert(r == 0);
+	r = MATCH_WILDCARD("", "");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "abc");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "**a**");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "a*a");
+	assert(r == 0);
+	r = MATCH_WILDCARD("abc", "*c");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "*");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "a**b**c**");
+	assert(r == 1);
+	r = MATCH_WILDCARD("abc", "bc");
+	assert(r == 0);
+	printk("test wildcard ok\n");
+}
+void testEndian(void);
+void testEndian(void){
+	assert(changeEndian16(0x1122) == 0x2211);
+	assert(changeEndian32(0x11223344) == 0x44332211);
+	assert(changeEndian64(COMBINE64(0xaabbccdd, 0x11223344)) == COMBINE64(0x44332211, 0xddccbbaa));
+}
+
 #endif

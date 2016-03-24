@@ -10,12 +10,14 @@ typedef enum ResourceType{
 
 typedef int (*MatchFunction)(const FileEnumeration*, uintptr_t);
 
+int matchName(const FileEnumeration *fe, uintptr_t arg);
+int matchWildcardName(const FileEnumeration *fe, uintptr_t arg);
+
 uintptr_t enumNextResource(
 	uintptr_t f, FileEnumeration *fe,
 	uintptr_t arg, MatchFunction match
 );
-
-int waitForFirstResource(const char *name, ResourceType t);
+int waitForFirstResource(const char *name, ResourceType t, MatchFunction match);
 
 const char *resourceTypeToFileName(ResourceType rt);
 

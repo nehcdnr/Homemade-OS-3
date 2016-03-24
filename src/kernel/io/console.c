@@ -130,8 +130,6 @@ static int printBackspace(int length){
 	return a;
 }
 
-
-int printString(const char *s, size_t length);
 int printString(const char *s, size_t length){
 	int a;
 	acquireLock(&kernelConsole.lock); //IMPROVE: 1 lock&unlock per kprintf
@@ -386,7 +384,7 @@ static void kernelConsoleLoop(void){
 		printk("cannot allocate memory for kernel console\n");
 		systemCall_terminate();
 	}
-	waitForFirstResource("ps2", RESOURCE_FILE_SYSTEM);
+	waitForFirstResource("ps2", RESOURCE_FILE_SYSTEM, matchName);
 	uintptr_t kb = syncOpenFile("ps2:keyboard");
 	if(kb == IO_REQUEST_FAILURE){
 		printk("cannot open PS/2 keyboard\n");

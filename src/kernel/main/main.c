@@ -23,7 +23,8 @@ static void initService(void){
 		ahciDriver,
 		kernelFileService,
 		fatService,
-		i8254xDriver
+		i8254xDriver,
+		//internetService
 		//testMemoryTask,
 		//testKFS,
 		//testFAT,
@@ -93,8 +94,8 @@ void c_entry(void){
 	setProcessorLocal(pic, gdt, taskManager, timer);
 	// 9. file
 	if(isBSP){
-		initResourceManager(global.syscallTable);
 		initFile(global.syscallTable);
+		initWaitableResource();
 	}
 	// 10. driver
 	if(isBSP){

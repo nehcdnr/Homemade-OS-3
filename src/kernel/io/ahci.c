@@ -976,7 +976,7 @@ static void completeDiskRequestTask(__attribute__((__unused__)) void *arg){
 void ahciDriver(void){
 	const char *driverName = "ahci";
 	// 0x01: mass storage; 0x06: SATA; 01: AHCI >= 1.0
-	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM) == 0){
+	if(waitForFirstResource("pci", RESOURCE_FILE_SYSTEM, matchName) == 0){
 		printk("cannot find PCI driver\n");
 		systemCall_terminate();
 	}
@@ -1032,7 +1032,7 @@ void ahciDriver(void){
 void testAHCI(void);
 void testAHCI(void){
 	printk("test ahci driver...\n");
-	int ok = waitForFirstResource("ahci", RESOURCE_FILE_SYSTEM);
+	int ok = waitForFirstResource("ahci", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	uintptr_t enumDisk = syncEnumerateFile(resourceTypeToFileName(RESOURCE_DISK_PARTITION));
 	assert(enumDisk != IO_REQUEST_FAILURE);
