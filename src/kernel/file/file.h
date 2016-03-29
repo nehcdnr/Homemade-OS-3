@@ -40,7 +40,9 @@ typedef union{
 
 enum FileParameter{
 	FILE_PARAM_SIZE = 0x10,
-	FILE_PARAM_WRITABLE_SIZE = 0x20
+	FILE_PARAM_WRITABLE_SIZE = 0x20,
+	FILE_PARAM_SOURCE_IP_ADDRESS = 0x30,
+	FILE_PARAM_DESTINATION_IP_ADDRESS = 0x31
 };
 
 // if failed, return IO_REQUEST_FAILURE
@@ -134,6 +136,7 @@ struct FileFunctions{
 	int (*seekRead)(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	int (*seekWrite)(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 	int (*getParameter)(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode);
+	int (*setParameter)(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode, uint64_t value);
 	void (*close)(CloseFileRequest *cfr, OpenedFile *of);
 };
 
@@ -143,6 +146,7 @@ int dummyWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintp
 int dummySeekRead(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 int dummySeekWrite(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uint64_t position, uintptr_t bufferSize);
 int dummyGetParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode);
+int dummySetParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t parameterCode, uint64_t value);
 void dummyClose(CloseFileRequest *cfr, OpenedFile *of);
 
 int seekReadByOffset(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize);
@@ -150,7 +154,7 @@ int seekWriteByOffset(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer
 
 // use macro to check number of arguments
 #define INITIAL_FILE_FUNCTIONS \
-	{dummyRead, dummyWrite, dummySeekRead, dummySeekWrite, dummyGetParameter, dummyClose}
+	{dummyRead, dummyWrite, dummySeekRead, dummySeekWrite, dummyGetParameter, dummySetParameter, dummyClose}
 
 typedef struct OpenFileManager OpenFileManager;
 

@@ -168,26 +168,26 @@ static int stringToSigned(const char *buffer, int bufferLength, int *result, int
 	return i1 + i2;
 }
 
-#define TO_BIG_ENDIAN(V, L) \
+#define CHANGE_ENDIAN(V, L) \
 (((typeof(V))changeEndian##L((V) & ((((typeof(V))1) << (L)) - 1))) << (L)) + \
 (((typeof(V))changeEndian##L((V) >> (L))) & ((((typeof(V))1) << (L)) - 1))
 
 #define changeEndian8(V) (V)
 
 uint16_t changeEndian16(uint16_t v){
-	return TO_BIG_ENDIAN(v, 8);
+	return CHANGE_ENDIAN(v, 8);
 }
 
 uint32_t changeEndian32(uint32_t v){
-	return TO_BIG_ENDIAN(v, 16);
+	return CHANGE_ENDIAN(v, 16);
 }
 
 uint64_t changeEndian64(uint64_t v){
-	return TO_BIG_ENDIAN(v, 32);
+	return CHANGE_ENDIAN(v, 32);
 }
 
-#undef toBigEndian8
-#undef TO_BIG_ENDIAN
+#undef changeEndian8
+#undef CHANGE_ENDIAN
 
 int isStringEqual(const char *s1, uintptr_t len1, const char *s2, uintptr_t len2){
 	if(len1 != len2){

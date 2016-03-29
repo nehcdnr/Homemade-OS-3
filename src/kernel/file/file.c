@@ -425,7 +425,7 @@ static void defaultCancelFileIO(__attribute__((__unused__)) void *instance){
 static void cancelDeleteFileIO(void *instance){
 	struct FileIORequest *r0 = instance;
 	r0->cancelFileIO(r0->acceptCancelArg);
-	assert(r0->cancelFileIO != defaultCancelFileIO);
+	//assert(r0->cancelFileIO != defaultCancelFileIO);
 	r0->beforeDeleteFileIO(r0->instance);
 	int ok = addFileIOCount(r0->file, -1);
 	assert(ok);
@@ -593,15 +593,6 @@ static OpenFileRequest *createOpenFileIO(OpenedFile *openingFile, void *mappedBu
 	ofr->mappedBuffer = mappedBuffer;
 	return ofr;
 }
-/*
-static FileIORequest0 *createFileIO0(OpenedFile *file){
-	FileIORequest0 *NEW(r0);
-	if(r0 == NULL)
-		return NULL;
-	initFileIO(&r0->fior, r0, file);
-	return r0;
-}
-*/
 
 static RWFileRequest *createRWFileIO(
 	OpenedFile *file, int doWrite, int updateOffset,
@@ -698,6 +689,9 @@ int dummySeekWrite(_UNUSED RWFileRequest *rwfr, _UNUSED OpenedFile *of, _UNUSED 
 	return 0;
 }
 int dummyGetParameter(_UNUSED FileIORequest2 *fior2, _UNUSED OpenedFile *of, _UNUSED uintptr_t parameterCode){
+	return 0;
+}
+int dummySetParameter(_UNUSED FileIORequest2 *fior2, _UNUSED OpenedFile *of, _UNUSED uintptr_t parameterCode, _UNUSED uint64_t value){
 	return 0;
 }
 void dummyClose(_UNUSED CloseFileRequest *cfr, _UNUSED OpenedFile *of){
@@ -828,6 +822,19 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 		if(r2 != NULL){
 			pendFileIO(&r2->fior);
 			int ok = f->getParameter(r2, of, SYSTEM_CALL_ARGUMENT_1(p));
+			if(!ok){
+				cancelFailedFileIO(&r2->fior);
+				break;
+			}
+			fior = &r2->fior;
+		}
+		break;
+	case SYSCALL_SET_FILE_PARAMETER:
+		r2 = createFileIO2(of);
+		if(r2 != NULL){
+			pendFileIO(&r2->fior);
+			int ok = f->setParameter(r2, of, SYSTEM_CALL_ARGUMENT_1(p),
+				COMBINE64(SYSTEM_CALL_ARGUMENT_3(p), SYSTEM_CALL_ARGUMENT_2(p)));
 			if(!ok){
 				cancelFailedFileIO(&r2->fior);
 				break;
