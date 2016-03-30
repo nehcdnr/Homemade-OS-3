@@ -2,6 +2,7 @@
 #include"memory/memory.h"
 #include"resource/resource.h"
 #include"task/task.h"
+#include"task/exclusivelock.h"
 #include"multiprocessor/processorlocal.h"
 #include"file/file.h"
 
@@ -98,12 +99,40 @@ static uintptr_t enumNextDataLinkDevice(uintptr_t f, const char *namePattern, Fi
 	return enumNextResource(f, fe, (uintptr_t)namePattern, matchWildcardName);
 }
 
-typedef struct DataLinkDevice{
+typedef struct{
+	Semaphore *argCount;
+	Spinlock lock;
+	struct RWIPArgument *argList;
 	uintptr_t fileHandle;
 	uintptr_t mtu;
+	Task *transmitIPTask;
+}IPTransmitter;
+
+static void transmitIPTask(void *arg);
+
+static int initIPTransmitter(IPTransmitter *t, uintptr_t fileHandle, uintptr_t mtu){
+	t->argCount = createSemaphore(0);
+	EXPECT(t->argCount != NULL);
+	t->lock = initialSpinlock;
+	t->argList = NULL;
+	t->fileHandle = fileHandle;
+	t->mtu = mtu;
+	t->transmitIPTask = createSharedMemoryTask(transmitIPTask, &t, sizeof(&t), processorLocalTask());
+	EXPECT(t->transmitIPTask != NULL);
+	resume(t->transmitIPTask);
+	return 1;
+	// terminate task
+	ON_ERROR;
+	deleteSemaphore(t->argCount);
+	ON_ERROR;
+	return 0;
+}
+
+typedef struct DataLinkDevice{
 	IPV4Address bindingAddress;
 	IPV4Address subnetMask;
-
+	IPTransmitter transmitter;
+	//receiver
 	struct DataLinkDevice **prev, *next;
 }DataLinkDevice;
 
@@ -129,13 +158,17 @@ static DataLinkDevice *createDataLinkDevice(
 	uintptr_t r = syncWritableSizeOfFile(f, &mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
 
-	d->fileHandle = f;
-	d->mtu = mtu;
+	int ok = initIPTransmitter(&d->transmitter, f, mtu);
+	EXPECT(ok);
+	//ok = initIPReceiver(&d->receiver);
+	//EXPECT(ok)
 	d->bindingAddress = address;
 	d->subnetMask = subnetMask;
 	d->prev = NULL;
 	d->next = NULL;
 	return d;
+	// terminate transmit task
+	ON_ERROR;
 	// mtu
 	ON_ERROR;
 	syncCloseFile(f);
@@ -157,7 +190,6 @@ static void addDataLinkDevice(DataLinkDeviceList *dlList, DataLinkDevice *d){
 	releaseLock(&dlList->lock);
 }
 
-
 // find the first data link device whose subnet mask matches address
 static DataLinkDevice *searchDeviceByIP_noLock(DataLinkDeviceList *dlList, IPV4Address address){
 	assert(isAcquirable(&dlList->lock) == 0);
@@ -178,10 +210,10 @@ typedef struct{
 static int setIPAddress(FileIORequest2 *fior2, OpenedFile *of, uintptr_t param, uint64_t value){
 	IPSocket *ips = getFileInstance(of);
 	switch(param){
-	case FILE_PARAM_SOURCE_IP_ADDRESS:
+	case FILE_PARAM_SOURCE_ADDRESS:
 		ips->source = (IPV4Address)(uint32_t)value;
 		break;
-	case FILE_PARAM_DESTINATION_IP_ADDRESS:
+	case FILE_PARAM_DESTINATION_ADDRESS:
 		ips->destination = (IPV4Address)(uint32_t)value;
 		break;
 	default:
@@ -191,63 +223,77 @@ static int setIPAddress(FileIORequest2 *fior2, OpenedFile *of, uintptr_t param, 
 	return 1;
 }
 
-typedef struct{
+typedef struct RWIPArgument{
 	RWFileRequest *rwfr;
-	IPSocket *ips;
+	IPSocket *ipSocket;
 	uint8_t *buffer;
 	uintptr_t size;
+
+	struct RWIPArgument **prev, *next;
 }RWIPArgument;
 
-static void writeIPPacketTask(void *arg);
-
 static int writeIPSocket(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t size){
-	RWIPArgument arg;
-	arg.rwfr = rwfr;
-	arg.ips = getFileInstance(of);
-	arg.buffer = (uint8_t*)buffer;
-	arg.size = size;
-
-	Task *t = createSharedMemoryTask(writeIPPacketTask, &arg, sizeof(arg), processorLocalTask());
-	EXPECT(t != NULL);
-	resume(t);
-	return 1;
-	// terminate t
-	ON_ERROR;
-	return 0;
-}
-
-static void writeIPPacketTask(void *voidArg){
-	RWIPArgument *arg = voidArg;
-
-	uintptr_t fileHandle = IO_REQUEST_FAILURE;
+	IPSocket *ips = getFileInstance(of);
+	// find device
 	DataLinkDeviceList *dlList = &dataLinkDevList;
 	acquireLock(&dlList->lock);
-	{
-		DataLinkDevice *dld = searchDeviceByIP_noLock(dlList, arg->ips->source);
-		if(dld != NULL && arg->size < dld->mtu - sizeof(IPV4Header)){
-			fileHandle = dld->fileHandle;
-		}
-	}
+	DataLinkDevice *dld = searchDeviceByIP_noLock(dlList, ips->source);
 	releaseLock(&dlList->lock);
-	EXPECT(fileHandle != IO_REQUEST_FAILURE);
+	if(dld == NULL){
+		return 0;
+	}
+	// create RWIPRequest
+	RWIPArgument *NEW(arg);
+	if(arg == NULL){
+		return 0;
+	}
+	arg->rwfr = rwfr;
+	arg->ipSocket = ips;
+	arg->buffer = (uint8_t*)buffer;
+	arg->size = size;
+	arg->prev = NULL;
+	arg->next = NULL;
+	// add to request list
+	acquireLock(&dld->transmitter.lock);
+	ADD_TO_DQUEUE(arg, &dld->transmitter.argList);
+	releaseLock(&dld->transmitter.lock);
+	releaseSemaphore(dld->transmitter.argCount);
+	return 1;
+}
 
-	IPV4Header *packet = createIPV4Packet(arg->size, arg->ips->source, arg->ips->destination);
+static int transmitIP(IPTransmitter *tran, const RWIPArgument *arg){
+	EXPECT(arg->size <= tran->mtu - sizeof(IPV4Header));
+	IPV4Header *packet = createIPV4Packet(arg->size, arg->ipSocket->source, arg->ipSocket->destination);
 	EXPECT(packet != NULL);
 	memcpy(packet->payload, arg->buffer, arg->size);
 	uintptr_t writeSize = getIPPacketSize(packet);
-	uintptr_t r = syncWriteFile(fileHandle, packet, &writeSize);
+	uintptr_t r = syncWriteFile(tran->fileHandle, packet, &writeSize);
 	EXPECT(r != IO_REQUEST_FAILURE && writeSize == getIPPacketSize(packet));
 	DELETE(packet);
-	completeRWFileIO(arg->rwfr, arg->size, 0);
-
-	systemCall_terminate();
+	return 1;
 	// cancel write
 	ON_ERROR;
 	DELETE(packet);
 	ON_ERROR;
-	// no device to route
+	// larger than MTU
 	ON_ERROR;
-	completeRWFileIO(arg->rwfr, 0, 0);
+	return 0;
+}
+
+static void transmitIPTask(void *voidArg){
+	IPTransmitter *tran = *(IPTransmitter**)voidArg;
+	while(1){
+		acquireSemaphore(tran->argCount);
+		acquireLock(&tran->lock);
+		RWIPArgument *arg = tran->argList;
+		assert(arg != NULL);
+		REMOVE_FROM_DQUEUE(arg);
+		releaseLock(&tran->lock);
+
+		int ok = transmitIP(tran, arg);
+		completeRWFileIO(arg->rwfr, (ok? arg->size: 0), 0);
+		DELETE(arg); // see writeIPSocket
+	}
 	systemCall_terminate();
 }
 
@@ -256,7 +302,6 @@ static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 	completeCloseFile(cfr);
 	DELETE(ips);
 }
-
 
 static int openIPSocket(
 	OpenFileRequest *ofr,
@@ -282,7 +327,7 @@ static int openIPSocket(
 	return 0;
 }
 
-// TODO:
+/* TODO:
 static int testReadIPPacket(uintptr_t fileHandle){
 	IPV4Header *h = createIPV4Packet(100, (IPV4Address)(uint32_t)1234, (IPV4Address)(uint32_t)4567);
 	if(h == NULL){
@@ -311,7 +356,7 @@ static int testReadIPPacket(uintptr_t fileHandle){
 	DELETE(h);
 	return 0;
 }
-
+*/
 void internetService(void){
 	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
 	fnf.open = openIPSocket;
@@ -330,10 +375,6 @@ void internetService(void){
 		IPV4Address defaultSubnetMask = {bytes: {255, 255, 255, 255}};
 		DataLinkDevice *d = createDataLinkDevice(fe.name, fe.nameLength, defaultAddress, defaultSubnetMask);
 		addDataLinkDevice(&dataLinkDevList, d);
-		if(0){
-			testReadIPPacket(d->fileHandle);
-			printk("test read %x\n",d->fileHandle);
-		}
 	}
 	syncCloseFile(enumDataLink);
 	systemCall_terminate();
@@ -345,19 +386,30 @@ void internetService(void){
 void testWriteIP(void);
 void testWriteIP(void){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
-
+	// wait for device
+	sleep(500);
 	assert(ok);
 	OpenFileMode ofm = OPEN_FILE_MODE_0;
 	ofm.writable = 1;
 	uintptr_t f = syncOpenFileN("ip:", strlen("ip:"), ofm);
 	assert(f != IO_REQUEST_FAILURE);
+	IPV4Address src0 = {bytes: {0, 0, 0, 0}};
+	IPV4Address src1 = {bytes: {0, 0, 0, 1}};
 	uintptr_t r, i;
 	for(i = 0; i < 30; i++){
 		uint8_t buffer[20];
 		memset(buffer, i + 10, sizeof(buffer));
 		uintptr_t writeSize = sizeof(buffer);
+
+		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, src0.value);
+		assert(r != IO_REQUEST_FAILURE);
 		r = syncWriteFile(f, buffer, &writeSize);
-		assert(r != IO_REQUEST_FAILURE && writeSize == 0/*sizeof(buffer)*/);
+		assert(r != IO_REQUEST_FAILURE && writeSize == sizeof(buffer));
+
+		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, src1.value);
+		assert(r != IO_REQUEST_FAILURE);
+		r = syncWriteFile(f, buffer, &writeSize);
+		assert(r == IO_REQUEST_FAILURE);
 	}
 	r = syncCloseFile(f);
 	assert(r != IO_REQUEST_FAILURE);

@@ -39,10 +39,13 @@ typedef union{
 #define OPEN_FILE_MODE_0 ((OpenFileMode)(uintptr_t)0)
 
 enum FileParameter{
+	// file size
 	FILE_PARAM_SIZE = 0x10,
+	// network MTU
 	FILE_PARAM_WRITABLE_SIZE = 0x20,
-	FILE_PARAM_SOURCE_IP_ADDRESS = 0x30,
-	FILE_PARAM_DESTINATION_IP_ADDRESS = 0x31
+	// MAC address, IP address, ...
+	FILE_PARAM_SOURCE_ADDRESS = 0x30,
+	FILE_PARAM_DESTINATION_ADDRESS = 0x31
 };
 
 // if failed, return IO_REQUEST_FAILURE
@@ -61,6 +64,8 @@ uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t posi
 uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter parameterCode);
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
 uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size);
+uintptr_t systemCall_setFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
+uintptr_t syncSetFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
 

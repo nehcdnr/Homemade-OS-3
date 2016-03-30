@@ -951,25 +951,41 @@ uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter param
 	return systemCall3(SYSCALL_GET_FILE_PARAMETER, handle, parameterCode);
 }
 
-uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
-	uintptr_t r, sizeLow, sizeHigh;
-	r = systemCall_getFileParameter(handle, FILE_PARAM_SIZE);
+static uintptr_t syncGetFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t *value){
+	uintptr_t r, valueLow, valueHigh;
+	r = systemCall_getFileParameter(handle, paramCode);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
-	if(r != systemCall_waitIOReturn(r, 2, &sizeLow, &sizeHigh))
+	if(r != systemCall_waitIOReturn(r, 2, &valueLow, &valueHigh))
 		return IO_REQUEST_FAILURE;
-	*size = COMBINE64(sizeHigh, sizeLow);
+	*value = COMBINE64(valueHigh, valueLow);
 	return handle;
 }
 
+uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
+	return syncGetFileParameter(handle, FILE_PARAM_SIZE, size);
+}
+
 uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size){
-	uintptr_t r, writableSize;
-	r = systemCall_getFileParameter(handle, FILE_PARAM_WRITABLE_SIZE);
+	uint64_t size64;
+	uintptr_t r = syncGetFileParameter(handle, FILE_PARAM_WRITABLE_SIZE, &size64);
+	if(r != IO_REQUEST_FAILURE){
+		*size = LOW64(size64);
+	}
+	return r;
+}
+
+uintptr_t systemCall_setFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t value){
+	return systemCall5(SYSCALL_SET_FILE_PARAMETER, handle, paramCode, LOW64(value), HIGH64(value));
+}
+
+uintptr_t syncSetFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t value){
+	uintptr_t r;
+	r = systemCall_setFileParameter(handle, paramCode, value);
 	if(r == IO_REQUEST_FAILURE)
 		return r;
-	if(r != systemCall_waitIOReturn(r, 1, &writableSize))
+	if(r != systemCall_waitIO(r))
 		return IO_REQUEST_FAILURE;
-	*size = writableSize;
 	return handle;
 }
 
@@ -1044,4 +1060,5 @@ void initFile(SystemCallTable *s){
 	registerSystemCall(s, SYSCALL_SEEK_READ_FILE, FileHandleCommandHandler, 5);
 	registerSystemCall(s, SYSCALL_SEEK_WRITE_FILE, FileHandleCommandHandler, 6);
 	registerSystemCall(s, SYSCALL_GET_FILE_PARAMETER, FileHandleCommandHandler, 7);
+	registerSystemCall(s, SYSCALL_SET_FILE_PARAMETER, FileHandleCommandHandler, 8);
 }
