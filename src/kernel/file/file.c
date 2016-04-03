@@ -497,7 +497,6 @@ static void completeFileIO(struct FileIORequest *fior, int returnCount, ...){
 		fior->returnValues[i] = va_arg(va, uintptr_t);
 	}
 	va_end(va);
-
 	completeIO(&fior->ior);
 }
 
@@ -598,7 +597,6 @@ static RWFileRequest *createRWFileIO(
 	OpenedFile *file, int doWrite, int updateOffset,
 	uintptr_t notMappedBuffer, uintptr_t size
 ){
-
 	RWFileRequest *NEW(rwfr);
 	EXPECT(rwfr != NULL);
 	initFileIO(&rwfr->fior, rwfr, file, beforeDeleteRWFileIO);
@@ -624,20 +622,21 @@ static FileIORequest2 *createFileIO2(OpenedFile *file){
 	return r2;
 }
 
-static CloseFileRequest *createCloseFileIO(OpenedFile *file){
-	CloseFileRequest *NEW(cfr);
-	if(cfr == NULL)
-		return NULL;
+static CloseFileRequest *initCloseFileIO(CloseFileRequest *cfr, OpenedFile *file){
 	initFileIO(&cfr->cfior, cfr, file, defaultBeforeDeleteFileIO);
 	return cfr;
 }
 
 // call DELETE if fail
 static int createOpenFileRequests(OpenedFile **of, CloseFileRequest **cfr, OpenFileRequest **ofr, void *mappedBuffer){
+	// allocate memory in advance to avoid failure during closing file
 	OpenedFile *NEW(of2);
 	EXPECT(of2 != NULL);
-	CloseFileRequest *cfr2 = createCloseFileIO(of2);
+	// initialize CloseFileRequest in dispatchFileHandleCommand()
+	// so that processorLocalTask() corresponds to the task calling closeFile()
+	CloseFileRequest *NEW(cfr2);
 	EXPECT(cfr2 != NULL);
+	MEMSET0(cfr2);
 	OpenFileRequest *ofr2 = createOpenFileIO(of2, mappedBuffer);
 	EXPECT(ofr2 != NULL);
 	initOpenedFile(of2, cfr2);
@@ -802,6 +801,8 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	switch(SYSTEM_CALL_NUMBER(p)){
 	case SYSCALL_CLOSE_FILE:
 		cfr = of->cfr;
+		// see createOpenFileRequests()
+		initCloseFileIO(cfr, of);
 		// close cannot fail or be cancelled unless file does not exist
 		pendFileIO(&cfr->cfior);
 		f->close(cfr, of);

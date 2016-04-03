@@ -1029,7 +1029,7 @@ static I8254xDevice *searchI8254xDeviceList(int number){
 	return d;
 }
 
-static void closeI8254x(CloseFileRequest *cfr, __attribute__((__unused__)) OpenedFile *of){
+static void closeI8254x(CloseFileRequest *cfr, OpenedFile *of){
 	OpenedI8254xDevice *od = getFileInstance(of);
 	destroyI8254xReader(&od->reader);
 	DELETE(od);
