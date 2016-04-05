@@ -37,6 +37,8 @@ typedef union{
 }OpenFileMode;
 
 #define OPEN_FILE_MODE_0 ((OpenFileMode)(uintptr_t)0)
+#define OPEN_FILE_MODE_WRITABLE ((OpenFileMode){enumeration:0, writable: 1})
+#define OPEN_FILE_MODE_ENUMERATION ((OpenFileMOde){enumeration: 1, writable: 0})
 
 enum FileParameter{
 	// file size
