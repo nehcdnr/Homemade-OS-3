@@ -5,43 +5,10 @@
 #include"task/exclusivelock.h"
 #include"multiprocessor/processorlocal.h"
 #include"file/file.h"
-
-typedef union{
-	uint32_t value;
-	uint8_t bytes[4];
-}IPV4Address;
+#include"network.h"
 
 static_assert(sizeof(IPV4Address) == 4);
-
-// big endian and most significant bit comes first
-typedef struct{
-	uint8_t headerLength: 4;
-	uint8_t version: 4;
-	uint8_t congestionNotification: 2;
-	uint8_t differentiateService: 6;
-	uint16_t totalLength;
-	uint16_t identification;
-	uint8_t fragmentOffsetHigh: 5;
-	uint8_t flags: 3;
-	uint8_t fragmentOffsetLow;
-	uint8_t timeToLive;
-	uint8_t protocol;
-	uint16_t headerChecksum;
-	IPV4Address source;
-	IPV4Address destination;
-	//uint8_t options[];
-	uint8_t payload[];
-}IPV4Header;
-
-/*
-example
-45 00 00 3c 1a 02 00 00 80 01
-2e 6e c0 a8 38 01 c0 a8 38 ff
-*/
-
 static_assert(sizeof(IPV4Header) / sizeof(uint32_t) == 5);
-
-#define MAX_IP_PACKET_SIZE ((1 << 16) - 1)
 
 static uintptr_t getIPPacketSize(const IPV4Header *h){
 	return (uintptr_t)changeEndian16(h->totalLength);
@@ -51,21 +18,43 @@ static uintptr_t getIPHeaderSize(const IPV4Header *h){
 	return ((uintptr_t)h->headerLength) * sizeof(uint32_t);
 }
 
-// return value in big endian
+uintptr_t getIPDataSize(const IPV4Header *h){
+	return getIPPacketSize(h) - getIPHeaderSize(h);
+}
+
+// return big endian number
 static uint16_t calculateIPChecksum(const IPV4Header *h){
 	uint32_t cs = 0;
 	uintptr_t i;
 	for(i = 0; i * 2 < getIPHeaderSize(h); i++){
 		cs += (uint32_t)changeEndian16(((uint16_t*)h)[i]);
 	}
-	while((cs & 0xffff) != cs){
+	while(cs > 0xffff){
 		cs = (cs & 0xffff) + (cs >> 16);
 	}
 	return changeEndian16(cs ^ 0xffff);
 }
 
-static void initIPV4Header(IPV4Header *h, uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress){
+uint16_t calculatePseudoIPChecksum(const IPV4Header *h){
+	uint32_t cs = 0;
+	cs += changeEndian16(h->source.value & 0xffff);
+	cs += changeEndian16(h->source.value >> 16);
+	cs += changeEndian16(h->destination.value & 0xffff);
+	cs += changeEndian16(h->destination.value >> 16);
+	cs += h->protocol;
+	cs += getIPDataSize(h);
+	while(cs > 0xffff){
+		cs = (cs & 0xffff) + (cs >> 16);
+	}
+	return cs;
+}
+
+void initIPV4Header(
+	IPV4Header *h, uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress,
+	enum IPDataProtocol dataProtocol
+){
 	h->version = 4;
+	// no optional entries
 	h->headerLength = sizeof(IPV4Header) / sizeof(uint32_t);
 	h->differentiateService = 0;
 	h->congestionNotification = 0;
@@ -76,7 +65,7 @@ static void initIPV4Header(IPV4Header *h, uint16_t dataLength, IPV4Address srcAd
 	h->fragmentOffsetLow = 0;
 	h->fragmentOffsetHigh = 0;
 	h->timeToLive = 32;
-	h->protocol = 254; // 1 = ICMP; 6 = TCP; 11 = UDP; 253 = testing; 254 = testing
+	h->protocol = dataProtocol;
 	h->headerChecksum = 0;
 	h->source = srcAddress;
 	h->destination = dstAddress;
@@ -85,12 +74,16 @@ static void initIPV4Header(IPV4Header *h, uint16_t dataLength, IPV4Address srcAd
 	assert(calculateIPChecksum(h) == 0);
 }
 
+#define MAX_IP_PAYLOAD_SIZE (MAX_IP_PACKET_SIZE - sizeof(IPV4Header))
+
 static IPV4Header *createIPV4Packet(uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress){
-	IPV4Header *h = allocateKernelMemory(sizeof(*h) + dataLength);
+	if(dataLength > MAX_IP_PAYLOAD_SIZE)
+		return NULL;
+	IPV4Header *h = allocateKernelMemory(sizeof(IPV4Header) + dataLength);
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(h, dataLength, srcAddress, dstAddress);
+	initIPV4Header(h, dataLength, srcAddress, dstAddress, IP_DATA_PROTOCOL_TEST254);
 	//memset(h->payload, 0, dataLength);
 	return h;
 }
@@ -99,7 +92,7 @@ static uintptr_t enumNextDataLinkDevice(uintptr_t f, const char *namePattern, Fi
 	return enumNextResource(f, fe, (uintptr_t)namePattern, matchWildcardName);
 }
 
-typedef struct{
+typedef struct RWIPQueue{
 	Semaphore *argCount;
 	Spinlock lock;
 	struct RWIPRequest *argList;
@@ -282,14 +275,6 @@ static DataLinkDevice *searchDeviceByIP(DataLinkDeviceList *dlList, IPV4Address 
 	return d;
 }
 
-// one receiveTask for every socket
-typedef struct IPSocket{
-	IPV4Address source;
-	IPV4Address destination;
-
-	RWIPQueue *receive;
-}IPSocket;
-
 static int setIPAddress(FileIORequest2 *fior2, OpenedFile *of, uintptr_t param, uint64_t value){
 	IPSocket *ips = getFileInstance(of);
 	switch(param){
@@ -322,20 +307,20 @@ static int writeIPSocket(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buf
 }
 
 static int transmitIP(RWIPQueue *tran, const RWIPRequest *arg){
-	EXPECT(arg->size <= tran->mtu - sizeof(IPV4Header));
 	IPV4Header *packet = createIPV4Packet(arg->size, arg->ipSocket->source, arg->ipSocket->destination);
 	EXPECT(packet != NULL);
 	memcpy(packet->payload, arg->buffer, arg->size);
 	uintptr_t writeSize = getIPPacketSize(packet);
+	EXPECT(writeSize <= tran->mtu);
 	uintptr_t r = syncWriteFile(tran->fileHandle, packet, &writeSize);
 	EXPECT(r != IO_REQUEST_FAILURE && writeSize == getIPPacketSize(packet));
-	DELETE(packet);
+	releaseKernelMemory(packet);
 	return 1;
 	// cancel write
 	ON_ERROR;
-	DELETE(packet);
-	ON_ERROR;
 	// larger than MTU
+	ON_ERROR;
+	releaseKernelMemory(packet);
 	ON_ERROR;
 	return 0;
 }
@@ -446,21 +431,18 @@ static void receiveIPTask(void *voidArg){
 	systemCall_terminate();
 }
 
+void destroyIPSocket(IPSocket *socket){
+	setIPTaskTerminateFlag(socket->receive);
+}
+
 static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 	IPSocket *ips = getFileInstance(of);
+	destroyIPSocket(ips);
 	completeCloseFile(cfr);
-	setIPTaskTerminateFlag(ips->receive);
 	DELETE(ips);
 }
 
-static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
-	// filename = source IP
-	unsigned src[4] = {0, 0, 0, 0};
-	int scanCount = snscanf(fileName, nameLength, "%u.%u.%u.%u", src + 0, src + 1, src + 2, src + 3);
-	EXPECT(scanCount == 4 && src[0] <= 0xff && src[1] <= 0xff && src[2] <= 0xff && src[3] <= 0xff && ofm.writable);
-	// create IP socket
-	IPSocket *NEW(socket);
-	EXPECT(socket != NULL);
+int initIPSocket(IPSocket *socket, unsigned *src){
 	socket->source.bytes[0] = src[0];
 	socket->source.bytes[1] = src[1];
 	socket->source.bytes[2] = src[2];
@@ -471,6 +453,22 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	EXPECT(dld != NULL);
 	socket->receive = createRWIPQueue(&dld->file, receiveIPTask);
 	EXPECT(socket->receive != NULL);
+	return 1;
+	ON_ERROR;
+	ON_ERROR;
+	return 0;
+}
+
+static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
+	// filename = source IP
+	unsigned src[4] = {0, 0, 0, 0};
+	int scanCount = snscanf(fileName, nameLength, "%u.%u.%u.%u", src + 0, src + 1, src + 2, src + 3);
+	EXPECT(scanCount == 4 && src[0] <= 0xff && src[1] <= 0xff && src[2] <= 0xff && src[3] <= 0xff && ofm.writable);
+	// create IP socket
+	IPSocket *NEW(socket);
+	EXPECT(socket != NULL);
+	int ok = initIPSocket(socket, src);
+	EXPECT(ok);
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.setParameter = setIPAddress;
@@ -479,8 +477,7 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	ff.close = closeIPSocket;
 	completeOpenFile(ofr, socket, &ff);
 	return 1;
-	// terminate receiveTask
-	ON_ERROR;
+	// destroyIPSocket
 	ON_ERROR;
 	DELETE(socket);
 	ON_ERROR;
@@ -583,7 +580,7 @@ void testReadIP(void);
 void testReadIP(void){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
-	sleep(500);
+	sleep(1000);
 	uintptr_t f = syncOpenFileN("ip:0.0.0.0", strlen("ip:0.0.0.0"), OPEN_FILE_MODE_WRITABLE);
 	assert(f != IO_REQUEST_FAILURE);
 	uintptr_t r;
