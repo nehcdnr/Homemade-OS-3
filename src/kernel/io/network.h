@@ -50,15 +50,29 @@ uintptr_t getIPDataSize(const IPV4Header *h);
 // return little endian number
 uint16_t calculatePseudoIPChecksum(const IPV4Header *h);
 
+typedef struct IPSocket IPSocket;
+
+typedef IPV4Header *CreatePacket(IPSocket *ipSocket, const uint8_t *buffer, uintptr_t bufferLength);
+typedef int ValidatePacket(IPSocket *ipSocket, IPV4Header *packet, uintptr_t packetSize);
+typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 // one receive queue & task for every socket
-typedef struct IPSocket{
+struct IPSocket{
+	void *instance;
 	IPV4Address source;
 	IPV4Address destination;
+	CreatePacket *createPacket;
+	ValidatePacket *validatePacket;
+	DeletePacket *deletePacket;
 
-	struct RWIPQueue *receive;
-}IPSocket;
+	struct RWIPQueue *receive, *transmit;
+};
 
-int initIPSocket(IPSocket *socket, unsigned *src);
+int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ValidatePacket *v, DeletePacket *d);
+
 void destroyIPSocket(IPSocket *socket);
+
+int createAddRWIPArgument(struct RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
+
+int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
 void initUDP(void);
