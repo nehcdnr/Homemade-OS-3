@@ -53,7 +53,11 @@ uint16_t calculatePseudoIPChecksum(const IPV4Header *h);
 typedef struct IPSocket IPSocket;
 
 typedef IPV4Header *CreatePacket(IPSocket *ipSocket, const uint8_t *buffer, uintptr_t bufferLength);
-typedef int ValidatePacket(IPSocket *ipSocket, IPV4Header *packet, uintptr_t packetSize);
+typedef int ReceivePacket(
+	IPSocket *ipSocket,
+	uint8_t *buffer, uintptr_t *bufferSize,
+	const IPV4Header *packet, uintptr_t packetSize
+);
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 // one receive queue & task for every socket
 struct IPSocket{
@@ -61,13 +65,13 @@ struct IPSocket{
 	IPV4Address source;
 	IPV4Address destination;
 	CreatePacket *createPacket;
-	ValidatePacket *validatePacket;
+	ReceivePacket *receivePacket;
 	DeletePacket *deletePacket;
 
 	struct RWIPQueue *receive, *transmit;
 };
 
-int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ValidatePacket *v, DeletePacket *d);
+int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
 
 void destroyIPSocket(IPSocket *socket);
 

@@ -12,7 +12,9 @@ void syscall_releaseSemaphore(Semaphore *s);
 */
 int tryAcquireSemaphore(Semaphore *s);
 void acquireSemaphore(Semaphore *s);
-// acquire semaphore at least once until the value reaches 0
+// acquire semaphore until the value reaches 0
+int tryAcquireAllSemaphore(Semaphore *s);
+// acquire semaphore at least once
 int acquireAllSemaphore(Semaphore *s);
 void releaseSemaphore(Semaphore *s);
 int getSemaphoreValue(Semaphore *s);

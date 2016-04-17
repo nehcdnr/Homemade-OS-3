@@ -39,7 +39,7 @@ static uint16_t calculateUDPChecksum(UDPIPHeader *h){
 		cs = (cs & 0xffff) + (cs >> 16);
 	}
 	cs = changeEndian16(cs ^ 0xffff);
-	return (cs == 0? 0xffff: cs);
+	return cs;
 }
 
 typedef struct{
@@ -69,7 +69,10 @@ static UDPIPHeader *_createUDPIPPacket(
 	memcpy(h->payload, data, dataLength);
 
 	h->checksum = calculateUDPChecksum(h);
-	assert(calculateUDPChecksum(h) == 0xffff);
+	if(h->checksum == 0){
+		h->checksum = 0xffff;
+	}
+	assert(calculateUDPChecksum(h) == 0);
 	return h;
 }
 
@@ -89,10 +92,23 @@ static IPV4Header *createUDPIPPacket(IPSocket *ips, const uint8_t *buffer, uintp
 static void deleteUDPIPPacket(IPV4Header *h){
 	releaseKernelMemory(h);
 }
-
+/*
+static int copyUDPData(
+	IPSocket *ips,
+	uint8_t *buffer, uintptr_t *bufferSize,
+	const IPV4Header *packet, uintptr_t packetSize
+){
+	UDPSocket *udps = ips->instance;
+}
+*/
 static int writeUDP(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t size){
 	UDPSocket *udps = getFileInstance(of);
 	return createAddRWIPArgument(udps->ipSocket.transmit, rwfr, &udps->ipSocket, (uint8_t*)buffer, size);
+}
+
+static int readUDP(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t size){
+	UDPSocket *udps = getFileInstance(of);
+	return createAddRWIPArgument(udps->ipSocket.receive, rwfr, &udps->ipSocket, buffer, size);
 }
 
 static int setUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param, uint64_t value){
@@ -129,13 +145,14 @@ static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t n
 
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
-	int ok = initIPSocket(&udps->ipSocket, udps, src, createUDPIPPacket, NULL/*TODO:validateUDPPAcket*/, deleteUDPIPPacket);
+	int ok = initIPSocket(&udps->ipSocket, udps, src, createUDPIPPacket, NULL/*copyUDPData*/, deleteUDPIPPacket);
 	EXPECT(ok);
 	udps->sourcePort = src[4];
 	udps->destinationPort = 0;
 	// TODO: is port using
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.write = writeUDP;
+	ff.read = readUDP;
 	ff.setParameter = setUDPParameter;
 	ff.close = closeUDPSocket;
 	completeOpenFile(ofr, udps, &ff);

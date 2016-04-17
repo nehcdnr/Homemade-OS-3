@@ -188,21 +188,32 @@ static void setIPTaskTerminateFlag(RWIPQueue *t){
 	releaseSemaphore(t->argCount);
 }
 
-static RWIPRequest *waitNextIPArgument(RWIPQueue *t){
+// return 0 if terminated
+// return 1 if targetQueue has new value
+static int waitNextIPArgument(RWIPQueue *t, RWIPRequest **targetQueue){
 	assert(t->argCount != NULL);
-	acquireSemaphore(t->argCount);
-	acquireLock(&t->lock);
-	RWIPRequest *arg = t->argList;
-	if(t->terminateFlag){
-		assert(arg == NULL);
-		assert(getSemaphoreValue(t->argCount) == 0);
+	int listLength;
+	if(*targetQueue == NULL){
+		listLength = acquireAllSemaphore(t->argCount);
 	}
 	else{
-		assert(arg != NULL);
+		listLength = tryAcquireAllSemaphore(t->argCount);
+	}
+	acquireLock(&t->lock);
+	int ok = 1;
+	if(t->terminateFlag){
+		ok = 0;
+		assert(t->argList == NULL && listLength == 1);
+		listLength--;
+	}
+	int a;
+	for(a = 0; a < listLength; a++){
+		RWIPRequest *arg = t->argList;
 		REMOVE_FROM_DQUEUE(arg);
+		ADD_TO_DQUEUE(arg, targetQueue);
 	}
 	releaseLock(&t->lock);
-	return arg;
+	return ok;
 }
 
 // one transmitTask for every device
@@ -327,11 +338,13 @@ static int transmitIP(RWIPQueue *tran, const RWIPRequest *arg){
 
 static void transmitIPTask(void *voidArg){
 	RWIPQueue *tran = *(RWIPQueue**)voidArg;
+	RWIPRequest *localQueue = NULL;
 	while(1){
-		RWIPRequest *arg = waitNextIPArgument(tran);
-		if(arg == NULL){
+		if(waitNextIPArgument(tran, &localQueue) == 0){
 			break;
 		}
+		RWIPRequest *arg = localQueue;
+		REMOVE_FROM_DQUEUE(arg);
 		int ok = transmitIP(tran, arg);
 		completeRWFileIO(arg->rwfr, (ok? arg->size: 0), 0);
 		DELETE(arg); // see writeIPSocket
@@ -345,7 +358,7 @@ static int readIPSocket(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 	return createAddRWIPArgument(ips->receive, rwfr, ips, buffer, size);
 }
 
-static int isValidIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO: src/dst address*/){
+static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO: src/dst address*/){
 	if(packet->version != 4 || readSize < sizeof(*packet)){
 		return 0;
 	}
@@ -366,59 +379,39 @@ static int isValidIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO:
 	return 1;
 }
 
-static uintptr_t readValidIPPacket(uintptr_t fileHandle, IPV4Header *packet, uintptr_t *headerSize, uintptr_t *readSize){
-	while(1){
-		uintptr_t readSize2 = *readSize;
-		uintptr_t r = syncReadFile(fileHandle, packet, &readSize2);
-		if(r == IO_REQUEST_FAILURE){
-			return r;
-		}
-		if(isValidIPV4Packet(packet, readSize2) == 0){
-			continue;
-		}
-		*readSize = readSize2;
-		*headerSize = getIPHeaderSize(packet);
-		return r;
-	}
-}
-
 static void receiveIPTask(void *voidArg){
 	RWIPQueue *rece = *(RWIPQueue**)voidArg;
 
+	RWIPRequest *localQueue = NULL;
 	IPV4Header *packet = allocateKernelMemory(rece->mtu);
-	while(rece->terminateFlag == 0){
-		uintptr_t readSize, headerSize;
-		while(1){
-			readSize = rece->mtu;
-			uintptr_t r = readValidIPPacket(rece->fileHandle, packet, &headerSize, &readSize);
-			if(r == IO_REQUEST_FAILURE){
-				printk("cannot receive IP packet");
-			}
-			else{
+	while(1){
+		// wait for a valid IPv4 packet
+		uintptr_t readSize = rece->mtu;
+		uintptr_t r = syncReadFile(rece->fileHandle, packet, &readSize);
+		if(r == IO_REQUEST_FAILURE){
+			printk("cannot receive IP packet");
+			continue;
+		}
+		if(validateIPV4Packet(packet, readSize) == 0){
+			continue;
+		}
+		// match the packet with receiver
+		if(waitNextIPArgument(rece, &localQueue) == 0){
+			break; // rece->terminateFlag == 1
+		}
+		RWIPRequest *arg;
+		uintptr_t returnSize;
+		for(arg = localQueue; arg != NULL; arg = arg->next){
+			// truncate packet
+			returnSize = arg->size;
+			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, packet, readSize) != 0){
 				break;
 			}
 		}
-		// packet is valid
-		while(1){
-			RWIPRequest *arg = waitNextIPArgument(rece);
-			if(arg == NULL){ // rece->terminateFlag == 1
-				break;
-			}
-			// TODO: validate IP address...
-			uintptr_t returnSize = readSize - headerSize;
-			int ok;
-			if(arg->size < returnSize){
-				returnSize = 0;
-				ok = 0;
-			}
-			else{
-				memcpy(arg->buffer, ((uint8_t*)packet) + headerSize, returnSize);
-				ok = 1;
-			}
+		if(arg != NULL){
+			REMOVE_FROM_DQUEUE(arg);
 			completeRWFileIO(arg->rwfr, returnSize, 0);
 			DELETE(arg);
-			if(ok)
-				break;
 		}
 	}
 	deleteRWIPQueue(rece);
@@ -438,7 +431,7 @@ static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 	DELETE(ips);
 }
 
-int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ValidatePacket *v, DeletePacket *d){
+int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d){
 	socket->instance = inst;
 	socket->source.bytes[0] = src[0];
 	socket->source.bytes[1] = src[1];
@@ -446,7 +439,7 @@ int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, V
 	socket->source.bytes[3] = src[3];
 	socket->destination = (IPV4Address)(uint32_t)0;
 	socket->createPacket = c;
-	socket->validatePacket = v;
+	socket->receivePacket = r;
 	socket->deletePacket = d;
 	DataLinkDevice *dld = searchDeviceByIP(&dataLinkDevList, socket->source);
 	EXPECT(dld != NULL);
@@ -474,6 +467,21 @@ static IPV4Header *createIPV4Packet(IPSocket *ips, const uint8_t *buffer, uintpt
 	return h;
 }
 
+static int copyIPV4Data(
+	IPSocket *ips,
+	uint8_t *buffer, uintptr_t *bufferSize,
+	const IPV4Header *packet, uintptr_t packetSize
+){
+	if(packet->destination.value != ips->source.value){
+		printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->source.value);
+	}
+	// packet header & size are checked in validateIPV4Packet
+	const uintptr_t headerSize = getIPHeaderSize(packet);
+	*bufferSize = MIN(*bufferSize, packetSize - headerSize); // truncate to buffer size
+	memcpy(buffer, ((uint8_t*)packet) + headerSize, *bufferSize);
+	return 1;
+}
+
 static void deleteIPV4Packet(IPV4Header *h){
 	releaseKernelMemory(h);
 }
@@ -486,7 +494,7 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	// create IP socket
 	IPSocket *NEW(socket);
 	EXPECT(socket != NULL);
-	int ok = initIPSocket(socket, socket, src, createIPV4Packet, NULL/*TODO:validateIPV4Packet*/, deleteIPV4Packet);
+	int ok = initIPSocket(socket, socket, src, createIPV4Packet, copyIPV4Data, deleteIPV4Packet);
 	EXPECT(ok);
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
@@ -597,11 +605,15 @@ void testWriteIP(void){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	IPV4Address src0 = {bytes: {0, 0, 0, 0}};
+	uint16_t srcPort = 60000;
 	IPV4Address dst0 = {bytes: {0, 0, 0, 0}};
+	uint16_t dstPort = 0;
 	// wait for device
 	sleep(1000);
 	testWriteNetwork("ip:0.0.0.0", src0.value, dst0.value);
-	testWriteNetwork("udp:0.0.0.0:60000", src0.value + (((uint64_t)60000) << 32), dst0.value);
+	testWriteNetwork("udp:0.0.0.0:60000",
+		src0.value + (((uint64_t)srcPort) << 32),
+		dst0.value + (((uint64_t)dstPort) << 32));
 	systemCall_terminate();
 }
 

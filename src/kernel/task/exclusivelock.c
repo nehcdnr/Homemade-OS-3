@@ -105,13 +105,17 @@ void acquireSemaphore(Semaphore *s){
 	acquireExLock(&s->exLock, _acquireSemaphore, _pushSemaphoreQueue, 1);
 }
 
-int acquireAllSemaphore(Semaphore *s){
-	acquireSemaphore(s);
+int tryAcquireAllSemaphore(Semaphore *s){
 	int r;
 	for(r = 1; 1; r++){
 		if(tryAcquireSemaphore(s) == 0)
 			return r;
 	}
+}
+
+int acquireAllSemaphore(Semaphore *s){
+	acquireSemaphore(s);
+	return 1 + tryAcquireSemaphore(s);
 }
 
 void releaseSemaphore(Semaphore *s){
