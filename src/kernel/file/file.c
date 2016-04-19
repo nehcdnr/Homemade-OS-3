@@ -967,9 +967,18 @@ uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size){
 	return syncGetFileParameter(handle, FILE_PARAM_SIZE, size);
 }
 
-uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size){
+uintptr_t syncMaxWriteSizeOfFile(uintptr_t handle, uintptr_t *size){
 	uint64_t size64;
-	uintptr_t r = syncGetFileParameter(handle, FILE_PARAM_WRITABLE_SIZE, &size64);
+	uintptr_t r = syncGetFileParameter(handle, FILE_PARAM_MAX_WRITE_SIZE, &size64);
+	if(r != IO_REQUEST_FAILURE){
+		*size = LOW64(size64);
+	}
+	return r;
+}
+
+uintptr_t syncMinReadSizeOfFile(uintptr_t handle, uintptr_t *size){
+	uint64_t size64;
+	uintptr_t r = syncGetFileParameter(handle, FILE_PARAM_MIN_READ_SIZE, &size64);
 	if(r != IO_REQUEST_FAILURE){
 		*size = LOW64(size64);
 	}

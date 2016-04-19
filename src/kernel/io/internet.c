@@ -14,7 +14,7 @@ static uintptr_t getIPPacketSize(const IPV4Header *h){
 	return (uintptr_t)changeEndian16(h->totalLength);
 }
 
-static uintptr_t getIPHeaderSize(const IPV4Header *h){
+uintptr_t getIPHeaderSize(const IPV4Header *h){
 	return ((uintptr_t)h->headerLength) * sizeof(uint32_t);
 }
 
@@ -26,7 +26,8 @@ uintptr_t getIPDataSize(const IPV4Header *h){
 static uint16_t calculateIPChecksum(const IPV4Header *h){
 	uint32_t cs = 0;
 	uintptr_t i;
-	for(i = 0; i * 2 < getIPHeaderSize(h); i++){
+	uintptr_t headerSize = getIPHeaderSize(h);
+	for(i = 0; i * 2  + 1 < headerSize; i++){
 		cs += (uint32_t)changeEndian16(((uint16_t*)h)[i]);
 	}
 	while(cs > 0xffff){
@@ -35,7 +36,7 @@ static uint16_t calculateIPChecksum(const IPV4Header *h){
 	return changeEndian16(cs ^ 0xffff);
 }
 
-uint16_t calculatePseudoIPChecksum(const IPV4Header *h){
+uint32_t calculatePseudoIPChecksum(const IPV4Header *h){
 	uint32_t cs = 0;
 	cs += changeEndian16(h->source.value & 0xffff);
 	cs += changeEndian16(h->source.value >> 16);
@@ -43,9 +44,6 @@ uint16_t calculatePseudoIPChecksum(const IPV4Header *h){
 	cs += changeEndian16(h->destination.value >> 16);
 	cs += h->protocol;
 	cs += getIPDataSize(h);
-	while(cs > 0xffff){
-		cs = (cs & 0xffff) + (cs >> 16);
-	}
 	return cs;
 }
 
@@ -101,7 +99,6 @@ typedef struct RWIPQueue{
 	int terminateFlag;
 }RWIPQueue;
 
-static void transmitIPTask(void *arg);
 static uintptr_t openDataLinkDevice(const FileEnumeration *fe, uintptr_t *mtu);
 
 static RWIPQueue *createRWIPQueue(const FileEnumeration *fe, void (*taskEntry)(void*)){
@@ -237,7 +234,7 @@ static uintptr_t openDataLinkDevice(const FileEnumeration *fe, uintptr_t *mtu){
 	uintptr_t f = syncOpenFileN(fe->name, fe->nameLength, ofm);
 	EXPECT(f != IO_REQUEST_FAILURE);
 
-	uintptr_t r = syncWritableSizeOfFile(f, mtu);
+	uintptr_t r = syncMaxWriteSizeOfFile(f, mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
 	return f;
 	ON_ERROR;
@@ -364,7 +361,10 @@ static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO
 	}
 	uintptr_t packetSize = getIPPacketSize(packet);
 	uintptr_t headerSize = getIPHeaderSize(packet);
-	if(readSize != packetSize || headerSize < sizeof(*packet) || headerSize > readSize){
+	if(readSize < packetSize){
+		// printk("IP packet size %u < actual read size %u\n", packetSize, readSize);
+	}
+	if(headerSize < sizeof(*packet) || headerSize > readSize){
 		printk("bad IP packet size %u; header size %u; read size %u\n", packetSize, headerSize, readSize);
 		return 0;
 	}
@@ -401,10 +401,12 @@ static void receiveIPTask(void *voidArg){
 		}
 		RWIPRequest *arg;
 		uintptr_t returnSize;
+		const uintptr_t packetSize = getIPPacketSize(packet);
+		assert(packetSize <= readSize); // Ethernet has minimum transmission unit
 		for(arg = localQueue; arg != NULL; arg = arg->next){
 			// truncate packet
 			returnSize = arg->size;
-			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, packet, readSize) != 0){
+			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, packet, packetSize) != 0){
 				break;
 			}
 		}
@@ -463,7 +465,7 @@ static IPV4Header *createIPV4Packet(IPSocket *ips, const uint8_t *buffer, uintpt
 	if(h == NULL){
 		return NULL;
 	}
-	memcpy(h->payload, buffer, dataSize);
+	memcpy(((uint8_t*)h) + sizeof(*h), buffer, dataSize);
 	return h;
 }
 
@@ -512,36 +514,6 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	return 0;
 }
 
-/* TODO:
-static int testReadIPPacket(uintptr_t fileHandle){
-	IPV4Header *h = createIPV4Packet(100, (IPV4Address)(uint32_t)1234, (IPV4Address)(uint32_t)4567);
-	if(h == NULL){
-		printk("cannot create ip packet");
-		goto testReadFail;
-	}
-	uintptr_t readSize = getIPPacketSize(h);
-	uintptr_t r = syncReadFile(fileHandle, h, &readSize);
-	if(r == IO_REQUEST_FAILURE || readSize < sizeof(*h)){
-		printk("read failed %x bad IP packet size %d\n", r, readSize);
-		goto testReadFail;
-	}
-	if(calculateIPChecksum(h) != 0){
-		printk("bad IP checksum\n");
-		goto testReadFail;
-	}
-	printk("%d.%d.%d.%d\n", h->source.bytes[0], h->source.bytes[1], h->source.bytes[2], h->source.bytes[3]);
-	printk("%d.%d.%d.%d\n", h->destination.bytes[0], h->destination.bytes[1], h->destination.bytes[2], h->destination.bytes[3]);
-	uintptr_t i;
-	for(i = 0; i < sizeof(*h); i++){
-		printk(" %x%x", (((uint8_t*)h)[i] & 0xf0) / 16, ((uint8_t*)h)[i] & 0x0f);
-		if(i % 10 == 9)printk("\n");
-	}
-	return 1;
-	testReadFail:
-	DELETE(h);
-	return 0;
-}
-*/
 void internetService(void){
 	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
 	fnf.open = openIPSocket;
@@ -572,36 +544,44 @@ void internetService(void){
 
 #ifndef NDEBUG
 
-static void testWriteNetwork(const char *fileName, uint64_t src, uint64_t dst){
+static void testRWNetwork(const char *fileName, uint64_t src, uint64_t dst, int cnt, int isWrite){
 	uintptr_t f = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
 	assert(f != IO_REQUEST_FAILURE);
 	//IPV4Address src1 = {bytes: {0, 0, 0, 1}};
-	uintptr_t r, i;
-	for(i = 0; i < 30; i++){
+	uintptr_t r;
+	int i;
+	for(i = 0; i < cnt; i++){
 		uint8_t buffer[20];
 		memset(buffer, i + 10, sizeof(buffer));
-		uintptr_t writeSize = sizeof(buffer);
+		uintptr_t rwSize = sizeof(buffer);
 
 		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, src);
 		assert(r != IO_REQUEST_FAILURE);
 		r = syncSetFileParameter(f, FILE_PARAM_DESTINATION_ADDRESS, dst);
 		assert(r != IO_REQUEST_FAILURE);
-		r = syncWriteFile(f, buffer, &writeSize);
-		assert(r != IO_REQUEST_FAILURE && writeSize == sizeof(buffer));
-		/*
-		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, src1.value);
+		if(isWrite){
+			r = syncWriteFile(f, buffer, &rwSize);
+			assert(rwSize == sizeof(buffer));
+			printk("transmit packet of size %u\n", rwSize);
+		}
+		else{
+			r = syncReadFile(f, buffer, &rwSize);
+			assert(rwSize == 0 || buffer[0] != i + 10);
+			printk("receive packet of size %u\n", rwSize);
+			unsigned j;
+			for(j = 0; j < rwSize && j < 15; j++){
+				printk("%u(%c) ", buffer[j], buffer[j]);
+			}
+			printk("\n");
+		}
 		assert(r != IO_REQUEST_FAILURE);
-		r = syncWriteFile(f, buffer, &writeSize);
-		assert(r == IO_REQUEST_FAILURE);
-		*/
 	}
 	r = syncCloseFile(f);
 	assert(r != IO_REQUEST_FAILURE);
-	printk("test write %s ok\n", fileName);
+	printk("test %s %s ok\n", (isWrite? "write": "read"), fileName);
 }
 
-void testWriteIP(void);
-void testWriteIP(void){
+static void testRWIP(int cnt, int isWrite){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	IPV4Address src0 = {bytes: {0, 0, 0, 0}};
@@ -610,29 +590,30 @@ void testWriteIP(void){
 	uint16_t dstPort = 0;
 	// wait for device
 	sleep(1000);
-	testWriteNetwork("ip:0.0.0.0", src0.value, dst0.value);
-	testWriteNetwork("udp:0.0.0.0:60000",
+	testRWNetwork("ip:0.0.0.0", src0.value, dst0.value, cnt, isWrite);
+	testRWNetwork("udp:0.0.0.0:60000",
 		src0.value + (((uint64_t)srcPort) << 32),
-		dst0.value + (((uint64_t)dstPort) << 32));
+		dst0.value + (((uint64_t)dstPort) << 32), cnt, isWrite);
 	systemCall_terminate();
 }
 
-void testReadIP(void);
-void testReadIP(void){
-	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
-	assert(ok);
-	sleep(1000);
-	uintptr_t f = syncOpenFileN("ip:0.0.0.0", strlen("ip:0.0.0.0"), OPEN_FILE_MODE_WRITABLE);
+void testWriteIP(void);
+void testWriteIP(void){
+	testRWIP(30, 1);
+}
+/*
+static void testReadNetwork(const char *fileName){
+	uintptr_t f = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
 	assert(f != IO_REQUEST_FAILURE);
 	uintptr_t r;
 	int i;
-	for(i = 0 ; i < 8; i++){
+	for(i = 0 ; i < 5; i++){
 		uint8_t buffer[80];
 		uintptr_t readSize = sizeof(buffer);
 		memset(buffer, 0, readSize);
 		r = syncReadFile(f ,buffer, &readSize);
 		assert(r != IO_REQUEST_FAILURE);
-		printk("receive ip packet of size %u\n", readSize);
+		printk("receive packet of size %u\n", readSize);
 		unsigned j;
 		for(j = 0; j < readSize && j < 10; j++){
 			printk("%x ", buffer[j]);
@@ -643,6 +624,11 @@ void testReadIP(void){
 	assert(r != IO_REQUEST_FAILURE);
 	printk("test read ip ok\n");
 	systemCall_terminate();
+}
+*/
+void testReadIP(void);
+void testReadIP(void){
+	testRWIP(3, 0);
 }
 
 #endif

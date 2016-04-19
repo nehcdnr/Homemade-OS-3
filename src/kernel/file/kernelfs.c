@@ -182,7 +182,7 @@ void testKFS(void){
 	r2 = systemCall_waitIOReturn(r, 1, &file);
 	assert(r == r2);
 	//sizeOf
-	r = systemCall_getFileParameter(file, FILE_PARAM_WRITABLE_SIZE);
+	r = systemCall_getFileParameter(file, FILE_PARAM_MAX_WRITE_SIZE);
 	assert(r == IO_REQUEST_FAILURE);
 	r = systemCall_getFileParameter(file, FILE_PARAM_SIZE);
 	uintptr_t sizeLow, sizeHigh;

@@ -107,7 +107,7 @@ void acquireSemaphore(Semaphore *s){
 
 int tryAcquireAllSemaphore(Semaphore *s){
 	int r;
-	for(r = 1; 1; r++){
+	for(r = 0; 1; r++){
 		if(tryAcquireSemaphore(s) == 0)
 			return r;
 	}
@@ -115,7 +115,7 @@ int tryAcquireAllSemaphore(Semaphore *s){
 
 int acquireAllSemaphore(Semaphore *s){
 	acquireSemaphore(s);
-	return 1 + tryAcquireSemaphore(s);
+	return 1 + tryAcquireAllSemaphore(s);
 }
 
 void releaseSemaphore(Semaphore *s){

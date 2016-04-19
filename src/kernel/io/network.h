@@ -30,7 +30,7 @@ typedef struct{
 	IPV4Address source;
 	IPV4Address destination;
 	//uint8_t options[];
-	uint8_t payload[];
+	//uint8_t payload[];
 }IPV4Header;
 /*
 example
@@ -44,11 +44,11 @@ void initIPV4Header(
 	IPV4Header *h, uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress,
 	enum IPDataProtocol dataProtocol
 );
-
+uintptr_t getIPHeaderSize(const IPV4Header *h);
 uintptr_t getIPDataSize(const IPV4Header *h);
 
-// return little endian number
-uint16_t calculatePseudoIPChecksum(const IPV4Header *h);
+// return little endian number which can be greater than 0xffff
+uint32_t calculatePseudoIPChecksum(const IPV4Header *h);
 
 typedef struct IPSocket IPSocket;
 

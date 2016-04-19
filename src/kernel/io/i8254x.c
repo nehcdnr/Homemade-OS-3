@@ -996,8 +996,11 @@ static int writeI8254x(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffe
 static int getI8254Parameter(FileIORequest2 *r2, __attribute__((__unused__)) OpenedFile *of, uintptr_t parameterCode){
 	//OpenedI8254xDevice *od = getFileInstance(of);
 	switch(parameterCode){
-	case FILE_PARAM_WRITABLE_SIZE:
+	case FILE_PARAM_MAX_WRITE_SIZE:
 		completeFileIO1(r2, MAX_PAYLOAD_SIZE);
+		break;
+	case FILE_PARAM_MIN_READ_SIZE:
+		completeFileIO1(r2, MIN_PAYLOAD_SIZE);
 		break;
 	default:
 		return 0;
@@ -1148,7 +1151,7 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 	assert(f != IO_REQUEST_FAILURE);
 	if(doWrite){
 		uintptr_t ws = 0;
-		r = syncWritableSizeOfFile(f, &ws);
+		r = syncMaxWriteSizeOfFile(f, &ws);
 		assert(r != IO_REQUEST_FAILURE && ws == MAX_PAYLOAD_SIZE);
 	}
 	uint8_t *buf = systemCall_allocateHeap(bufSize + MIN_PAYLOAD_SIZE, USER_WRITABLE_PAGE);

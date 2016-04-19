@@ -44,7 +44,8 @@ enum FileParameter{
 	// file size
 	FILE_PARAM_SIZE = 0x10,
 	// network MTU
-	FILE_PARAM_WRITABLE_SIZE = 0x20,
+	FILE_PARAM_MAX_WRITE_SIZE = 0x20,
+	FILE_PARAM_MIN_READ_SIZE = 0x21,
 	// MAC address, IP address, ...
 	FILE_PARAM_SOURCE_ADDRESS = 0x30,
 	FILE_PARAM_DESTINATION_ADDRESS = 0x31
@@ -65,7 +66,8 @@ uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, ui
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter parameterCode);
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
-uintptr_t syncWritableSizeOfFile(uintptr_t handle, uintptr_t *size);
+uintptr_t syncMaxWriteSizeOfFile(uintptr_t handle, uintptr_t *size);
+uintptr_t syncMinReadSizeOfFile(uintptr_t handle, uintptr_t *size);
 uintptr_t systemCall_setFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
 uintptr_t syncSetFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
 uintptr_t systemCall_closeFile(uintptr_t handle);
