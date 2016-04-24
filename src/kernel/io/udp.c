@@ -48,15 +48,15 @@ static uint16_t calculateUDPChecksum(const IPV4Header *ip, const UDPHeader *h){
 
 typedef struct{
 	IPSocket ipSocket;
-	uint16_t sourcePort;
-	uint16_t destinationPort;
+	uint16_t localPort;
+	uint16_t remotePort;
 }UDPSocket;
 
 // the checksum includes data, so do not separate header and data initialization
 static IPV4Header *_createUDPIPPacket(
 	const uint8_t *data, uint16_t dataLength,
-	IPV4Address srcAddress, uint16_t srcPort,
-	IPV4Address dstAddress, uint16_t dstPort
+	IPV4Address localAddr, uint16_t localPort,
+	IPV4Address remoteAddr, uint16_t remotePort
 ){
 	if(dataLength > MAX_UDP_PAYLOAD_SIZE){
 		return NULL;
@@ -70,9 +70,9 @@ static IPV4Header *_createUDPIPPacket(
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(&h->ip, dataLength + sizeof(h->udp), srcAddress, dstAddress, IP_DATA_PROTOCOL_UDP);
-	h->udp.sourcePort = changeEndian16(srcPort);
-	h->udp.destinationPort = changeEndian16(dstPort);
+	initIPV4Header(&h->ip, dataLength + sizeof(h->udp), localAddr, remoteAddr, IP_DATA_PROTOCOL_UDP);
+	h->udp.sourcePort = changeEndian16(localPort);
+	h->udp.destinationPort = changeEndian16(remotePort);
 	h->udp.length = changeEndian16(dataLength + sizeof(h->udp));
 	h->udp.checksum = 0;
 	memcpy(h->udp.payload, data, dataLength);
@@ -89,8 +89,8 @@ static IPV4Header *createUDPIPPacket(IPSocket *ips, const uint8_t *buffer, uintp
 	UDPSocket *udps = ips->instance;
 	IPV4Header *h = _createUDPIPPacket(
 		buffer, size,
-		ips->source, udps->sourcePort,
-		ips->destination, udps->destinationPort
+		ips->localAddress, udps->localPort,
+		ips->remoteAddress, udps->remotePort
 	);
 	EXPECT(h != NULL);
 	return h;
@@ -134,7 +134,7 @@ static int copyUDPData(
 		return 0;
 	}
 	UDPSocket *udps = ips->instance;
-	if(changeEndian16(h->destinationPort) != udps->sourcePort){
+	if(changeEndian16(h->destinationPort) != udps->localPort){
 		return 0;
 	}
 	// TODO:check h->sourcePort
@@ -160,10 +160,10 @@ static int setUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param, 
 	int ok = 1;
 	switch(param){
 	case FILE_PARAM_SOURCE_ADDRESS:
-		udps->sourcePort = ((value >> 32) & 0xffff);
+		udps->localPort = ((value >> 32) & 0xffff);
 		break;
 	case FILE_PARAM_DESTINATION_ADDRESS:
-		udps->destinationPort= ((value >> 32) & 0xffff);
+		udps->remotePort= ((value >> 32) & 0xffff);
 		break;
 	default:
 		ok = 0;
@@ -191,8 +191,8 @@ static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t n
 	EXPECT(udps != NULL);
 	int ok = initIPSocket(&udps->ipSocket, udps, src, createUDPIPPacket, copyUDPData, deleteUDPIPPacket);
 	EXPECT(ok);
-	udps->sourcePort = src[4];
-	udps->destinationPort = 0;
+	udps->localPort = src[4];
+	udps->remotePort = 0;
 	// TODO: is port using
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.write = writeUDP;

@@ -62,8 +62,8 @@ typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 // one receive queue & task for every socket
 struct IPSocket{
 	void *instance;
-	IPV4Address source;
-	IPV4Address destination;
+	IPV4Address localAddress;
+	IPV4Address remoteAddress;
 	CreatePacket *createPacket;
 	ReceivePacket *receivePacket;
 	DeletePacket *deletePacket;

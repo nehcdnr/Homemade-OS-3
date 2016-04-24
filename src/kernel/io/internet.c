@@ -48,7 +48,7 @@ uint32_t calculatePseudoIPChecksum(const IPV4Header *h){
 }
 
 void initIPV4Header(
-	IPV4Header *h, uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress,
+	IPV4Header *h, uint16_t dataLength, IPV4Address localAddr, IPV4Address remoteAddr,
 	enum IPDataProtocol dataProtocol
 ){
 	h->version = 4;
@@ -65,8 +65,8 @@ void initIPV4Header(
 	h->timeToLive = 32;
 	h->protocol = dataProtocol;
 	h->headerChecksum = 0;
-	h->source = srcAddress;
-	h->destination = dstAddress;
+	h->source = localAddr;
+	h->destination = remoteAddr;
 
 	h->headerChecksum = calculateIPChecksum(h);
 	assert(calculateIPChecksum(h) == 0);
@@ -74,14 +74,14 @@ void initIPV4Header(
 
 #define MAX_IP_PAYLOAD_SIZE (MAX_IP_PACKET_SIZE - sizeof(IPV4Header))
 
-static IPV4Header *createIPV4Header(uintptr_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress){
+static IPV4Header *createIPV4Header(uintptr_t dataLength, IPV4Address localAddr, IPV4Address remoteAddr){
 	if(dataLength > MAX_IP_PAYLOAD_SIZE)
 		return NULL;
 	IPV4Header *h = allocateKernelMemory(sizeof(IPV4Header) + dataLength);
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(h, dataLength, srcAddress, dstAddress, IP_DATA_PROTOCOL_TEST254);
+	initIPV4Header(h, dataLength, localAddr, remoteAddr, IP_DATA_PROTOCOL_TEST254);
 	//memset(h->payload, 0, dataLength);
 	return h;
 }
@@ -290,10 +290,10 @@ static DataLinkDevice *searchDeviceByIP(DataLinkDeviceList *dlList, IPV4Address 
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value){
 	switch(param){
 	case FILE_PARAM_SOURCE_ADDRESS:
-		ips->source = (IPV4Address)(uint32_t)value;
+		ips->localAddress = (IPV4Address)(uint32_t)value;
 		break;
 	case FILE_PARAM_DESTINATION_ADDRESS:
-		ips->destination = (IPV4Address)(uint32_t)value;
+		ips->remoteAddress = (IPV4Address)(uint32_t)value;
 		break;
 	default:
 		return 0;
@@ -435,15 +435,15 @@ static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 
 int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d){
 	socket->instance = inst;
-	socket->source.bytes[0] = src[0];
-	socket->source.bytes[1] = src[1];
-	socket->source.bytes[2] = src[2];
-	socket->source.bytes[3] = src[3];
-	socket->destination = (IPV4Address)(uint32_t)0;
+	socket->localAddress.bytes[0] = src[0];
+	socket->localAddress.bytes[1] = src[1];
+	socket->localAddress.bytes[2] = src[2];
+	socket->localAddress.bytes[3] = src[3];
+	socket->remoteAddress = (IPV4Address)(uint32_t)0;
 	socket->createPacket = c;
 	socket->receivePacket = r;
 	socket->deletePacket = d;
-	DataLinkDevice *dld = searchDeviceByIP(&dataLinkDevList, socket->source);
+	DataLinkDevice *dld = searchDeviceByIP(&dataLinkDevList, socket->localAddress);
 	EXPECT(dld != NULL);
 
 	socket->transmit = createRWIPQueue(&dld->file, transmitIPTask);
@@ -461,7 +461,7 @@ int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, R
 }
 
 static IPV4Header *createIPV4Packet(IPSocket *ips, const uint8_t *buffer, uintptr_t dataSize){
-	IPV4Header *h = createIPV4Header(dataSize, ips->source, ips->destination);
+	IPV4Header *h = createIPV4Header(dataSize, ips->localAddress, ips->remoteAddress);
 	if(h == NULL){
 		return NULL;
 	}
@@ -474,8 +474,8 @@ static int copyIPV4Data(
 	uint8_t *buffer, uintptr_t *bufferSize,
 	const IPV4Header *packet, uintptr_t packetSize
 ){
-	if(packet->destination.value != ips->source.value){
-		printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->source.value);
+	if(packet->destination.value != ips->localAddress.value){
+		printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->localAddress.value);
 	}
 	// packet header & size are checked in validateIPV4Packet
 	const uintptr_t headerSize = getIPHeaderSize(packet);
@@ -489,7 +489,7 @@ static void deleteIPV4Packet(IPV4Header *h){
 }
 
 static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
-	// filename = source IP
+	// filename = local IP
 	unsigned src[4] = {0, 0, 0, 0};
 	int scanCount = snscanf(fileName, nameLength, "%u.%u.%u.%u", src + 0, src + 1, src + 2, src + 3);
 	EXPECT(scanCount == 4 && src[0] <= 0xff && src[1] <= 0xff && src[2] <= 0xff && src[3] <= 0xff && ofm.writable);

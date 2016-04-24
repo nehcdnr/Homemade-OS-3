@@ -392,7 +392,6 @@ typedef struct I8254xReader{
 	RWI8254xRequest *pending;
 	// I8254xReceive.bufferHead >= bufferIndex >= I8254xReceive.bufferTail
 	uintptr_t bufferIndex;
-	uintptr_t offset;
 
 	I8254xReceive *receive;
 	struct I8254xReader **prev, *next;
@@ -405,7 +404,6 @@ static void initI8254xReader(I8254xReader *r, I8254xReceive *q){
 	r->next = NULL;
 	acquireSemaphore(q->readerSemaphore);
 	r->bufferIndex = q->queue.bufferHead;
-	r->offset = 0;
 	ADD_TO_DQUEUE(r, &q->reader);
 	releaseSemaphore(q->readerSemaphore);
 }
@@ -702,28 +700,18 @@ static void copyI8254xReadBuffer(I8254xReader *reader){
 	while(rw != NULL && reader->bufferIndex != q->bufferHead){
 		// both payloadSize and rwSize can be 0
 		// if the driver receives 0-length frame, it returns 0 to RWFileRequest
-		// bufferSize is set in i8254xReceiveTask
+		// payloadSize is set in i8254xReceiveTask
 		const struct I8254xBufferStatus *bs = &r->bufferStatus[reader->bufferIndex];
-		uintptr_t readSize = MIN(rw->rwSize - rwOffset, bs->payloadSize - reader->offset);
-		memcpy_volatile(rw->buffer + rwOffset, bs->payload + reader->offset, readSize);
+		uintptr_t readSize = MIN(rw->rwSize - rwOffset, bs->payloadSize);
+		memcpy_volatile(rw->buffer + rwOffset, bs->payload, readSize);
 		isRead = 1;
 		rwOffset += readSize;
-		reader->offset += readSize;
 		assert(rwOffset <= rw->rwSize);
-		assert(reader->offset <= bs->payloadSize);
 		// complete current RWFileRequest if
-		// 1. file buffer is full
-		// 2. the frame ends
-		// 3. the driver has copied at least one buffer and no more data from hardware
-		int completed = (rwOffset == rw->rwSize);
-		if(reader->offset == bs->payloadSize){
-			if(bs->isEndOfFrame){
-				completed = 1;
-			}
-			reader->bufferIndex = (reader->bufferIndex + 1) % q->bufferCount;
-			reader->offset = 0;
-		}
-		if(completed){
+		// 1. the frame ends
+		// 2. the driver has copied at least one buffer and has no more data from hardware
+		if(bs->isEndOfFrame){
+			// iterate next request
 			REMOVE_FROM_DQUEUE(rw);
 			completeRWFileIO(rw->rwfr, rwOffset, 0);
 			DELETE(rw);
@@ -731,6 +719,7 @@ static void copyI8254xReadBuffer(I8254xReader *reader){
 			rwOffset = 0;
 			isRead = 0;
 		}
+		reader->bufferIndex = (reader->bufferIndex + 1) % q->bufferCount;
 	}
 	if(isRead){
 		REMOVE_FROM_DQUEUE(rw);
@@ -756,7 +745,6 @@ static void dropI8254xReadBuffer(I8254xReader *reader, uintptr_t addTail){
 	uintptr_t readerDiff = (q->bufferCount + reader->bufferIndex - q->bufferTail) % q->bufferCount;
 	if(readerDiff < addTail){
 		reader->bufferIndex = newBufferTail;
-		reader->offset = 0;
 		// printk("warning: i8254x dropped received frames\n");
 	}
 }
@@ -1066,8 +1054,8 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 	ff.read = readI8254x;
 	if(mode.writable){
 		ff.write = writeI8254x;
-		ff.getParameter = getI8254Parameter;
 	}
+	ff.getParameter = getI8254Parameter;
 	ff.close = closeI8254x;
 	completeOpenFile(ofr, od, &ff);
 
@@ -1149,37 +1137,35 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 	}
 	uintptr_t f = syncOpenFileN(filename, strlen(filename), ofm);
 	assert(f != IO_REQUEST_FAILURE);
-	if(doWrite){
-		uintptr_t ws = 0;
-		r = syncMaxWriteSizeOfFile(f, &ws);
-		assert(r != IO_REQUEST_FAILURE && ws == MAX_PAYLOAD_SIZE);
+	{
+		uintptr_t maxPayloadSize = 0;
+		r = syncMaxWriteSizeOfFile(f, &maxPayloadSize);
+		assert(r != IO_REQUEST_FAILURE && maxPayloadSize == MAX_PAYLOAD_SIZE);
 	}
-	uint8_t *buf = systemCall_allocateHeap(bufSize + MIN_PAYLOAD_SIZE, USER_WRITABLE_PAGE);
+	uintptr_t minPayloadSize = 0;
+	r = syncMinReadSizeOfFile(f, &minPayloadSize);
+	assert(r != IO_REQUEST_FAILURE && minPayloadSize == MIN_PAYLOAD_SIZE);
+	uint8_t *buf = systemCall_allocateHeap(bufSize + minPayloadSize, USER_WRITABLE_PAGE);
 	int t;
 	for(t = 0; t < times; t++){
-
 		assert(buf != NULL);
 		uintptr_t b;
 		for(b = 0; b < bufSize; b++){
 			buf[b] = (doWrite? '0' + (t + b) % 10: 5);
 		}
-		uintptr_t totalRWSize = 0;
-		while(totalRWSize < bufSize){
-			uintptr_t rwSize = bufSize - totalRWSize + (doWrite? 0: MIN_FRAME_SIZE);
-			r = (doWrite? syncWriteFile(f, buf + totalRWSize, &rwSize): syncReadFile(f, buf + totalRWSize, &rwSize));
-			assert(r != IO_REQUEST_FAILURE);
-			printk("%c %x %d\n", (doWrite? 'w': 'r'), r, rwSize);
-			totalRWSize += rwSize;
-		}
-		if(doWrite == 0){ // IMPROVE: how to recognize 0-padding?
-			while(totalRWSize > bufSize){
-				totalRWSize--;
-				assert(buf[totalRWSize] == 0);
+		uintptr_t rwSize = bufSize + (doWrite? 0: minPayloadSize);
+		r = (doWrite? syncWriteFile(f, buf, &rwSize): syncReadFile(f, buf, &rwSize));
+		assert(r != IO_REQUEST_FAILURE);
+		printk("%c %x %d\n", (doWrite? 'w': 'r'), r, rwSize);
+		if(doWrite == 0 && bufSize < minPayloadSize){ // how to recognize 0-padding?
+			assert(rwSize == minPayloadSize);
+			while(rwSize > bufSize){
+				rwSize--;
+				assert(buf[rwSize] == 0);
 			}
 		}
-		assert(totalRWSize == bufSize);
 		b = 0;
-		for(b = 0; b < totalRWSize; b++){
+		for(b = 0; b < bufSize; b++){
 			if(buf[b] != '0' + (t + b) % 10){
 				printk("error %d %c %c %d", b, buf[b], '0' + (t + b) % 10, b);
 				assert(0);
@@ -1192,7 +1178,6 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 	r = systemCall_releaseHeap(buf);
 	assert(r != 0);
 	printk("test %s ok\n", (doWrite? "transmit": "receive"));
-
 }
 
 void testI8254xTransmit2(void);
@@ -1210,25 +1195,32 @@ void testI8254xTransmit2(void){
 	uintptr_t f0 = syncOpenFileN(file0, strlen(file0), ofm0), f1 = syncOpenFileN(file1, strlen(file1), ofm1);
 	assert(f0 != IO_REQUEST_FAILURE);
 	assert(f1 != IO_REQUEST_FAILURE);
-	uint8_t buf[MIN_PAYLOAD_SIZE + 4];
-	memset(buf, 3, sizeof(buf));
 	uintptr_t r;
-	uintptr_t writeSize = 0, readSize = sizeof(buf);
-	r = syncWriteFile(f1, "", &writeSize);
-	assert(writeSize == 0 && r != IO_REQUEST_FAILURE);
-	r = syncReadFile(f0, buf, &readSize);
-	assert(readSize == MIN_PAYLOAD_SIZE && r != IO_REQUEST_FAILURE);
 	uintptr_t i;
-	for(i = 0; i < readSize; i++){
-		assert(buf[i] == 0);
+	for(i = 0 ; i < 10; i++){
+		uint8_t wbuf[4];
+		uint8_t rbuf[MIN_PAYLOAD_SIZE + 4];
+		memset(rbuf, 3, sizeof(rbuf));
+		// zero-length packet
+		uintptr_t writeSize = (i % 2? 1: 0), readSize = sizeof(rbuf);
+		wbuf[0] = '0' + i;
+		r = syncWriteFile(f1, wbuf, &writeSize);
+		assert(writeSize == (i % 2) && r != IO_REQUEST_FAILURE);
+		r = syncReadFile(f0, rbuf, &readSize);
+		assert(readSize == MIN_PAYLOAD_SIZE && r != IO_REQUEST_FAILURE);
+		assert(writeSize == 0 || rbuf[0] == wbuf[0]);
+		uintptr_t j;
+		for(j = writeSize; j < readSize; j++){
+			assert(rbuf[j] == 0);
+		}
+		assert(rbuf[readSize] == 3);
 	}
-	assert(buf[readSize] == 3);
 	r = syncCloseFile(f0);
 	assert(r != IO_REQUEST_FAILURE);
 	r = syncCloseFile(f1);
 	assert(r != IO_REQUEST_FAILURE);
 
-	printk("test r/w empty frame ok");
+	printk("test r/w empty frame ok\n");
 	systemCall_terminate();
 }
 
@@ -1238,6 +1230,8 @@ void testI8254xTransmit(void){
 	assert(ok);
 	sleep(600);
 	testRWI8254x("8254x:eth1", 1, 5, 1500);
+	//17); test padding
+	//1500); test truncate
 	systemCall_terminate();
 }
 
@@ -1247,6 +1241,8 @@ void testI8254xReceive(void){
 	assert(ok);
 	sleep(100);
 	testRWI8254x("8254x:eth0", 0, 5, 1500);
+	//17); test padding
+	//17); test truncate
 	systemCall_terminate();
 }
 
