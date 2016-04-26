@@ -5,6 +5,7 @@
 #include"task/exclusivelock.h"
 #include"multiprocessor/processorlocal.h"
 #include"file/file.h"
+#include"io/fifo.h"
 #include"network.h"
 
 static_assert(sizeof(IPV4Address) == 4);
@@ -94,27 +95,17 @@ typedef struct RWIPQueue{
 	Semaphore *argCount;
 	Spinlock lock;
 	struct RWIPRequest *argList;
-	uintptr_t fileHandle;
-	uintptr_t mtu;
 	int terminateFlag;
 }RWIPQueue;
 
-static uintptr_t openDataLinkDevice(const FileEnumeration *fe, uintptr_t *mtu);
-
-static RWIPQueue *createRWIPQueue(const FileEnumeration *fe, void (*taskEntry)(void*)){
+static RWIPQueue *createRWIPQueue(void (*taskEntry)(void*)){
 	RWIPQueue *NEW(t);
 	EXPECT(t != NULL);
-	uintptr_t mtu;
-	uintptr_t f = openDataLinkDevice(fe, &mtu);
-	EXPECT(f != IO_REQUEST_FAILURE);
 	t->argCount = createSemaphore(0);
 	EXPECT(t->argCount != NULL);
 	t->lock = initialSpinlock;
 	t->argList = NULL;
-	t->fileHandle = f;
-	t->mtu = mtu;
 	t->terminateFlag = 0;
-
 	Task *task = createSharedMemoryTask(taskEntry, &t, sizeof(t), processorLocalTask());
 	EXPECT(task != NULL);
 	resume(task);
@@ -123,15 +114,12 @@ static RWIPQueue *createRWIPQueue(const FileEnumeration *fe, void (*taskEntry)(v
 	ON_ERROR;
 	deleteSemaphore(t->argCount);
 	ON_ERROR;
-	syncCloseFile(f);
-	ON_ERROR;
 	DELETE(t);
 	ON_ERROR;
 	return NULL;
 }
 
 static void deleteRWIPQueue(RWIPQueue *t){
-	syncCloseFile(t->fileHandle);
 	deleteSemaphore(t->argCount);
 	DELETE(t);
 }
@@ -217,8 +205,10 @@ static int waitNextIPArgument(RWIPQueue *t, RWIPRequest **targetQueue){
 typedef struct DataLinkDevice{
 	IPV4Address bindingAddress;
 	IPV4Address subnetMask;
-	FileEnumeration file;
-
+	uintptr_t mtu;
+	FileEnumeration fileEnumeration;
+	uintptr_t fileHandle;
+	// RWIPQueue
 	struct DataLinkDevice **prev, *next;
 }DataLinkDevice;
 
@@ -226,22 +216,10 @@ typedef struct{
 	DataLinkDevice *head;
 	Spinlock lock;
 }DataLinkDeviceList;
-DataLinkDeviceList dataLinkDevList = {NULL, INITIAL_SPINLOCK};
+static DataLinkDeviceList dataLinkDevList = {NULL, INITIAL_SPINLOCK};
+// see initInternetService
 
-static uintptr_t openDataLinkDevice(const FileEnumeration *fe, uintptr_t *mtu){
-	OpenFileMode ofm = OPEN_FILE_MODE_0;
-	ofm.writable = 1;
-	uintptr_t f = syncOpenFileN(fe->name, fe->nameLength, ofm);
-	EXPECT(f != IO_REQUEST_FAILURE);
-
-	uintptr_t r = syncMaxWriteSizeOfFile(f, mtu);
-	EXPECT(r != IO_REQUEST_FAILURE);
-	return f;
-	ON_ERROR;
-	syncCloseFile(f);
-	ON_ERROR;
-	return IO_REQUEST_FAILURE;
-}
+static void ipDeviceReader(void *voidArg);
 
 static DataLinkDevice *createDataLinkDevice(
 	const FileEnumeration *fe,
@@ -250,21 +228,34 @@ static DataLinkDevice *createDataLinkDevice(
 	DataLinkDevice *NEW(d);
 	EXPECT(d != NULL);
 
-	d->file = *fe;
+	OpenFileMode ofm = OPEN_FILE_MODE_0;
+	ofm.writable = 1;
+	d->fileEnumeration = *fe;
+	d->fileHandle = syncOpenFileN(fe->name, fe->nameLength, ofm);
+	EXPECT(d->fileHandle != IO_REQUEST_FAILURE);
+	uintptr_t r = syncMaxWriteSizeOfFile(d->fileHandle, &d->mtu);
+	EXPECT(r != IO_REQUEST_FAILURE);
 	d->bindingAddress = address;
 	d->subnetMask = subnetMask;
 	d->prev = NULL;
 	d->next = NULL;
+	Task *t = createSharedMemoryTask(ipDeviceReader, &d, sizeof(d), processorLocalTask());
+	EXPECT(t != NULL);
+	resume(t);
 	return d;
-	//DELETE(d);
+	// terminate task
+	ON_ERROR;
+	// mtu error
+	ON_ERROR;
+	syncCloseFile(d->fileHandle);
+	ON_ERROR;
+	DELETE(d);
 	ON_ERROR;
 	return NULL;
 }
 /*
 static void deleteDataLinkDevice(DataLinkDevice *d){
-	syncCloseFile(d->fileHandle);
-	assert(IS_IN_DQUEUE(d) == 0);
-	setIPTaskTerminateFlag(d->transmit);
+
 	DELETE(d);
 }
 */
@@ -315,18 +306,22 @@ static int writeIPSocket(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buf
 	return createAddRWIPArgument(ips->transmit, rwfr, ips, (uint8_t*)buffer, size);
 }
 
-static int transmitIP(RWIPQueue *tran, const RWIPRequest *arg){
+static int transmitIP(const RWIPRequest *arg){
 	IPV4Header *packet = arg->ipSocket->createPacket(arg->ipSocket, arg->buffer, arg->size);
 	EXPECT(packet != NULL);
 	uintptr_t writeSize = getIPPacketSize(packet);
-	EXPECT(writeSize <= tran->mtu);
-	uintptr_t r = syncWriteFile(tran->fileHandle, packet, &writeSize);
+	DataLinkDevice *dld = searchDeviceByIP(&dataLinkDevList, packet->source);
+	EXPECT(dld != NULL);
+	EXPECT(writeSize <= dld->mtu);
+	uintptr_t r = syncWriteFile(dld->fileHandle, packet, &writeSize);
 	EXPECT(r != IO_REQUEST_FAILURE && writeSize == getIPPacketSize(packet));
 	arg->ipSocket->deletePacket(packet);
 	return 1;
 	// cancel write
 	ON_ERROR;
 	// larger than MTU
+	ON_ERROR;
+	// invalid IP
 	ON_ERROR;
 	arg->ipSocket->deletePacket(packet);
 	ON_ERROR;
@@ -342,7 +337,7 @@ static void transmitIPTask(void *voidArg){
 		}
 		RWIPRequest *arg = localQueue;
 		REMOVE_FROM_DQUEUE(arg);
-		int ok = transmitIP(tran, arg);
+		int ok = transmitIP(arg);
 		completeRWFileIO(arg->rwfr, (ok? arg->size: 0), 0);
 		DELETE(arg); // see writeIPSocket
 	}
@@ -361,8 +356,9 @@ static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO
 	}
 	uintptr_t packetSize = getIPPacketSize(packet);
 	uintptr_t headerSize = getIPHeaderSize(packet);
-	if(readSize < packetSize){
-		// printk("IP packet size %u < actual read size %u\n", packetSize, readSize);
+	if(packetSize > readSize){
+		printk("IP packet size %u > actual read size %u\n", packetSize, readSize);
+		return 0;
 	}
 	if(headerSize < sizeof(*packet) || headerSize > readSize){
 		printk("bad IP packet size %u; header size %u; read size %u\n", packetSize, headerSize, readSize);
@@ -379,45 +375,188 @@ static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO
 	return 1;
 }
 
-static void receiveIPTask(void *voidArg){
-	RWIPQueue *rece = *(RWIPQueue**)voidArg;
+typedef struct IPFIFO{
+	FIFO *fifo;
+	struct IPFIFO **prev, *next;
+}IPFIFO;
 
-	RWIPRequest *localQueue = NULL;
-	IPV4Header *packet = allocateKernelMemory(rece->mtu);
+struct IPFIFOList{
+	Semaphore *semaphore;
+	IPFIFO *head;
+};
+static struct IPFIFOList readIPFIFOList; // see initInternet()
+
+static int initIPFIFOList(struct IPFIFOList *ifl){
+	ifl->semaphore = createSemaphore(1);
+	if(ifl->semaphore == NULL){
+		return 0;
+	}
+	ifl->head = NULL;
+
+	return 1;
+}
+
+static void addToIPFIFOList(struct IPFIFOList *ifl, IPFIFO *ipf){
+	acquireSemaphore(ifl->semaphore);
+	ADD_TO_DQUEUE(ipf, &ifl->head);
+	releaseSemaphore(ifl->semaphore);
+}
+
+static void removeFromIPFIFOList(struct IPFIFOList *ifl, IPFIFO *ipf){
+	acquireSemaphore(ifl->semaphore);
+	REMOVE_FROM_DQUEUE(ipf);
+	releaseSemaphore(ifl->semaphore);
+}
+
+typedef struct{
+	Spinlock lock;
+	int referenceCount;
+	IPV4Header packet[];
+}QueuedPacket;
+
+static IPFIFO *createIPFIFO(uintptr_t maxLength){
+	IPFIFO *NEW(ipf);
+	EXPECT(ipf != NULL);
+	ipf->fifo = createFIFO(maxLength, sizeof(QueuedPacket*));
+	EXPECT(ipf->fifo != NULL);
+	ipf->prev = NULL;
+	ipf->next = NULL;
+	return ipf;
+	ON_ERROR;
+	ON_ERROR;
+	return NULL;
+}
+
+static QueuedPacket *createQueuedPacket(IPV4Header *packet){
+	const uintptr_t packetSize = getIPPacketSize(packet);
+	QueuedPacket *p = allocateKernelMemory(sizeof(QueuedPacket) + packetSize);
+	if(p == NULL){
+		return NULL;
+	}
+	p->lock = initialSpinlock;
+	p->referenceCount = 0;
+	memcpy(p->packet, packet, packetSize);
+	return p;
+}
+
+static void addQueuedPacketRef(QueuedPacket *p, int n){
+	acquireLock(&p->lock);
+	p->referenceCount += n;
+	int result = p->referenceCount;
+	releaseLock(&p->lock);
+	if(result == 0){
+		releaseKernelMemory(p);
+	}
+}
+
+static void overwriteIPFIFO(IPFIFO *f, QueuedPacket *p){
+	QueuedPacket *dropped = NULL;
+	addQueuedPacketRef(p, 1);
+	if(overwriteFIFO(f->fifo, &p, &dropped) == 0){
+		addQueuedPacketRef(dropped, -1);
+	}
+}
+
+static QueuedPacket *readIPFIFO(IPFIFO *f){
+	QueuedPacket *r;
+	readFIFO(f->fifo, &r);
+	return r;
+}
+
+static void deleteIPFIFO(IPFIFO *ipf){
+	assert(IS_IN_DQUEUE(ipf) == 0);
+	QueuedPacket *p;
+	while(readFIFONonBlock(ipf->fifo, &p) != 0){
+		addQueuedPacketRef(p, -1);
+	}
+	deleteFIFO(ipf->fifo);
+	DELETE(ipf);
+}
+
+static void ipDeviceReader(void *voidArg){
+	DataLinkDevice *dev = *(DataLinkDevice**)voidArg;
+	const uintptr_t fileHandle = dev->fileHandle;
+	const uintptr_t mtu = dev->mtu;
+	const struct IPFIFOList *const ipFIFOList = &readIPFIFOList;
+	uintptr_t r;
+	IPV4Header *const packet = allocateKernelMemory(mtu);
+	if(packet == NULL){
+		systemCall_terminate();
+	}
 	while(1){
-		// wait for a valid IPv4 packet
-		uintptr_t readSize = rece->mtu;
-		uintptr_t r = syncReadFile(rece->fileHandle, packet, &readSize);
+		uintptr_t readSize = mtu;
+		r = syncReadFile(fileHandle, packet, &readSize);
 		if(r == IO_REQUEST_FAILURE){
-			printk("cannot receive IP packet");
-			continue;
+			break;
 		}
 		if(validateIPV4Packet(packet, readSize) == 0){
 			continue;
 		}
+		QueuedPacket *qp = createQueuedPacket(packet);
+		if(qp == NULL){
+			printk("warning: insufficient memory for IP buffer\n");
+			continue;
+		}
+		addQueuedPacketRef(qp, 1);
+		acquireSemaphore(ipFIFOList->semaphore);
+		IPFIFO *ipf;
+		for(ipf = ipFIFOList->head; ipf != NULL; ipf = ipf->next){
+			//IMPROVE: basic check & filter
+			overwriteIPFIFO(ipf, qp);
+		}
+		releaseSemaphore(ipFIFOList->semaphore);
+		addQueuedPacketRef(qp, -1);
+	}
+	releaseKernelMemory(packet);
+	systemCall_terminate();
+}
+
+static void receiveIPTask(void *voidArg){
+	RWIPQueue *rece = *(RWIPQueue**)voidArg;
+	RWIPRequest *localQueue = NULL;
+	IPFIFO *const ipFIFO = createIPFIFO(64);
+	EXPECT(ipFIFO != NULL);
+	addToIPFIFOList(&readIPFIFOList, ipFIFO);
+	while(1){
+		// wait for a valid IPv4 packet
+		QueuedPacket *qp = readIPFIFO(ipFIFO);
 		// match the packet with receiver
 		if(waitNextIPArgument(rece, &localQueue) == 0){
+			addQueuedPacketRef(qp, -1);
 			break; // rece->terminateFlag == 1
 		}
 		RWIPRequest *arg;
 		uintptr_t returnSize;
-		const uintptr_t packetSize = getIPPacketSize(packet);
-		assert(packetSize <= readSize); // Ethernet has minimum transmission unit
+		const uintptr_t packetSize = getIPPacketSize(qp->packet);
 		for(arg = localQueue; arg != NULL; arg = arg->next){
 			// truncate packet
 			returnSize = arg->size;
-			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, packet, packetSize) != 0){
+			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, qp->packet, packetSize) != 0){
 				break;
 			}
 		}
+		addQueuedPacketRef(qp, -1);
 		if(arg != NULL){
 			REMOVE_FROM_DQUEUE(arg);
 			completeRWFileIO(arg->rwfr, returnSize, 0);
 			DELETE(arg);
 		}
 	}
+	removeFromIPFIFOList(&readIPFIFOList, ipFIFO);
+	deleteIPFIFO(ipFIFO);
 	deleteRWIPQueue(rece);
-	releaseKernelMemory(packet);
+	systemCall_terminate();
+	// no return
+	ON_ERROR;
+	while(waitNextIPArgument(rece, &localQueue) != 0){
+		while(localQueue != NULL){
+			RWIPRequest *arg = localQueue;
+			REMOVE_FROM_DQUEUE(arg);
+			completeRWFileIO(arg->rwfr, 0, 0);
+			DELETE(arg);
+		}
+	}
+	deleteRWIPQueue(rece);
 	systemCall_terminate();
 }
 
@@ -443,19 +582,16 @@ int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, R
 	socket->createPacket = c;
 	socket->receivePacket = r;
 	socket->deletePacket = d;
-	DataLinkDevice *dld = searchDeviceByIP(&dataLinkDevList, socket->localAddress);
-	EXPECT(dld != NULL);
 
-	socket->transmit = createRWIPQueue(&dld->file, transmitIPTask);
+	socket->transmit = createRWIPQueue(transmitIPTask);
 	EXPECT(socket->transmit != NULL);
 
-	socket->receive = createRWIPQueue(&dld->file, receiveIPTask);
+	socket->receive = createRWIPQueue(receiveIPTask);
 	EXPECT(socket->receive != NULL);
 	return 1;
 	//setIPTaskTerminateFlag(socket->receive);
 	ON_ERROR;
 	setIPTaskTerminateFlag(socket->transmit);
-	ON_ERROR;
 	ON_ERROR;
 	return 0;
 }
@@ -515,9 +651,14 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 }
 
 void internetService(void){
+	if(initIPFIFOList(&readIPFIFOList) == 0){
+		panic("cannot initialize IP FIFO");
+	}
 	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
 	fnf.open = openIPSocket;
-	addFileSystem(&fnf, "ip", strlen("ip"));
+	if(addFileSystem(&fnf, "ip", strlen("ip")) == 0){
+		panic("cannot create IP service");
+	}
 	initUDP();
 	//const char *testSource = "192.168.1.10";
 	uintptr_t enumDataLink = syncEnumerateFile(resourceTypeToFileName(RESOURCE_DATA_LINK_DEVICE));

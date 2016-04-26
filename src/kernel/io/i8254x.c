@@ -433,6 +433,9 @@ static int setBufferStatus(
 		bs->payload += sizeof(*h);
 		// TODO: filter by ehterType
 		if(h->etherType == ETHERTYPE_VLAN_TAG){
+			if(bs->payloadSize < 4){
+				goto badFrame;
+			}
 			bs->payloadSize -= 4;
 			bs->payload += 4;
 		}
@@ -1129,7 +1132,10 @@ void i8254xDriver(void){
 
 #ifndef NDEBUG
 
-static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t bufSize){
+static void testRWI8254x(
+	const char *filename, int doWrite, int times, uintptr_t bufSize,
+	uintptr_t expectedReadSize, uintptr_t expectedPadSize
+){
 	OpenFileMode ofm = OPEN_FILE_MODE_0;
 	uintptr_t r;
 	if(doWrite){
@@ -1145,7 +1151,7 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 	uintptr_t minPayloadSize = 0;
 	r = syncMinReadSizeOfFile(f, &minPayloadSize);
 	assert(r != IO_REQUEST_FAILURE && minPayloadSize == MIN_PAYLOAD_SIZE);
-	uint8_t *buf = systemCall_allocateHeap(bufSize + minPayloadSize, USER_WRITABLE_PAGE);
+	uint8_t *buf = systemCall_allocateHeap(bufSize, USER_WRITABLE_PAGE);
 	int t;
 	for(t = 0; t < times; t++){
 		assert(buf != NULL);
@@ -1153,24 +1159,24 @@ static void testRWI8254x(const char *filename, int doWrite, int times, uintptr_t
 		for(b = 0; b < bufSize; b++){
 			buf[b] = (doWrite? '0' + (t + b) % 10: 5);
 		}
-		uintptr_t rwSize = bufSize + (doWrite? 0: minPayloadSize);
+		uintptr_t rwSize = bufSize;
 		r = (doWrite? syncWriteFile(f, buf, &rwSize): syncReadFile(f, buf, &rwSize));
 		assert(r != IO_REQUEST_FAILURE);
 		printk("%c %x %d\n", (doWrite? 'w': 'r'), r, rwSize);
-		if(doWrite == 0 && bufSize < minPayloadSize){ // how to recognize 0-padding?
-			assert(rwSize == minPayloadSize);
-			while(rwSize > bufSize){
+		if(doWrite == 0){
+			assert(expectedReadSize == rwSize);
+			while(rwSize > expectedReadSize - expectedPadSize){
 				rwSize--;
 				assert(buf[rwSize] == 0);
 			}
-		}
-		b = 0;
-		for(b = 0; b < bufSize; b++){
-			if(buf[b] != '0' + (t + b) % 10){
-				printk("error %d %c %c %d", b, buf[b], '0' + (t + b) % 10, b);
-				assert(0);
+			b = 0;
+			for(b = 0; b < expectedReadSize - expectedPadSize; b++){
+				if(buf[b] != '0' + (t + b) % 10){
+					printk("error %d %c %c %d", b, buf[b], '0' + (t + b) % 10, b);
+					assert(0);
+				}
+				b++;
 			}
-			b++;
 		}
 	}
 	r = syncCloseFile(f);
@@ -1229,9 +1235,9 @@ void testI8254xTransmit(void){
 	int ok = waitForFirstResource("8254x:eth1", RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
 	sleep(600);
-	testRWI8254x("8254x:eth1", 1, 5, 1500);
-	//17); test padding
-	//1500); test truncate
+	testRWI8254x("8254x:eth1", 1, 5, 1500, 0, 0);
+	testRWI8254x("8254x:eth1", 1, 5, 1500, 0, 0); // test truncate
+	testRWI8254x("8254x:eth1", 1, 5, 17, 0, 0); // test zero padding
 	systemCall_terminate();
 }
 
@@ -1240,7 +1246,9 @@ void testI8254xReceive(void){
 	int ok = waitForFirstResource("8254x:eth0", RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
 	sleep(100);
-	testRWI8254x("8254x:eth0", 0, 5, 1500);
+	testRWI8254x("8254x:eth0", 0, 5, 1500, 1500, 0);
+	testRWI8254x("8254x:eth0", 0, 5, 46, 46, 0);
+	testRWI8254x("8254x:eth0", 0, 5, 50, 46, 46 - 17);
 	//17); test padding
 	//17); test truncate
 	systemCall_terminate();

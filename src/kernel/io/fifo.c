@@ -5,27 +5,33 @@
 #include"task/exclusivelock.h"
 
 struct FIFO{
-	uintptr_t begin, dataSize, bufferSize;
+	uintptr_t begin, dataLength, bufferLength;
 	Spinlock lock;
-	volatile uint8_t *buffer;
+	uint8_t *buffer;
 
 	Semaphore *semaphore;
 	uintptr_t elmtSize;
 };
 
-static void dequeueBuffer(FIFO *fifo, uintptr_t n){
-	fifo->begin = ((fifo->begin + n) & (fifo->bufferSize - 1));
-	fifo->dataSize -= n;
+static void dequeueBuffer(FIFO *fifo){
+	fifo->begin = ((fifo->begin + 1) & (fifo->bufferLength - 1));
+	fifo->dataLength -= 1;
 }
 
-static int _writeFIFO(FIFO *fifo, uint8_t *data, uintptr_t dataSize, int throwOldestFlag){
+static uint8_t *bufferLocation(FIFO *fifo, uintptr_t index){
+	index = (index & (fifo->bufferLength - 1));
+	return fifo->buffer + (fifo->elmtSize * index);
+}
+
+static int _writeFIFO(FIFO *fifo, void *data, void *overwrittenData){
 	int sizeChangeFlag = 0, writeFlag = 1;
 	acquireLock(&fifo->lock);
-	sizeChangeFlag = (dataSize <= fifo->bufferSize - fifo->dataSize);
+	sizeChangeFlag = (fifo->bufferLength > fifo->dataLength);
 	if(sizeChangeFlag == 0){
 		//printk("warning: fifo %x is full\n", fifo);
-		if(throwOldestFlag){
-			dequeueBuffer(fifo, dataSize);
+		if(overwrittenData != NULL){
+			memcpy(overwrittenData, bufferLocation(fifo, fifo->begin), fifo->elmtSize);
+			dequeueBuffer(fifo);
 			writeFlag = 1;
 		}
 		else{
@@ -33,44 +39,37 @@ static int _writeFIFO(FIFO *fifo, uint8_t *data, uintptr_t dataSize, int throwOl
 		}
 	}
 	if(writeFlag){
-		uintptr_t i;
-		for(i = 0; i < dataSize; i++){
-			int j = ((fifo->begin + fifo->dataSize + i) & (fifo->bufferSize - 1));
-			fifo->buffer[j] = data[i];
-		}
-		fifo->dataSize += dataSize;
+		memcpy(bufferLocation(fifo, fifo->begin + fifo->dataLength), data, fifo->elmtSize);
+		fifo->dataLength++;
 	}
 	releaseLock(&fifo->lock);
 	return sizeChangeFlag;
 }
 
 int writeFIFO(FIFO *fifo, void *data){
-	int r = _writeFIFO(fifo, data, fifo->elmtSize, 0);
+	int r = _writeFIFO(fifo, data, NULL);
 	if(r){
 		releaseSemaphore(fifo->semaphore);
 	}
 	return r;
 }
 
-int overwriteFIFO(FIFO *fifo, void *data){
-	if(_writeFIFO(fifo, data, fifo->elmtSize, 1)){
+int overwriteFIFO(FIFO *fifo, void *data, void *overwrittenData){
+	int r = _writeFIFO(fifo, data, overwrittenData);
+	if(r){
 		releaseSemaphore(fifo->semaphore);
 	}
-	return 1;
+	return r;
 }
 
-static int _readFIFO(FIFO *fifo, uint8_t *data, uintptr_t dataSize, int doReadFlag){
+static int _readFIFO(FIFO *fifo, void *data, int doReadFlag){
 	uintptr_t r;
 	acquireLock(&fifo->lock);
-	r = (fifo->dataSize >= dataSize);
+	r = (fifo->dataLength > 0);
 	if(r){
-		uintptr_t i;
-		for(i = 0; i < dataSize; i++){
-			uintptr_t j = ((fifo->begin + i) & (fifo->bufferSize - 1));
-			data[i] = fifo->buffer[j];
-		}
+		memcpy(data, bufferLocation(fifo, fifo->begin), fifo->elmtSize);
 		if(doReadFlag){
-			dequeueBuffer(fifo, dataSize);
+			dequeueBuffer(fifo);
 		}
 	}
 	releaseLock(&fifo->lock);
@@ -78,18 +77,18 @@ static int _readFIFO(FIFO *fifo, uint8_t *data, uintptr_t dataSize, int doReadFl
 }
 
 int peekFIFO(FIFO *fifo, void *data){
-	return _readFIFO(fifo, data, fifo->elmtSize, 0);
+	return _readFIFO(fifo, data, 0);
 }
 
 void readFIFO(FIFO *fifo, void *data){
 	acquireSemaphore(fifo->semaphore); // wait until readable
-	int r = _readFIFO(fifo, data, fifo->elmtSize, 1);
+	int r = _readFIFO(fifo, data, 1);
 	assert(r == 1);
 }
 
 int readFIFONonBlock(FIFO *fifo, void *data){
 	if(tryAcquireSemaphore(fifo->semaphore)){
-		return _readFIFO(fifo, data, fifo->elmtSize, 1);
+		return _readFIFO(fifo, data, 1);
 	}
 	else{
 		return 0;
@@ -97,9 +96,11 @@ int readFIFONonBlock(FIFO *fifo, void *data){
 }
 
 uintptr_t getElementSize(FIFO *fifo){
-	//acquireLock(&fifo->lock);
 	return fifo->elmtSize;
-	//releaseLock(&fifo->lock);
+}
+
+uintptr_t getDataLength(FIFO *fifo){
+	return fifo->dataLength;
 }
 
 FIFO *createFIFO(uintptr_t length, uintptr_t elementSize){
@@ -107,21 +108,27 @@ FIFO *createFIFO(uintptr_t length, uintptr_t elementSize){
 	FIFO *NEW(fifo);
 	EXPECT(fifo != NULL);
 
-	NEW_ARRAY(fifo->buffer, length);
+	NEW_ARRAY(fifo->buffer, length * elementSize);
 	EXPECT(fifo->buffer != NULL);
 	fifo->lock = initialSpinlock;
-	fifo->bufferSize = length;
+	fifo->bufferLength = length;
 	fifo->begin = 0;
-	fifo->dataSize = 0;
+	fifo->dataLength = 0;
 	fifo->elmtSize = elementSize;
 	fifo->semaphore = createSemaphore(0);
 	EXPECT(fifo->semaphore != NULL);
 	return fifo;
 	//DELETE(fifo->semaphore);
 	ON_ERROR;
-	DELETE((void*)fifo->buffer);
+	DELETE(fifo->buffer);
 	ON_ERROR;
 	DELETE(fifo);
 	ON_ERROR;
 	return NULL;
+}
+
+void deleteFIFO(FIFO *fifo){
+	deleteSemaphore(fifo->semaphore);
+	DELETE(fifo->buffer);
+	DELETE(fifo);
 }

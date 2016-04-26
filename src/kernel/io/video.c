@@ -272,7 +272,7 @@ static void syscall_video(InterruptParam *p){
 void callBIOS(void);
 
 void vbeDriver(void){
-	video.biosFIFO = createFIFO(32, sizeof(uintptr_t));
+	video.biosFIFO = createFIFO(8, sizeof(uintptr_t));
 	setTaskSystemCall(processorLocalTask(), setVBEArgument, (uintptr_t)&video);
 	uintptr_t data = GET_VBE_INFO;
 	writeFIFO(video.biosFIFO, &data);

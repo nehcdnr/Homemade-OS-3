@@ -156,7 +156,8 @@ static void mouseInput(uint8_t newData, FIFO *mouseFIFO){
 	me.releaseLeft = (released & 1);
 	me.releaseRight = (released & 2);
 	me.releaseMiddle = (released & 4);
-	overwriteFIFO(mouseFIFO, &me);
+	MouseEvent oldMouseEvent;
+	overwriteFIFO(mouseFIFO, &me, &oldMouseEvent);
 	prev0 = data[0];
 	state = 0;
 }
@@ -165,7 +166,8 @@ static void keyboardInput(uint8_t data, FIFO *kbFIFO){
 	KeyboardEvent ke;
 	unsigned int ok = scanCodeToKey(data, &ke);
 	if(ok){
-		overwriteFIFO(kbFIFO, &ke);
+		KeyboardEvent oldKBEvent;
+		overwriteFIFO(kbFIFO, &ke, &oldKBEvent);
 	}
 }
 
@@ -273,8 +275,8 @@ static void initPS2Driver(PIC* pic){
 	initKeyboard();
 
 	ps2.intFIFO = createFIFO(64, sizeof(PS2Data));
-	ps2.kbFIFO = createFIFO(256, sizeof(KeyboardEvent));
-	ps2.mouseFIFO = createFIFO(512, sizeof(MouseEvent));
+	ps2.kbFIFO = createFIFO(32, sizeof(KeyboardEvent));
+	ps2.mouseFIFO = createFIFO(64, sizeof(MouseEvent));
 	//ps2.sysFIFO = createFIFO(128, sizeof(MouseEvent));
 	addHandler(mouseVector, ps2Handler, (uintptr_t)&ps2);
 	addHandler(keyboardVector, ps2Handler, (uintptr_t)&ps2);
