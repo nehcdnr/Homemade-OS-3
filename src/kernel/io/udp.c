@@ -129,6 +129,9 @@ static int copyUDPData(
 	uint8_t *buffer, uintptr_t *bufferSize,
 	const IPV4Header *packet, uintptr_t packetSize
 ){
+	if(isIPV4PacketAcceptable(ips, packet) == 0){
+		return 0;
+	}
 	UDPHeader *h = validateUDPHeader(packet, packetSize);
 	if(h == NULL){
 		return 0;

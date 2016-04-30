@@ -5,6 +5,8 @@ typedef union{
 	uint8_t bytes[4];
 }IPV4Address;
 
+#define ANY_IPV4_ADDRESS ((IPV4Address)(uint32_t)0)
+
 enum IPDataProtocol{
 	IP_DATA_PROTOCOL_ICMP = 1,
 	IP_DATA_PROTOCOL_TCP = 6,
@@ -71,7 +73,9 @@ struct IPSocket{
 	struct RWIPQueue *receive, *transmit;
 };
 
-int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
+int initIPSocket(IPSocket *socket, void *inst, const unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
+
+int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet);
 
 void destroyIPSocket(IPSocket *socket);
 

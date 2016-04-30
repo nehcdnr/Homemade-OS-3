@@ -572,13 +572,13 @@ static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 	DELETE(ips);
 }
 
-int initIPSocket(IPSocket *socket, void *inst, unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d){
+int initIPSocket(IPSocket *socket, void *inst, const unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d){
 	socket->instance = inst;
 	socket->localAddress.bytes[0] = src[0];
 	socket->localAddress.bytes[1] = src[1];
 	socket->localAddress.bytes[2] = src[2];
 	socket->localAddress.bytes[3] = src[3];
-	socket->remoteAddress = (IPV4Address)(uint32_t)0;
+	socket->remoteAddress = ANY_IPV4_ADDRESS;
 	socket->createPacket = c;
 	socket->receivePacket = r;
 	socket->deletePacket = d;
@@ -605,13 +605,21 @@ static IPV4Header *createIPV4Packet(IPSocket *ips, const uint8_t *buffer, uintpt
 	return h;
 }
 
+int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet){
+	if(ips->localAddress.value != packet->destination.value && ips->localAddress.value != ANY_IPV4_ADDRESS.value){
+		//printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->localAddress.value);
+		return 0;
+	}
+	return 1;
+}
+
 static int copyIPV4Data(
 	IPSocket *ips,
 	uint8_t *buffer, uintptr_t *bufferSize,
 	const IPV4Header *packet, uintptr_t packetSize
 ){
-	if(packet->destination.value != ips->localAddress.value){
-		printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->localAddress.value);
+	if(isIPV4PacketAcceptable(ips, packet) == 0){
+		return 0;
 	}
 	// packet header & size are checked in validateIPV4Packet
 	const uintptr_t headerSize = getIPHeaderSize(packet);
@@ -725,10 +733,11 @@ static void testRWNetwork(const char *fileName, uint64_t src, uint64_t dst, int 
 static void testRWIP(int cnt, int isWrite){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
-	IPV4Address src0 = {bytes: {0, 0, 0, 0}};
+	IPV4Address src0 = ANY_IPV4_ADDRESS;
 	uint16_t srcPort = 60000;
-	IPV4Address dst0 = {bytes: {0, 0, 0, 0}};
+	IPV4Address dst0 = ANY_IPV4_ADDRESS;
 	uint16_t dstPort = 0;
+
 	// wait for device
 	sleep(1000);
 	testRWNetwork("ip:0.0.0.0", src0.value, dst0.value, cnt, isWrite);
