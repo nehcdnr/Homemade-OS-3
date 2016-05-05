@@ -24,7 +24,7 @@ static void initService(void){
 		kernelFileService,
 		fatService,
 		i8254xDriver,
-		//internetService
+		internetService
 		//testMemoryTask,
 		//testKFS,
 		//testFAT,

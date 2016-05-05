@@ -1,14 +1,5 @@
 #include"common.h"
-#include"file/file.h"
 #include"network.h"
-
-typedef struct{
-	uint16_t sourcePort;
-	uint16_t destinationPort;
-	uint16_t length;
-	uint16_t checksum;
-	uint8_t payload[];
-}UDPHeader;
 
 static_assert(sizeof(UDPHeader) == 8);
 
@@ -52,8 +43,33 @@ typedef struct{
 	uint16_t remotePort;
 }UDPSocket;
 
-// the checksum includes data, so do not separate header and data initialization
-static IPV4Header *_createUDPIPPacket(
+// the checksum includes data, so initialize header after data
+
+static_assert(sizeof(UDPIPHeader) == 28);
+static_assert(MEMBER_OFFSET(typeof(UDPIPHeader), ip) == 0);
+static_assert(MEMBER_OFFSET(typeof(UDPIPHeader), udp) == 20);
+
+void initUDPIPHeader(
+	UDPIPHeader *h, uint16_t dataLength,
+	IPV4Address localAddr, uint16_t localPort,
+	IPV4Address remoteAddr, uint16_t remotePort
+){
+	initIPV4Header(&h->ip, dataLength + sizeof(h->udp), localAddr, remoteAddr, IP_DATA_PROTOCOL_UDP);
+	h->udp.sourcePort = changeEndian16(localPort);
+	h->udp.destinationPort = changeEndian16(remotePort);
+	h->udp.length = changeEndian16(dataLength + sizeof(h->udp));
+	h->udp.checksum = 0;
+
+	h->udp.checksum = calculateUDPChecksum(&h->ip, &h->udp);
+	if(h->udp.checksum == 0){
+		h->udp.checksum = 0xffff;
+	}
+	assert(calculateUDPChecksum(&h->ip, &h->udp) == 0);
+}
+
+
+
+UDPIPHeader *createUDPIPPacket(
 	const uint8_t *data, uint16_t dataLength,
 	IPV4Address localAddr, uint16_t localPort,
 	IPV4Address remoteAddr, uint16_t remotePort
@@ -61,39 +77,24 @@ static IPV4Header *_createUDPIPPacket(
 	if(dataLength > MAX_UDP_PAYLOAD_SIZE){
 		return NULL;
 	}
-	struct{
-		IPV4Header ip;
-		UDPHeader udp;
-	}*h = allocateKernelMemory(sizeof(*h) + dataLength);
-	static_assert(sizeof(*h) == 28);
-	static_assert(MEMBER_OFFSET(typeof(*h), ip) == 0);
+	UDPIPHeader *h = allocateKernelMemory(sizeof(*h) + dataLength);
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(&h->ip, dataLength + sizeof(h->udp), localAddr, remoteAddr, IP_DATA_PROTOCOL_UDP);
-	h->udp.sourcePort = changeEndian16(localPort);
-	h->udp.destinationPort = changeEndian16(remotePort);
-	h->udp.length = changeEndian16(dataLength + sizeof(h->udp));
-	h->udp.checksum = 0;
 	memcpy(h->udp.payload, data, dataLength);
-
-	h->udp.checksum = calculateUDPChecksum(&h->ip, &h->udp);
-	if(h->udp.checksum == 0){
-		h->udp.checksum = 0xffff;
-	}
-	assert(calculateUDPChecksum(&h->ip, &h->udp) == 0);
-	return &h->ip;
+	initUDPIPHeader(h, dataLength, localAddr, localPort, remoteAddr, remotePort);
+	return h;
 }
 
-static IPV4Header *createUDPIPPacket(IPSocket *ips, const uint8_t *buffer, uintptr_t size){
+static IPV4Header *createUDPIPPacketFromSocket(IPSocket *ips, const uint8_t *buffer, uintptr_t size){
 	UDPSocket *udps = ips->instance;
-	IPV4Header *h = _createUDPIPPacket(
+	UDPIPHeader *h = createUDPIPPacket(
 		buffer, size,
 		ips->localAddress, udps->localPort,
 		ips->remoteAddress, udps->remotePort
 	);
 	EXPECT(h != NULL);
-	return h;
+	return &h->ip;
 	ON_ERROR;
 	return NULL;
 }
@@ -192,7 +193,7 @@ static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t n
 
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
-	int ok = initIPSocket(&udps->ipSocket, udps, src, createUDPIPPacket, copyUDPData, deleteUDPIPPacket);
+	int ok = initIPSocket(&udps->ipSocket, udps, src, createUDPIPPacketFromSocket, copyUDPData, deleteUDPIPPacket);
 	EXPECT(ok);
 	udps->localPort = src[4];
 	udps->remotePort = 0;

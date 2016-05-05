@@ -952,7 +952,7 @@ uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter param
 	return systemCall3(SYSCALL_GET_FILE_PARAMETER, handle, parameterCode);
 }
 
-static uintptr_t syncGetFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t *value){
+uintptr_t syncGetFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t *value){
 	uintptr_t r, valueLow, valueHigh;
 	r = systemCall_getFileParameter(handle, paramCode);
 	if(r == IO_REQUEST_FAILURE)

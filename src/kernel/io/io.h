@@ -170,9 +170,13 @@ void ahciDriver(void);
 uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite);
 
 // intel8254x.c
+
+#define MAC_ADDRESS_SIZE (6)
+void toMACAddress(volatile uint8_t *outAddress, uint64_t macAddress);
+
 void i8254xDriver(void);
 
-// internet.c
+// network/internet.c
 void internetService(void);
 
 #endif

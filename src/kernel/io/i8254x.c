@@ -6,7 +6,6 @@
 #include"file/file.h"
 #include"resource/resource.h"
 
-#define MAC_ADDRESS_SIZE (6)
 #define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
 
 #define TO_BIG_ENDIAN_16(X) ((uint16_t)((((X) << 8) & 0xff00) | (((X) >> 8) & 0xff)))
@@ -32,7 +31,7 @@ static_assert(sizeof(EthernetHeader) == 14);
 #define MIN_PAYLOAD_SIZE (MIN_FRAME_SIZE - sizeof(EthernetHeader) - CRC_SIZE)
 #define MAX_PAYLOAD_SIZE (MAX_FRAME_SIZE - sizeof(EthernetHeader) - CRC_SIZE)
 
-static void toMACAddress(volatile uint8_t *outAddress, uint64_t macAddress){
+void toMACAddress(volatile uint8_t *outAddress, uint64_t macAddress){
 	int a;
 	for(a = 0; a < MAC_ADDRESS_SIZE; a++){
 		outAddress[a] = ((macAddress >> (a * 8)) & 0xff);
@@ -457,6 +456,7 @@ static int setBufferStatus(
 
 typedef struct I8254xDevice{
 	volatile uint32_t *regs;
+	uint64_t macAddress;
 
 	int terminateFlag;
 	I8254xTransmit transmit;
@@ -822,7 +822,7 @@ static void i8254xTransmitTask(void *arg){
 	if(((d->regs[RECEIVE_ADDRESS_0_HIGH] >> 31) & 1) == 0){
 		assert(0);
 	}
-	uint64_t srcMAC = COMBINE64(d->regs[RECEIVE_ADDRESS_0_HIGH] & 0xffff, d->regs[RECEIVE_ADDRESS_0_LOW]);
+	uint64_t srcMAC = d->macAddress;
 	printk("8254x (%d) transmitter started\n", d->serialNumber);
 	while(1){
 		RWI8254xRequest *req = removeRWI8254xRequest(t);
@@ -896,6 +896,7 @@ static I8254xDevice *createI8254xDevice(PCIConfigRegisters0 *pciRegs, int number
 	device->regs = mapKernelPages(pa, I8254X_REGISTERS_SIZE, KERNEL_NON_CACHED_PAGE);
 	EXPECT(device->regs != NULL);
 
+	device->macAddress = COMBINE64(device->regs[RECEIVE_ADDRESS_0_HIGH] & 0xffff, device->regs[RECEIVE_ADDRESS_0_LOW]);
 	device->terminateFlag = 0;
 	int ok = initI8254Receive(&device->receive, device->regs);
 	EXPECT(ok);
@@ -984,14 +985,17 @@ static int writeI8254x(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffe
 	return 0;
 }
 
-static int getI8254Parameter(FileIORequest2 *r2, __attribute__((__unused__)) OpenedFile *of, uintptr_t parameterCode){
-	//OpenedI8254xDevice *od = getFileInstance(of);
+static int getI8254Parameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t parameterCode){
+	OpenedI8254xDevice *od = getFileInstance(of);
 	switch(parameterCode){
 	case FILE_PARAM_MAX_WRITE_SIZE:
 		completeFileIO1(r2, MAX_PAYLOAD_SIZE);
 		break;
 	case FILE_PARAM_MIN_READ_SIZE:
 		completeFileIO1(r2, MIN_PAYLOAD_SIZE);
+		break;
+	case FILE_PARAM_SOURCE_ADDRESS:
+		completeFileIO64(r2, od->device->macAddress);
 		break;
 	default:
 		return 0;
@@ -1032,7 +1036,7 @@ static void closeI8254x(CloseFileRequest *cfr, OpenedFile *of){
 
 static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLength, OpenFileMode mode){
 	if(mode.enumeration){
-		panic("not support enum i8254x");
+		return 0;
 	}
 	/*
 	uintptr_t i;

@@ -55,21 +55,30 @@ enum FileParameter{
 uintptr_t systemCall_openFile(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFileN(const char *fileName, uintptr_t fileNameLength, OpenFileMode mode);
 uintptr_t syncOpenFile(const char *fileName);
+
 uintptr_t syncEnumerateFileN(const char *fileName, uintptr_t nameLength);
 uintptr_t syncEnumerateFile(const char * fileName);
+
 uintptr_t systemCall_readFile(uintptr_t handle, void *buffer, uintptr_t bufferSize);
 uintptr_t syncReadFile(uintptr_t handle, void *buffer, uintptr_t *bufferSize);
+
 uintptr_t systemCall_writeFile(uintptr_t handle, const void *buffer, uintptr_t bufferSize);
 uintptr_t syncWriteFile(uintptr_t handle, const void *buffer, uintptr_t *bufferSize);
+
 uintptr_t systemCall_seekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
 uintptr_t syncSeekReadFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t *bufferSize);
+
 uintptr_t systemCall_seekWriteFile(uintptr_t handle, void *buffer, uint64_t position, uintptr_t bufferSize);
+
 uintptr_t systemCall_getFileParameter(uintptr_t handle, enum FileParameter parameterCode);
+uintptr_t syncGetFileParameter(uintptr_t handle, enum FileParameter paramCode, uint64_t *value);
 uintptr_t syncSizeOfFile(uintptr_t handle, uint64_t *size);
 uintptr_t syncMaxWriteSizeOfFile(uintptr_t handle, uintptr_t *size);
 uintptr_t syncMinReadSizeOfFile(uintptr_t handle, uintptr_t *size);
+
 uintptr_t systemCall_setFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
 uintptr_t syncSetFileParameter(uintptr_t handle, enum FileParameter parameterCode, uint64_t value);
+
 uintptr_t systemCall_closeFile(uintptr_t handle);
 uintptr_t syncCloseFile(uintptr_t handle);
 

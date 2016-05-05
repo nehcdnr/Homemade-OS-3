@@ -4,7 +4,6 @@
 #include"task/task.h"
 #include"task/exclusivelock.h"
 #include"multiprocessor/processorlocal.h"
-#include"file/file.h"
 #include"io/fifo.h"
 #include"network.h"
 
@@ -200,15 +199,20 @@ static int waitNextIPArgument(RWIPQueue *t, RWIPRequest **targetQueue){
 	releaseLock(&t->lock);
 	return ok;
 }
-
-// one transmitTask for every device
+/*
+enum DeviceIPAddressType{
+	DEVICE_IP_ADDR_DHCP,
+	DEVICE_IP_ADDR_STATIC
+};
+*/
 typedef struct DataLinkDevice{
-	IPV4Address bindingAddress;
-	IPV4Address subnetMask;
+	IPConfig ipConfig;
 	uintptr_t mtu;
 	FileEnumeration fileEnumeration;
 	uintptr_t fileHandle;
-	// RWIPQueue
+
+	//DHCPClient *dhcpClient;
+
 	struct DataLinkDevice **prev, *next;
 }DataLinkDevice;
 
@@ -235,8 +239,12 @@ static DataLinkDevice *createDataLinkDevice(
 	EXPECT(d->fileHandle != IO_REQUEST_FAILURE);
 	uintptr_t r = syncMaxWriteSizeOfFile(d->fileHandle, &d->mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
-	d->bindingAddress = address;
-	d->subnetMask = subnetMask;
+	d->ipConfig.lock = initialSpinlock;
+	d->ipConfig.bindingAddress = address;
+	d->ipConfig.subnetMask = subnetMask;
+	// TODO:
+	//d->dhcpClient = createDHCPClient(d->fileHandle, &d->ipConfig);
+	//EXPECT(d->dhcpClient != NULL);
 	d->prev = NULL;
 	d->next = NULL;
 	Task *t = createSharedMemoryTask(ipDeviceReader, &d, sizeof(d), processorLocalTask());
@@ -245,6 +253,8 @@ static DataLinkDevice *createDataLinkDevice(
 	return d;
 	// terminate task
 	ON_ERROR;
+	// TODO: delete DHCP client
+	//ON_ERROR;
 	// mtu error
 	ON_ERROR;
 	syncCloseFile(d->fileHandle);
@@ -270,7 +280,7 @@ static DataLinkDevice *searchDeviceByIP(DataLinkDeviceList *dlList, IPV4Address 
 	acquireLock(&dlList->lock);
 	DataLinkDevice *d;
 	for(d = dlList->head; d != NULL; d = d->next){
-		if(d->bindingAddress.value == (d->subnetMask.value & address.value)){
+		if(d->ipConfig.bindingAddress.value == (d->ipConfig.subnetMask.value & address.value)){
 			break;
 		}
 	}
@@ -732,6 +742,8 @@ static void testRWNetwork(const char *fileName, uint64_t src, uint64_t dst, int 
 
 static void testRWIP(int cnt, int isWrite){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
+	assert(ok);
+	ok = waitForFirstResource("udp", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	IPV4Address src0 = ANY_IPV4_ADDRESS;
 	uint16_t srcPort = 60000;

@@ -1,4 +1,5 @@
 #include"std.h"
+#include"file/file.h"
 
 typedef union{
 	uint32_t value;
@@ -83,4 +84,42 @@ int createAddRWIPArgument(struct RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ip
 
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
+// udp.c
+
+typedef struct{
+	uint16_t sourcePort;
+	uint16_t destinationPort;
+	uint16_t length;
+	uint16_t checksum;
+	uint8_t payload[];
+}UDPHeader;
+
+typedef struct{
+	IPV4Header ip;
+	UDPHeader udp;
+}UDPIPHeader;
+
+UDPIPHeader *createUDPIPPacket(
+	const uint8_t *data, uint16_t dataLength,
+	IPV4Address localAddr, uint16_t localPort,
+	IPV4Address remoteAddr, uint16_t remotePort
+);
+
+void initUDPIPHeader(
+	UDPIPHeader *h, uint16_t dataLength,
+	IPV4Address localAddr, uint16_t localPort,
+	IPV4Address remoteAddr, uint16_t remotePort
+);
+
 void initUDP(void);
+
+// dhcp.c
+typedef struct{
+	Spinlock lock;
+	IPV4Address bindingAddress;
+	IPV4Address subnetMask;
+}IPConfig;
+
+typedef struct DHCPClient DHCPClient;
+
+DHCPClient *createDHCPClient(uintptr_t devFileHandle, IPConfig *ipConfig);
