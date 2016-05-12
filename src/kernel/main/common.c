@@ -296,6 +296,8 @@ static const char *parsePrintfArg(const char *format, struct PrintfArg *pa){
 		format++;
 	}
 	switch(*format){
+	case 'n':
+	case 'u':
 	case 'd':
 		pa->base = 10;
 		break;
@@ -304,9 +306,6 @@ static const char *parsePrintfArg(const char *format, struct PrintfArg *pa){
 		break;
 	case 'o':
 		pa->base = 8;
-		break;
-	case 'u':
-		pa->base = 10;
 		break;
 	case 'x':
 		pa->base = 16;
@@ -342,6 +341,10 @@ static int setPrintfArg(struct PrintfArg *pa, va_list *argList){
 		else
 			pa->u = va_arg(*argList, unsigned int);
 		break;
+	case 'n':
+		pa->ip = va_arg(*argList, int*);
+		printCount = 0;
+		break;
 	default:
 		printCount = 0;
 	}
@@ -357,6 +360,7 @@ static int setScanfArg(struct PrintfArg *pa, va_list *vaList){
 	case 's':\
 		pa->cp = va_arg(*vaList, char*);
 		break;
+
 	case 'd':
 	case 'b':
 	case 'o':
@@ -367,6 +371,10 @@ static int setScanfArg(struct PrintfArg *pa, va_list *vaList){
 		else
 			pa->ip = va_arg(*vaList, int*);
 		break;
+	case 'n':
+		pa->ip = va_arg(*vaList, int*);
+		scanCount = 0;
+		break;
 	default:
 		scanCount = 0;
 	}
@@ -374,7 +382,7 @@ static int setScanfArg(struct PrintfArg *pa, va_list *vaList){
 }
 
 // *bufferPtr is at least PRINT_BUFFER_SIZE
-static int outputPrintfArg(const struct PrintfArg *pa, char **bufferPtr){
+static int outputPrintfArg(const struct PrintfArg *pa, char **bufferPtr, int printCount){
 	char *buffer = *bufferPtr;
 	int bufferLength;
 	switch(pa->format){
@@ -405,6 +413,10 @@ static int outputPrintfArg(const struct PrintfArg *pa, char **bufferPtr){
 			bufferLength = unsignedToString(buffer, pa->u, (int)pa->base);
 		}
 		break;
+	case 'n':
+		pa->ip[0] = printCount;
+		bufferLength = 0;
+		break;
 	case 'c':
 	case NOT_FORMAT_SPECIFIER:
 		buffer[0] = pa->c;
@@ -425,13 +437,12 @@ static int skipSpace(const char *buffer, int bufferLength){
 	return readCount;
 }
 
-static int outputScanfArg(const struct PrintfArg *pa, const char *buffer, int bufferLength){
-	int readCount = 0;
+static int outputScanfArg(const struct PrintfArg *pa, const char *buffer, int readCount, int bufferLength){
 	// not skip space
-	if(pa->format != 'c' && pa->format != '%' && pa->format != NOT_FORMAT_SPECIFIER){
+	if(pa->format != 'c' && pa->format != '%' && pa->format != 'n' && pa->format != NOT_FORMAT_SPECIFIER){
 		readCount += skipSpace(buffer + readCount, bufferLength - readCount);
 	}
-	if(readCount == bufferLength){
+	if(readCount == bufferLength && pa->format != 'n'){
 		return -1;
 	}
 	switch(pa->format){
@@ -468,13 +479,16 @@ static int outputScanfArg(const struct PrintfArg *pa, const char *buffer, int bu
 		}
 		else{
 			int length = stringToSigned(buffer + readCount, bufferLength - readCount, pa->ip, (int)pa->base);
-			if(length < 0){
-				readCount = -1;}
-			else if(readCount + length < bufferLength)
+			if(length < 0)
+				readCount = -1;
+			else{
+				assert(readCount + length <= bufferLength);
 				readCount += length;
-			else
-				readCount = bufferLength;
+			}
 		}
+		break;
+	case 'n':
+		pa->ip[0] = readCount;
 		break;
 	case NOT_FORMAT_SPECIFIER:
 		if(isspace(pa->c))
@@ -497,7 +511,7 @@ static int vsnprintf(char *str, size_t len, const char *format, va_list *argList
 		struct PrintfArg pa;
 		format = parsePrintfArg(format, &pa);
 		setPrintfArg(&pa, argList);
-		int bufferLength = outputPrintfArg(&pa, &buffer);
+		int bufferLength = outputPrintfArg(&pa, &buffer, printCount);
 		if(bufferLength < 0){
 			printCount = -1;
 			break;
@@ -532,7 +546,7 @@ int printk(const char *format, ...){
 		struct PrintfArg pa;
 		format = parsePrintfArg(format, &pa);
 		setPrintfArg(&pa, &argList);
-		int bufferLength = outputPrintfArg(&pa, &buffer);
+		int bufferLength = outputPrintfArg(&pa, &buffer, printCount);
 		if(bufferLength < 0){
 			printCount = -1;
 			break;
@@ -546,16 +560,16 @@ int printk(const char *format, ...){
 
 static int vsnscanf(const char *str, size_t len, const char *format, va_list *argList){
 	int scanCount = 0;
+	int scanLength = 0;
 	while(*format != '\0'){
 		struct PrintfArg pa;
 		format = parsePrintfArg(format, &pa);
 		int isScanned = setScanfArg(&pa, argList);
-		int scanLength = outputScanfArg(&pa, str, len);
-		if(scanLength < 0){
+		int newScanLength = outputScanfArg(&pa, str, scanLength, len);
+		if(newScanLength < 0){
 			break;
 		}
-		str += scanLength;
-		len -= scanLength;
+		scanLength = newScanLength;
 		scanCount += (isScanned? 1: 0);
 	}
 	return scanCount;
@@ -621,7 +635,17 @@ void testSscanf(void){
 	char s4[20];
 	memset(s4, 'a', 20 * sizeof(s4[0]));
 	c = sscanf(" aaa bbb ", "%s", s4);
-	assert(strlen(s4) == 3);
+	assert(c == 1 && strlen(s4) == 3);
+
+	c = sscanf("123 456", "%d%n456", &a, &b);
+	assert(c == 1 && a == 123 && b == 3);
+
+	c = sscanf("123  456", "%n123 %n", &a, &b);
+	assert(c == 0 && a == 0 && b == 5);
+
+	char s5[20];
+	c = snprintf(s5, 20, "123%n%d%n789", &a, 456, &b);
+	assert(c == 9 && a == 3 && b == 6);
 }
 
 #define MATCH_WILDCARD(S, P) matchWildcardString((S), strlen(S), (P), strlen(P))

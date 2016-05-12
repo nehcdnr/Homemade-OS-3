@@ -55,7 +55,10 @@ uint32_t calculatePseudoIPChecksum(const IPV4Header *h);
 
 typedef struct IPSocket IPSocket;
 
-typedef IPV4Header *CreatePacket(IPSocket *ipSocket, const uint8_t *buffer, uintptr_t bufferLength);
+typedef IPV4Header *CreatePacket(
+	IPSocket *ipSocket, IPV4Address src, IPV4Address dst,
+	const uint8_t *buffer, uintptr_t bufferLength
+);
 typedef int ReceivePacket(
 	IPSocket *ipSocket,
 	uint8_t *buffer, uintptr_t *bufferSize,
@@ -66,7 +69,13 @@ typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 struct IPSocket{
 	void *instance;
 	IPV4Address localAddress;
+	uint16_t localPort;
 	IPV4Address remoteAddress;
+	uint16_t remotePort;
+	int bindToDevice;
+	char deviceName[MAX_FILE_ENUM_NAME_LENGTH];
+	uintptr_t deviceNameLength;
+
 	CreatePacket *createPacket;
 	ReceivePacket *receivePacket;
 	DeletePacket *deletePacket;
@@ -74,7 +83,13 @@ struct IPSocket{
 	struct RWIPQueue *receive, *transmit;
 };
 
-int initIPSocket(IPSocket *socket, void *inst, const unsigned *src, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
+void initIPSocket(IPSocket *socket, void *inst, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
+int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
+int startIPSocket(IPSocket *socket);
+
+void setIPSocketLocalAddress(IPSocket *s, IPV4Address a);
+void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a);
+void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength);
 
 int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet);
 
@@ -85,31 +100,6 @@ int createAddRWIPArgument(struct RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ip
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
 // udp.c
-
-typedef struct{
-	uint16_t sourcePort;
-	uint16_t destinationPort;
-	uint16_t length;
-	uint16_t checksum;
-	uint8_t payload[];
-}UDPHeader;
-
-typedef struct{
-	IPV4Header ip;
-	UDPHeader udp;
-}UDPIPHeader;
-
-UDPIPHeader *createUDPIPPacket(
-	const uint8_t *data, uint16_t dataLength,
-	IPV4Address localAddr, uint16_t localPort,
-	IPV4Address remoteAddr, uint16_t remotePort
-);
-
-void initUDPIPHeader(
-	UDPIPHeader *h, uint16_t dataLength,
-	IPV4Address localAddr, uint16_t localPort,
-	IPV4Address remoteAddr, uint16_t remotePort
-);
 
 void initUDP(void);
 
@@ -122,4 +112,4 @@ typedef struct{
 
 typedef struct DHCPClient DHCPClient;
 
-DHCPClient *createDHCPClient(uintptr_t devFileHandle, IPConfig *ipConfig);
+DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, uint64_t macAddress);
