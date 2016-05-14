@@ -142,13 +142,13 @@ static UDPHeader *validateUDPHeader(const IPV4Header *packet, uintptr_t packetSi
 static int copyUDPData(
 	IPSocket *ips,
 	uint8_t *buffer, uintptr_t *bufferSize,
-	const IPV4Header *packet, uintptr_t packetSize
+	const IPV4Header *packet, uintptr_t packetSize, int isBroadcast
 ){
-	if(isIPV4PacketAcceptable(ips, packet) == 0){
+	if(isIPV4PacketAcceptable(ips, packet, isBroadcast) == 0){printk("not acc\n");
 		return 0;
 	}
 	UDPHeader *h = validateUDPHeader(packet, packetSize);
-	if(h == NULL){
+	if(h == NULL){printk("udp error");
 		return 0;
 	}
 	UDPSocket *udps = ips->instance;
