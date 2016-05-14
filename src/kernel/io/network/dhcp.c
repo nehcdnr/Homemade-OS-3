@@ -100,20 +100,25 @@ static DHCPOption *setDHCPOption_MsgType(DHCPOption *o, enum DHCPMessageType t){
 	SET_DHCP_OPTION(o, DHCP_OPTION_MSG_TYPE, msgType, t);
 	return nextOption(o);
 }
-/*
+
 static DHCPOption *setDHCPOption_Address(DHCPOption *o, enum DHCPOptionCode optCode, IPV4Address addr){
 	SET_DHCP_OPTION(o, optCode, ipv4Address, addr);
 	return nextOption(o);
 }
-
+/*
 static DHCPOption *setDHCPOption_Router(DHCPOption *o, IPV4Address router){
 	return setDHCPOption_Address(o, DHCP_OPTION_ROUTER, router);
 }
-
+*/
 static DHCPOption *setDHCPOption_Server(DHCPOption *o, IPV4Address server){
 	return setDHCPOption_Address(o, DHCP_OPTION_SERVER, server);
 }
 
+static DHCPOption *setDHCPOption_RequestAddress(DHCPOption *o, IPV4Address request){
+	return setDHCPOption_Address(o, DHCP_REQUESTED_IP_ADDRESS, request);
+}
+
+/*
 static DHCPOption *setDHCPOption_LeaseTime(DHCPOption *o, uint32_t leaseTime){
 	SET_DHCP_OPTION(o, DHCP_OPTION_LEASE_TIME, value32, leaseTime);
 	return nextOption(o);
@@ -181,7 +186,7 @@ static void initDHCPPacket(DHCPPacket *p, uint32_t id, uint64_t macAddress){
 	p->magic = DHCP_MAGIC;
 }
 
-static uintptr_t initDHCPDiscoverPacket(DHCPPacket *p, uintptr_t packetSize, uint32_t id, uint64_t macAddress){
+static uintptr_t initDHCPDiscoverPacket(DHCPPacket *p, __attribute((__unused__)) uintptr_t packetSize, uint32_t id, uint64_t macAddress){
 	initDHCPPacket(p, id, macAddress);
 	DHCPOption *opt = p->option;
 	opt = setDHCPOption_MsgType(opt, DHCP_TYPE_DISCOVER);
@@ -191,9 +196,36 @@ static uintptr_t initDHCPDiscoverPacket(DHCPPacket *p, uintptr_t packetSize, uin
 	return ((uintptr_t)opt) - ((uintptr_t)p);
 }
 
+static uintptr_t initDHCPRequestPacket(
+	DHCPPacket *p, __attribute((__unused__)) uintptr_t packetSize, uint32_t id, uint64_t macAddress,
+	IPV4Address requestAddress,IPV4Address dhcpServer
+){
+	initDHCPPacket(p, id, macAddress);
+	DHCPOption *opt = p->option;
+	opt = setDHCPOption_MsgType(opt, DHCP_TYPE_REQUEST);
+	opt = setDHCPOption_RequestAddress(opt, requestAddress);
+	opt = setDHCPOption_Server(opt, dhcpServer);
+	opt = setDHCPOption_Parameter(opt, 3, DHCP_OPTION_SERVER, DHCP_OPTION_SUBNET_MASK, DHCP_OPTION_DNS_SERVER);
+	opt = setDHCPOption_End(opt);
+	assert(((uintptr_t)opt) - ((uintptr_t)p) <= packetSize);
+	return ((uintptr_t)opt) - ((uintptr_t)p);
+}
+
+static int sendDHCPRequest(uintptr_t udpFile, DHCPPacket *packet, uintptr_t packetSize){
+	uintptr_t r = syncSetFileParameter(udpFile, FILE_PARAM_DESTINATION_ADDRESS, 0xffffffff);
+	if(r == IO_REQUEST_FAILURE)
+		return 0;
+	uintptr_t readSize = packetSize;
+	r = syncWriteFile(udpFile, packet, &readSize);
+	if(r == IO_REQUEST_FAILURE || packetSize != readSize)
+		return 0;
+	return 1;
+}
+
 // return number of returned values, according to the order of the arguments
 static int parseDHCPOffer(
-	const DHCPPacket *p, uintptr_t packetSize, uint32_t id,
+	const DHCPPacket *p, uintptr_t packetSize,
+	uint32_t id, enum DHCPMessageType msgType,
 	IPV4Address *offerAddress,
 	IPV4Address *dhcpServerAddress,
 	uintptr_t *leaseTime,
@@ -211,6 +243,7 @@ static int parseDHCPOffer(
 	*gatewayAddress = ANY_IPV4_ADDRESS;
 	*dnsServerAddress = ANY_IPV4_ADDRESS;
 
+	uint8_t packetMsgType = 0; // invalid
 	uintptr_t pos = ((uintptr_t)p->option) - ((uintptr_t)p);
 	while(1){
 		// option code
@@ -232,11 +265,10 @@ static int parseDHCPOffer(
 			return 0;
 		}
 		pos += 1 + opt->optionSize;
-		// TODO: minimum option size
+		// TODO: minimum option size for each type
 		switch(opt->optionCode){
 		case DHCP_OPTION_MSG_TYPE:
-			if(opt->msgType != DHCP_TYPE_OFFER)
-				return 0;
+			packetMsgType = opt->msgType;
 			break;
 		case DHCP_OPTION_SUBNET_MASK:
 			*subnetMask = opt->ipv4Address;
@@ -251,13 +283,15 @@ static int parseDHCPOffer(
 			*offerAddress = opt->ipv4Address;
 			break;
 		case DHCP_OPTION_LEASE_TIME:
-			*leaseTime = opt->value32;
+			*leaseTime = changeEndian32(opt->value32);
 			break;
 		case DHCP_OPTION_SERVER:
 			*dhcpServerAddress = opt->ipv4Address;
 			break;
 		}
 	}
+	if(packetMsgType != msgType)
+		return 0;
 	if(offerAddress->value == ANY_IPV4_ADDRESS.value)
 		return 0;
 	if(dhcpServerAddress->value == ANY_IPV4_ADDRESS.value)
@@ -273,34 +307,70 @@ static int parseDHCPOffer(
 	return 6;
 }
 
-#define MAX_DHCP_OPTION_COUNT (10)
-// return the sleep time till the next renewal
+// TODO: timeout
+static int readDHCPReply(
+	uintptr_t udpFile, DHCPPacket *packet, uintptr_t maxPacketSize,
+	uint32_t id, enum DHCPMessageType msgType,
+	IPConfig *ipConf, uintptr_t *leaseTime){
+	while(1){
+		uintptr_t r = syncSetFileParameter(udpFile, FILE_PARAM_DESTINATION_ADDRESS, ANY_IPV4_ADDRESS.value);
+		if(r == IO_REQUEST_FAILURE)
+			return 0;
+		uintptr_t readSize = maxPacketSize;
+		r = syncReadFile(udpFile, packet, &readSize);
+		if(r == IO_REQUEST_FAILURE)
+			return 0;
+		//if(rwSize == maxPacketSize){
+		//	printk("warning: DHCP packet too big %u\n", rwSize);
+		//}
+		MEMSET0(ipConf);
+		int parseCount = parseDHCPOffer(packet, readSize, id, msgType,
+			&ipConf->localAddress, &ipConf->dhcpServer, leaseTime, &ipConf->subnetMask,
+			&ipConf->gateway, &ipConf->dnsServer);
+		if(parseCount >= 4)
+			return 1;
+	}
+}
+
+#define MAX_DHCP_OPTION_COUNT (30)
+// return the lease time
 static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	const uintptr_t maxPacketSize = sizeof(DHCPPacket) + sizeof(DHCPOption) * MAX_DHCP_OPTION_COUNT;
 	DHCPPacket *packet = allocateKernelMemory(maxPacketSize);
 	EXPECT(packet != NULL);
 	uintptr_t packetSize = initDHCPDiscoverPacket(packet, maxPacketSize, id, dhcp->macAddress);
-
+	int ok = sendDHCPRequest(dhcp->udpFile, packet, packetSize);
 	// from 0.0.0.0:68 to 255.255.255.255:67
-	uintptr_t rwSize = packetSize;
-	uintptr_t r = syncWriteFile(dhcp->udpFile, packet, &rwSize);
-	EXPECT(r != IO_REQUEST_FAILURE && packetSize != rwSize);
+	EXPECT(ok);
+	IPConfig ipConf;
+	uintptr_t leaseTime;
+	ok =readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_OFFER, &ipConf, &leaseTime);
+	EXPECT(ok);
 
-	r = syncReadFile(dhcp->udpFile, packet, &rwSize);
-	// TODO:
-	printk("%d\n",r);
-	EXPECT(r != IO_REQUEST_FAILURE);
-	printk("\n\nrw size = %u\n\n", rwSize);
-	IPV4Address a[6];
-	int alen = parseDHCPOffer(packet, rwSize, id, a+0, a+1, &a[2].value, a+3,a+4,a+5);
-	printk("%d\n",alen);
-	int i;
-	for (i=0;i<6;i++)printk("%d %x\n",i,a[i].value);
-	return 100000;
+	packetSize = initDHCPRequestPacket(packet, maxPacketSize, id, dhcp->macAddress, ipConf.localAddress, ipConf.dhcpServer);
+	ok = sendDHCPRequest(dhcp->udpFile, packet, packetSize);
+	EXPECT(ok);
+
+	ok= readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_ACK, &ipConf, &leaseTime);
+	EXPECT(ok);
+
+	//TODO: set device IP
+	printk("offer addr : %x\n", ipConf.localAddress.value);
+	printk("dhcp server: %x\n", ipConf.dhcpServer.value);
+	printk("lease time : %d\n", leaseTime);
+	printk("subnet mask: %x\n", ipConf.subnetMask.value);
+	printk("gateway    : %x\n", ipConf.gateway.value);
+	printk("dns server : %x\n", ipConf.dnsServer.value);
+	DELETE(packet);
+	return leaseTime;
 	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
-	return 200000;
+	ON_ERROR;
+	DELETE(packet);
+	ON_ERROR;
+	printk("warning: DHCP request failed. Retry in 5 seconds.");
+	return 5000;
 }
 
 static void dhcpClientTask(void *arg){
@@ -309,8 +379,8 @@ static void dhcpClientTask(void *arg){
 	uint32_t id0 = ((uint32_t)&arg);
 	uint32_t i;
 	for(i = 0; 1; i = (i + 1) % 10){
-		uintptr_t sleepTime = dhcpTransaction(dhcp, id0 + i);
-		sleep(sleepTime);
+		uintptr_t leaseTime = dhcpTransaction(dhcp, id0 + i);
+		sleep(leaseTime * (1000 / 2));
 	}
 	systemCall_terminate();
 }

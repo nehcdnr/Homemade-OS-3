@@ -62,7 +62,7 @@ typedef IPV4Header *CreatePacket(
 typedef int ReceivePacket(
 	IPSocket *ipSocket,
 	uint8_t *buffer, uintptr_t *bufferSize,
-	const IPV4Header *packet, uintptr_t packetSize
+	const IPV4Header *packet, uintptr_t packetSize, int isBroadcast
 );
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 // one receive queue & task for every socket
@@ -91,7 +91,7 @@ void setIPSocketLocalAddress(IPSocket *s, IPV4Address a);
 void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a);
 void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength);
 
-int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet);
+int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet, int isBroadcast);
 
 void destroyIPSocket(IPSocket *socket);
 
@@ -106,8 +106,10 @@ void initUDP(void);
 // dhcp.c
 typedef struct{
 	Spinlock lock;
-	IPV4Address bindingAddress;
+	IPV4Address localAddress;
 	IPV4Address subnetMask;
+	// optional
+	IPV4Address gateway, dhcpServer, dnsServer;
 }IPConfig;
 
 typedef struct DHCPClient DHCPClient;

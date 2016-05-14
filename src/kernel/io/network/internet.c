@@ -86,6 +86,16 @@ static IPV4Header *createIPV4Header(uintptr_t dataLength, IPV4Address localAddr,
 	return h;
 }
 
+static int isBroadcastIPV4Address(IPV4Address address, IPV4Address subnet, IPV4Address mask){
+	if(address.value == 0xffffffff){ // 255.255.255.255 is IP local broadcast address
+		return 1;
+	}
+	if((address.value & mask.value) == (subnet.value & mask.value) && (address.value & ~mask.value) == ~mask.value){
+		return 1;
+	}
+	return 0;
+}
+
 static uintptr_t enumNextDataLinkDevice(uintptr_t f, const char *namePattern, FileEnumeration *fe){
 	return enumNextResource(f, fe, (uintptr_t)namePattern, matchWildcardName);
 }
@@ -226,23 +236,21 @@ static DataLinkDeviceList dataLinkDevList = {NULL, INITIAL_SPINLOCK};
 
 static void ipDeviceReader(void *voidArg);
 
-static DataLinkDevice *createDataLinkDevice(
-	const FileEnumeration *fe,
-	IPV4Address address, IPV4Address subnetMask
-){
+static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	DataLinkDevice *NEW(d);
 	EXPECT(d != NULL);
 
-	OpenFileMode ofm = OPEN_FILE_MODE_0;
-	ofm.writable = 1;
 	d->fileEnumeration = *fe;
-	d->fileHandle = syncOpenFileN(fe->name, fe->nameLength, ofm);
+	d->fileHandle = syncOpenFileN(fe->name, fe->nameLength, OPEN_FILE_MODE_WRITABLE);
 	EXPECT(d->fileHandle != IO_REQUEST_FAILURE);
 	uintptr_t r = syncMaxWriteSizeOfFile(d->fileHandle, &d->mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
 	d->ipConfig.lock = initialSpinlock;
-	d->ipConfig.bindingAddress = address;
-	d->ipConfig.subnetMask = subnetMask;
+	d->ipConfig.localAddress = ANY_IPV4_ADDRESS;
+	d->ipConfig.subnetMask = ANY_IPV4_ADDRESS; // broadcast address = 255.255.255.255
+	d->ipConfig.dhcpServer = ANY_IPV4_ADDRESS;
+	d->ipConfig.gateway = ANY_IPV4_ADDRESS;
+	d->ipConfig.dnsServer = ANY_IPV4_ADDRESS;
 	uint64_t macAddress;
 	r = syncGetFileParameter(d->fileHandle, FILE_PARAM_SOURCE_ADDRESS, &macAddress);
 	EXPECT(r != IO_REQUEST_FAILURE);
@@ -353,7 +361,7 @@ static DataLinkDevice *resolveLocalAddress(DataLinkDeviceList *devList, const IP
 	}
 	else{
 		acquireLock(&d->ipConfig.lock);
-		*a = d->ipConfig.bindingAddress;
+		*a = d->ipConfig.localAddress;
 		releaseLock(&d->ipConfig.lock);
 	}
 	return d;
@@ -467,6 +475,7 @@ static void removeFromIPFIFOList(struct IPFIFOList *ifl, IPFIFO *ipf){
 typedef struct{
 	Spinlock lock;
 	DataLinkDevice *fromDevice;
+	int isBoradcast;
 	int referenceCount;
 	IPV4Header packet[];
 }QueuedPacket;
@@ -492,6 +501,10 @@ static QueuedPacket *createQueuedPacket(IPV4Header *packet, DataLinkDevice *devi
 	}
 	p->lock = initialSpinlock;
 	p->fromDevice = device; // IMPROVE: add reference count if we want to delete device
+	acquireLock(&device->ipConfig.lock);
+	IPV4Address devAddress = device->ipConfig.localAddress, devMask = device->ipConfig.subnetMask;
+	releaseLock(&device->ipConfig.lock);
+	p->isBoradcast = isBroadcastIPV4Address(packet->destination, devAddress, devMask);
 	p->referenceCount = 0;
 	memcpy(p->packet, packet, packetSize);
 	return p;
@@ -594,7 +607,10 @@ static void receiveIPTask(void *voidArg){
 			if(matchSocketBindingDevice(arg->ipSocket, qp->fromDevice) == 0){
 				continue;
 			}
-			if(arg->ipSocket->receivePacket(arg->ipSocket, arg->buffer, &returnSize, qp->packet, packetSize) != 0){
+			if(arg->ipSocket->receivePacket(
+				arg->ipSocket, arg->buffer,
+				&returnSize, qp->packet, packetSize, qp->isBoradcast
+			) != 0){
 				break;
 			}
 		}
@@ -709,9 +725,13 @@ static int matchSocketBindingDevice(const IPSocket *s, const DataLinkDevice *d){
 	return isStringEqual(s->deviceName, s->deviceNameLength, d->fileEnumeration.name, d->fileEnumeration.nameLength);
 }
 
-int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet){
+int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet, int isBroadcast){
 	// local address
-	if(ips->localAddress.value != packet->destination.value && ips->localAddress.value != ANY_IPV4_ADDRESS.value){
+	if(
+		isBroadcast == 0 &&
+		ips->localAddress.value != packet->destination.value &&
+		ips->localAddress.value != ANY_IPV4_ADDRESS.value
+	){
 		//printk("warning: receive wrong IP address: %x; expect %x\n", packet->destination.value, ips->localAddress.value);
 		return 0;
 	}
@@ -727,9 +747,9 @@ int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet){
 static int copyIPV4Data(
 	IPSocket *ips,
 	uint8_t *buffer, uintptr_t *bufferSize,
-	const IPV4Header *packet, uintptr_t packetSize
+	const IPV4Header *packet, uintptr_t packetSize, int isBroadcast
 ){
-	if(isIPV4PacketAcceptable(ips, packet) == 0){
+	if(isIPV4PacketAcceptable(ips, packet, isBroadcast) == 0){
 		return 0;
 	}
 	// packet header & size are checked in validateIPV4Packet
@@ -753,50 +773,81 @@ static int scanPort(const char *name, uintptr_t nameLength, uint16_t *port, unsi
 	return 1;
 }
 
-static int scanIPAddress(const char *name, uintptr_t nameLength, IPV4Address *address, uint16_t *port, unsigned *scanLength){
-	unsigned u[4];
-	unsigned scanLength1;
+static int scanSubnet(const char *name, uintptr_t nameLength, IPV4Address *subnet, unsigned *scanLength){
+	unsigned s;
+	int scanCount = snscanf(name, nameLength, "%u%n", &s, scanLength);
+	if(scanCount == 0 || s > 32){
+		return 0;
+	}
+	if(s == 0){ // avoid 1 << 32
+		subnet->value = 0;
+	}
+	else{
+		subnet->value = changeEndian32(~((((uint32_t)1) << (32 - s)) - 1));
+	}
+	return 1;
+}
+
+// if subnet or port is NULL, it is not parsed
+static int scanIPAddress(
+	const char *name, uintptr_t nameLength,
+	IPV4Address *address, IPV4Address *subnet, uint16_t *port, unsigned *scanLength
+){
+	unsigned u[LENGTH_OF(address->bytes)];
+	unsigned scanIndex = 0;
+	int scanCount = 0;
 	// ip address
 	int r = snscanf(name, nameLength, "%u.%u.%u.%u%n",
-		u + 0, u + 1, u + 2, u + 3, &scanLength1
+		u + 0, u + 1, u + 2, u + 3, &scanIndex
 	);
-	if(r < 4){
+	if(r < (signed)LENGTH_OF(address->bytes)){
 		return 0;
 	}
 	unsigned i;
-	for(i = 0; i < 4; i++){
+	for(i = 0; i < LENGTH_OF(address->bytes); i++){
 		if(u[i] > 0xff){
 			return 0;
 		}
+	}
+	for(i = 0; i < LENGTH_OF(address->bytes); i++){
 		address->bytes[i] = u[i];
 	}
-	int scanCount1 = 1;
-	// port
-	unsigned scanLength2;
-	int scanCount2;
-	if(scanLength1 == nameLength || name[scanLength1] != ':'){
-		scanLength2 = 0;
-		scanCount2 = 0;
-	}
-	else{
-		scanLength1++;
-		scanCount2 = scanPort(name + scanLength1, nameLength - scanLength1, port, &scanLength2);
+	scanCount++;
+	// subnet
+	if(subnet != NULL && scanIndex < nameLength && name[scanIndex] == '/'){
+		scanIndex++;
+		unsigned scanLength2;
+		int scanCount2 = scanSubnet(name + scanIndex, nameLength - scanIndex, subnet, &scanLength2);
 		if(scanCount2 == 0){
 			return 0;
 		}
+		scanIndex += scanLength2;
+		scanCount += scanCount2;
 	}
-	*scanLength = scanLength1 + scanLength2;
-	return scanCount1 + scanCount2;
+	// port
+	if(port != NULL && scanIndex < nameLength && name[scanIndex] == ':'){
+		scanIndex++;
+		unsigned scanLength2;
+		int scanCount2 = scanPort(name + scanIndex, nameLength - scanIndex, port, &scanLength2);
+		if(scanCount2 == 0){
+			return 0;
+		}
+		scanIndex += scanLength2;
+		scanCount += scanCount2;
+	}
+
+	*scanLength = scanIndex;
+	return scanCount;
 }
 
 static int scanIPSocketArgument(IPSocket *s, const char *k, uintptr_t keyLen, const char *v, uintptr_t vLen){
 	uintptr_t scanLength;
 	int r;
 	if(isStringEqual(k, keyLen, "dst", strlen("dst"))){
-		r = scanIPAddress(v, vLen, &s->remoteAddress, &s->remotePort, &scanLength);
+		r = scanIPAddress(v, vLen, &s->remoteAddress, NULL, &s->remotePort, &scanLength);
 	}
 	else if(isStringEqual(k, keyLen, "src", strlen("src"))){
-		r = scanIPAddress(v, vLen, &s->localAddress, &s->localPort, &scanLength);
+		r = scanIPAddress(v, vLen, &s->localAddress, NULL, &s->localPort, &scanLength);
 	}
 	else if(isStringEqual(k, keyLen, "srcport", strlen("srcport"))){
 		r = scanPort(v, vLen, &s->localPort, &scanLength);
@@ -833,7 +884,7 @@ int scanIPSocketArguments(IPSocket *s, const char *fileName, uintptr_t nameLengt
 	uintptr_t scanLength;
 	int ok;
 	// remote address
-	ok = scanIPAddress(fileName, nameLength, &s->remoteAddress, &s->remotePort, &scanLength);
+	ok = scanIPAddress(fileName, nameLength, &s->remoteAddress, NULL, &s->remotePort, &scanLength);
 	if(ok == 0){
 		return 0;
 	}
@@ -910,9 +961,7 @@ void internetService(void){
 			assert(0);
 			continue;
 		}
-		IPV4Address defaultAddress = {bytes: {0, 0, 0, 0}};
-		IPV4Address defaultSubnetMask = {bytes: {255, 255, 255, 255}};
-		DataLinkDevice *d = createDataLinkDevice(&fe, defaultAddress, defaultSubnetMask);
+		DataLinkDevice *d = createDataLinkDevice(&fe);
 		if(d == NULL){
 			printk("cannot create IP service for device\n");
 			continue;
@@ -993,22 +1042,30 @@ void testReadIP(void){
 }
 void testIPFileName(void);
 void testIPFileName(void){
-	IPV4Address a;
-	uint16_t p;
+	const char *name;
+	IPV4Address addr;
+	IPV4Address subnet;
+	uint16_t port;
 	uintptr_t pl;
 	int r;
-	r = scanIPAddress("1.2.3.4", strlen("1.2.3.4"), &a, &p, &pl);
+	name = "1.2.3.4";
+	r = scanIPAddress(name, strlen(name), &addr, NULL, NULL, &pl);
 	assert(r == 1);
-	assert(r == 1 && a.value == 0x04030201 && pl == (unsigned)strlen("1.2.3.4"));
-	r = scanIPAddress("1.2.1.2:56", strlen("1.2.1.2:56"), &a, &p, &pl);
-	assert(r == 2 && a.value == 0x02010201 && p == 56 && pl == (unsigned)strlen("1.2.1.2:56"));
-	r = scanPort("999", strlen("999"), &p, &pl);
-	assert(r == 1 && p == 999 && pl == (unsigned)strlen("999"));
+	assert(r == 1 && pl == (unsigned)strlen(name) && addr.value == 0x04030201);
+	name = "1.2.1.2:56";
+	r = scanIPAddress(name, strlen(name), &addr, &subnet, &port, &pl);
+	assert(r == 2 && pl == (unsigned)strlen(name) && addr.value == 0x02010201 && port == 56);
+	name = "3.4.3.4/15:78";
+	r = scanIPAddress(name, strlen(name), &addr, &subnet, &port, &pl);
+	assert(r == 3 && pl == (unsigned)strlen(name) && addr.value == 0x04030403 && subnet.value == 0x0000feff && port == 78);
+	name = "999";
+	r = scanPort(name, strlen(name), &port, &pl);
+	assert(r == 1 && pl == (unsigned)strlen(name) && port == 999);
 
-	const char *arg1 = "1.2.3.4;src=6.7.8.9:0;dev=i8254x:aa;srcport=1;dstport=2";
+	name = "1.2.3.4;src=6.7.8.9:0;dev=i8254x:aa;srcport=1;dstport=2";
 	IPSocket s;
-	r = scanIPSocketArguments(&s, arg1, strlen(arg1));
-	printk("%d %x %d %x %d",r, s.remoteAddress.value, s.remotePort, s.localAddress.value, s.localPort);
+	r = scanIPSocketArguments(&s, name, strlen(name));
+	printk("%d %x %d %x %d\n",r, s.remoteAddress.value, s.remotePort, s.localAddress.value, s.localPort);
 	assert(r == 1);
 	assert(s.remoteAddress.value == 0x04030201 && s.localAddress.value == 0x09080706);
 	assert(s.remotePort == 2 && s.localPort == 1);
