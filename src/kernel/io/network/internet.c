@@ -218,6 +218,8 @@ enum DeviceIPAddressType{
 */
 typedef struct DataLinkDevice{
 	IPConfig ipConfig;
+	Spinlock ipConfigLock;
+
 	uintptr_t mtu;
 	FileEnumeration fileEnumeration;
 	uintptr_t fileHandle;
@@ -245,7 +247,7 @@ static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	EXPECT(d->fileHandle != IO_REQUEST_FAILURE);
 	uintptr_t r = syncMaxWriteSizeOfFile(d->fileHandle, &d->mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
-	d->ipConfig.lock = initialSpinlock;
+	d->ipConfigLock = initialSpinlock;
 	d->ipConfig.localAddress = ANY_IPV4_ADDRESS;
 	d->ipConfig.subnetMask = ANY_IPV4_ADDRESS; // broadcast address = 255.255.255.255
 	d->ipConfig.dhcpServer = ANY_IPV4_ADDRESS;
@@ -254,7 +256,7 @@ static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	uint64_t macAddress;
 	r = syncGetFileParameter(d->fileHandle, FILE_PARAM_SOURCE_ADDRESS, &macAddress);
 	EXPECT(r != IO_REQUEST_FAILURE);
-	d->dhcpClient = createDHCPClient(fe, &d->ipConfig, macAddress);
+	d->dhcpClient = createDHCPClient(fe, &d->ipConfig, &d->ipConfigLock, macAddress);
 	EXPECT(d->dhcpClient != NULL);
 	d->prev = NULL;
 	d->next = NULL;
@@ -360,9 +362,9 @@ static DataLinkDevice *resolveLocalAddress(DataLinkDeviceList *devList, const IP
 		*a = s->localAddress;
 	}
 	else{
-		acquireLock(&d->ipConfig.lock);
+		acquireLock(&d->ipConfigLock);
 		*a = d->ipConfig.localAddress;
-		releaseLock(&d->ipConfig.lock);
+		releaseLock(&d->ipConfigLock);
 	}
 	return d;
 }
@@ -501,9 +503,9 @@ static QueuedPacket *createQueuedPacket(IPV4Header *packet, DataLinkDevice *devi
 	}
 	p->lock = initialSpinlock;
 	p->fromDevice = device; // IMPROVE: add reference count if we want to delete device
-	acquireLock(&device->ipConfig.lock);
+	acquireLock(&device->ipConfigLock);
 	IPV4Address devAddress = device->ipConfig.localAddress, devMask = device->ipConfig.subnetMask;
-	releaseLock(&device->ipConfig.lock);
+	releaseLock(&device->ipConfigLock);
 	p->isBoradcast = isBroadcastIPV4Address(packet->destination, devAddress, devMask);
 	p->referenceCount = 0;
 	memcpy(p->packet, packet, packetSize);
@@ -1065,7 +1067,7 @@ void testIPFileName(void){
 	name = "1.2.3.4;src=6.7.8.9:0;dev=i8254x:aa;srcport=1;dstport=2";
 	IPSocket s;
 	r = scanIPSocketArguments(&s, name, strlen(name));
-	printk("%d %x %d %x %d\n",r, s.remoteAddress.value, s.remotePort, s.localAddress.value, s.localPort);
+	// printk("%d %x %d %x %d\n",r, s.remoteAddress.value, s.remotePort, s.localAddress.value, s.localPort);
 	assert(r == 1);
 	assert(s.remoteAddress.value == 0x04030201 && s.localAddress.value == 0x09080706);
 	assert(s.remotePort == 2 && s.localPort == 1);

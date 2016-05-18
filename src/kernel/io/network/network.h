@@ -105,7 +105,6 @@ void initUDP(void);
 
 // dhcp.c
 typedef struct{
-	Spinlock lock;
 	IPV4Address localAddress;
 	IPV4Address subnetMask;
 	// optional
@@ -114,4 +113,4 @@ typedef struct{
 
 typedef struct DHCPClient DHCPClient;
 
-DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, uint64_t macAddress);
+DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, Spinlock *ipConfigLock, uint64_t macAddress);

@@ -7,6 +7,7 @@ struct DHCPClient{
 	uintptr_t udpFile;
 	uint64_t macAddress;
 	IPConfig *outputIPConfig;
+	Spinlock *outputLock;
 };
 
 static void dhcpClientTask(void *arg);
@@ -25,11 +26,12 @@ static uintptr_t openDHCPOnDevice(const FileEnumeration *fe){
 	return IO_REQUEST_FAILURE;
 }
 
-DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, uint64_t macAddress){
+DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, Spinlock *ipConfigLock, uint64_t macAddress){
 	DHCPClient *NEW(dhcp);
 	EXPECT(dhcp != NULL);
 	dhcp->udpFile = openDHCPOnDevice(fe);
 	EXPECT(dhcp->udpFile != IO_REQUEST_FAILURE);
+	dhcp->outputLock = ipConfigLock;
 	dhcp->outputIPConfig = ipConfig;
 	dhcp->macAddress = macAddress;
 	Task *t = createSharedMemoryTask(dhcpClientTask, &dhcp, sizeof(dhcp), processorLocalTask());
@@ -311,7 +313,8 @@ static int parseDHCPOffer(
 static int readDHCPReply(
 	uintptr_t udpFile, DHCPPacket *packet, uintptr_t maxPacketSize,
 	uint32_t id, enum DHCPMessageType msgType,
-	IPConfig *ipConf, uintptr_t *leaseTime){
+	IPConfig *ipConf, uintptr_t *leaseTime
+){
 	while(1){
 		uintptr_t r = syncSetFileParameter(udpFile, FILE_PARAM_DESTINATION_ADDRESS, ANY_IPV4_ADDRESS.value);
 		if(r == IO_REQUEST_FAILURE)
@@ -351,16 +354,20 @@ static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	ok = sendDHCPRequest(dhcp->udpFile, packet, packetSize);
 	EXPECT(ok);
 
-	ok= readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_ACK, &ipConf, &leaseTime);
+	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_ACK, &ipConf, &leaseTime);
 	EXPECT(ok);
 
-	//TODO: set device IP
-	printk("offer addr : %x\n", ipConf.localAddress.value);
-	printk("dhcp server: %x\n", ipConf.dhcpServer.value);
-	printk("lease time : %d\n", leaseTime);
-	printk("subnet mask: %x\n", ipConf.subnetMask.value);
-	printk("gateway    : %x\n", ipConf.gateway.value);
-	printk("dns server : %x\n", ipConf.dnsServer.value);
+	acquireLock(dhcp->outputLock);
+	(*dhcp->outputIPConfig) = ipConf;
+	releaseLock(dhcp->outputLock);
+
+	printk("DHCP offer\n");
+	printk("local addr : %I\n", ipConf.localAddress);
+	printk("DHCP server: %I\n", ipConf.dhcpServer);
+	printk("lease time : %u\n", leaseTime);
+	printk("subnet mask: %I\n", ipConf.subnetMask);
+	printk("gateway    : %I\n", ipConf.gateway);
+	printk("dns server : %I\n", ipConf.dnsServer);
 	DELETE(packet);
 	return leaseTime;
 	ON_ERROR;

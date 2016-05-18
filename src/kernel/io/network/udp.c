@@ -155,7 +155,6 @@ static int copyUDPData(
 	if(changeEndian16(h->destinationPort) != udps->ipSocket.localPort){
 		return 0;
 	}
-	// TODO:check h->sourcePort
 
 	uintptr_t udpDataSize = getUDPDataSize(h);
 	*bufferSize = MIN(udpDataSize, *bufferSize);
