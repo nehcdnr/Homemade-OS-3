@@ -144,11 +144,11 @@ static int copyUDPData(
 	uint8_t *buffer, uintptr_t *bufferSize,
 	const IPV4Header *packet, uintptr_t packetSize, int isBroadcast
 ){
-	if(isIPV4PacketAcceptable(ips, packet, isBroadcast) == 0){printk("not acc\n");
+	if(isIPV4PacketAcceptable(ips, packet, isBroadcast) == 0){
 		return 0;
 	}
 	UDPHeader *h = validateUDPHeader(packet, packetSize);
-	if(h == NULL){printk("udp error");
+	if(h == NULL){
 		return 0;
 	}
 	UDPSocket *udps = ips->instance;
