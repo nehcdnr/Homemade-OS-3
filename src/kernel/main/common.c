@@ -96,9 +96,9 @@ int isspace(int c){
 }
 
 #define UNSIGNED_TO_STRING(NAME, T) \
-static int NAME##ToString(char *str, T number, unsigned base){\
+static int NAME##ToString(char *str, unsigned T number, unsigned base){\
 	int i = 0;\
-	T n2 = number;\
+	unsigned T n2 = number;\
 	do{\
 		n2 = n2 / base;\
 		i++;\
@@ -113,8 +113,8 @@ static int NAME##ToString(char *str, T number, unsigned base){\
 	return len;\
 }
 
-UNSIGNED_TO_STRING(uint, unsigned)
-UNSIGNED_TO_STRING(ull, unsigned long long)
+UNSIGNED_TO_STRING(uint, int)
+UNSIGNED_TO_STRING(ull, long long)
 
 #undef UNSIGNED_TO_STRING
 
@@ -134,50 +134,62 @@ SIGNED_TO_STRING(ll, long long)
 
 #undef SIGNED_TO_STRING
 
-static int stringToUnsigned(const char *buffer, int bufferLength, unsigned int *u, int base){
-	int i;
-	*u = 0;
-	for(i = 0; i < bufferLength; i++){
-		const char b = buffer[i];
-		int d = base;
-		if(b >= 'A' && b <= 'Z')
-			d = b - 'A' + 10;
-		if(b >= 'a' && b <= 'z')
-			d = b - 'a' + 10;
-		else if(b >= '0' && b <= '9')
-			d = b - '0';
-		if(d >= base)
-			break;
-		(*u) = (*u) * base + d;
-	}
-	return i == 0? -1: i;
+#define STRING_TO_UNSIGNED(NAME, T) \
+static int stringTo##NAME(const char *buffer, int bufferLength, unsigned T *u, unsigned base){\
+	int i;\
+	*u = 0;\
+	for(i = 0; i < bufferLength; i++){\
+		const char b = buffer[i];\
+		unsigned d = base;\
+		if(b >= 'A' && b <= 'Z')\
+			d = b - 'A' + 10;\
+		if(b >= 'a' && b <= 'z')\
+			d = b - 'a' + 10;\
+		else if(b >= '0' && b <= '9')\
+			d = b - '0';\
+		if(d >= base)\
+			break;\
+		(*u) = (*u) * base + d;\
+	}\
+	return i == 0? -1: i;\
 }
 
-static int stringToSigned(const char *buffer, int bufferLength, int *result, int base){
-	// sign
-	int i1 = 0;
-	int s = 1;
-	if(bufferLength < 1)
-		return 0;
-	if(*buffer == '+'){
-		s = 1;
-		i1 = 1;
-	}
-	else if(*buffer == '-'){
-		s = -1;
-		i1 = 1;
-	}
-	else{
-		i1 = 0;
-	}
-	// digits
-	unsigned u;
-	int i2 = stringToUnsigned(buffer + i1, bufferLength - i1, &u, base);
-	if(i2 < 0)
-		return -1;
-	*result = ((int)u) * s;
-	return i1 + i2;
+STRING_TO_UNSIGNED(UINT, int)
+STRING_TO_UNSIGNED(ULL, long long)
+
+#undef STRING_TO_UNSIGNED
+
+#define STRING_TO_SIGNED(NAME, T) \
+static int stringTo##NAME(const char *buffer, int bufferLength, T *result, unsigned base){\
+	/*sign*/\
+	int i1 = 0;\
+	int s = 1;\
+	if(bufferLength < 1)\
+		return 0;\
+	if(*buffer == '+'){\
+		s = 1;\
+		i1 = 1;\
+	}\
+	else if(*buffer == '-'){\
+		s = -1;\
+		i1 = 1;\
+	}\
+	else{\
+		i1 = 0;\
+	}\
+	/*digits*/\
+	unsigned T u;\
+	int i2 = stringToU##NAME(buffer + i1, bufferLength - i1, &u, base);\
+	if(i2 < 0)\
+		return -1;\
+	*result = ((T)u) * s;\
+	return i1 + i2;\
 }
+
+STRING_TO_SIGNED(INT, int)
+STRING_TO_SIGNED(LL, long long)
+
+#undef STRING_TO_SIGNED
 
 #define CHANGE_ENDIAN(V, L) \
 (((typeof(V))changeEndian##L((V) & ((((typeof(V))1) << (L)) - 1))) << (L)) + \
@@ -258,37 +270,16 @@ typedef struct PrintfArg{
 	char pad0;
 	char lCount;
 	char base;
-	char format;
-	union{
-		char c;
-		int i;
-		unsigned u;
-		char *s;
-		long long int lli;
-		unsigned long long int llu;
-
-		char *cp;
-		int *ip;
-		//unsigned *up;
-		long long int *llip;
-		//unsigned long long int *llup;
-	};
 }PrintfArg;
 
-// support format: csdbouxn
-#define NOT_FORMAT_SPECIFIER ((char)('\0'))
+// support format: %csdbouxnI
 
-static const char *parsePrintfArg(const char *format, struct PrintfArg *pa){
+static const char *parsePrintfArg(const char *format, PrintfArg *pa, int printCount){
+	pa->printCount = printCount;
 	pa->width = 0;
 	pa->pad0 = 0;
 	pa->lCount = 0;
 	pa->base = 0;
-	if(*format != '%'){
-		pa->format = NOT_FORMAT_SPECIFIER;
-		pa->c = *format;
-		return format + (*format != '\0'? 1: 0);
-	}
-	format++;
 	while(*format == '0'){
 		pa->pad0 = 1;
 		format++;
@@ -301,128 +292,7 @@ static const char *parsePrintfArg(const char *format, struct PrintfArg *pa){
 		pa->lCount++;
 		format++;
 	}
-	switch(*format){
-	case 'n':
-	case 'u':
-	case 'd':
-		pa->base = 10;
-		break;
-	case 'b':
-		pa->base = 2;
-		break;
-	case 'o':
-		pa->base = 8;
-		break;
-	case 'x':
-		pa->base = 16;
-		break;
-	}
-	pa->format = *format;
-	return format + (*format != '\0'? 1: 0);
-}
-
-static int setScanfArg(struct PrintfArg *pa, va_list *vaList){
-	int scanCount = 1;
-	switch(pa->format){
-	case 'c':
-		pa->cp = va_arg(*vaList, char*);
-		break;\
-	case 's':\
-		pa->cp = va_arg(*vaList, char*);
-		break;
-
-	case 'd':
-	case 'b':
-	case 'o':
-	case 'u':
-	case 'x':
-		if(pa->lCount >= 2)
-			pa->llip = va_arg(*vaList, long long int*);
-		else
-			pa->ip = va_arg(*vaList, int*);
-		break;
-	case 'n':
-		pa->ip = va_arg(*vaList, int*);
-		scanCount = 0;
-		break;
-	default:
-		scanCount = 0;
-	}
-	return scanCount;
-}
-
-static int skipSpace(const char *buffer, int bufferLength){
-	int readCount;
-	for(readCount = 0; readCount < bufferLength; readCount++){
-		if(isspace(buffer[readCount]) == 0)
-			break;
-	}
-	return readCount;
-}
-
-static int outputScanfArg(const struct PrintfArg *pa, const char *buffer, int readCount, int bufferLength){
-	// not skip space
-	if(pa->format != 'c' && pa->format != '%' && pa->format != 'n' && pa->format != NOT_FORMAT_SPECIFIER){
-		readCount += skipSpace(buffer + readCount, bufferLength - readCount);
-	}
-	if(readCount == bufferLength && pa->format != 'n'){
-		return -1;
-	}
-	switch(pa->format){
-	case '%':
-		if(buffer[readCount] == '%')
-			readCount++;
-		else
-			readCount = -1;
-		break;
-	case 's':
-		{
-			int i = 0;
-			while(readCount < bufferLength){
-				if(isspace(buffer[readCount]))
-					break;
-				pa->cp[i] = buffer[readCount];
-				i++;
-				readCount++;
-			}
-			pa->cp[i] = '\0';
-		}
-		break;
-	case 'c':
-		pa->cp[0] = buffer[readCount];
-		readCount++;
-		break;
-	case 'd':
-	case 'b':
-	case 'o':
-	case 'u':
-	case 'x':
-		if(pa->lCount >= 2){
-			panic("lld not implemented");
-		}
-		else{
-			int length = stringToSigned(buffer + readCount, bufferLength - readCount, pa->ip, (int)pa->base);
-			if(length < 0)
-				readCount = -1;
-			else{
-				assert(readCount + length <= bufferLength);
-				readCount += length;
-			}
-		}
-		break;
-	case 'n':
-		pa->ip[0] = readCount;
-		break;
-	case NOT_FORMAT_SPECIFIER:
-		if(isspace(pa->c))
-			readCount += skipSpace(buffer + readCount, bufferLength - readCount);
-		else if(buffer[readCount] == pa->c)
-			readCount++;
-		else
-			readCount = -1;
-		break;
-	}
-	return readCount;
+	return format;
 }
 
 #define PRINTF_NUMBER(INT_NAME, LL_NAME, SIGNED)\
@@ -442,9 +312,9 @@ PRINTF_NUMBER(uint, ull, unsigned)
 
 #undef PRINTF_NUMBER
 
-#define PRINTF_(NAME, SIGNED, B) \
+#define PRINTF_(NAME, SIGNED, BASE) \
 static int printf_##NAME (char **buffer, const PrintfArg *arg, va_list *argList){\
-	return printf_##SIGNED((B), buffer, arg, argList);\
+	return printf_##SIGNED((BASE), buffer, arg, argList);\
 }
 
 PRINTF_(b, unsigned, 2)
@@ -459,12 +329,12 @@ static int printf_s(char **buffer, __attribute__((__unused__)) const PrintfArg *
 	*buffer = va_arg(*argList, char*);
 	return strlen(*buffer);
 }
-/*
+
 static int printf_percent(char **buffer, __attribute__((__unused__)) const PrintfArg *arg, __attribute__((__unused__)) va_list *argList){
 	(*buffer)[0] = '%';
 	return 1;
 }
-*/
+
 static int printf_c(char **buffer, __attribute__((__unused__)) const PrintfArg *arg, va_list *argList){
 	// char promoted to int
 	int v = va_arg(*argList, int);
@@ -492,6 +362,8 @@ static int printf_n(__attribute__((__unused__)) char **buffer, const PrintfArg *
 	return 0;
 }
 
+// return buffer length
+// if the argument is a string, set *buffer to it
 typedef int PrintfHandler(char **buffer, const PrintfArg *arg, va_list *argList);
 
 #define PRINTF_HANDLER(NAME) {TO_STRING(NAME), printf_##NAME}
@@ -500,7 +372,7 @@ static const struct{
 	const char *specifier;
 	PrintfHandler *handler;
 }printfHandler[] = {
-	//{"%", printf_percent},
+	{"%", printf_percent},
 	PRINTF_HANDLER(b),
 	PRINTF_HANDLER(o),
 	PRINTF_HANDLER(d),
@@ -522,46 +394,28 @@ struct PrintfBuffer{
 	char _fixedBuffer[PRINT_BUFFER_SIZE];
 };
 
-static int parsePrintfArg2(const char **format, struct PrintfBuffer *bufPtr, va_list *argList, int printCount){
+static int vsnprintf_single(const char **format, struct PrintfBuffer *bufPtr, int printCount, va_list *argList){
 	bufPtr->buffer = bufPtr->_fixedBuffer;
-	if(**format != '%'){
-		bufPtr->buffer[0] = **format;
-		(*format)++;
-		return 1;
-	}
-	const char *f = (*format) + 1;
-	PrintfArg pa;
-	pa.printCount = printCount;
-	pa.width = 0;
-	pa.pad0 = 0;
-	pa.lCount = 0;
-	pa.base = 0;
-	while(*f == '0'){
-		pa.pad0 = 1;
-		f++;
-	}
-	while(*f >= '0' && *f <= '9'){
-		pa.width = pa.width * 10 + (*f - '0');
-		f++;
-	}
-	while(*f == 'l'){
-		pa.lCount++;
-		f++;
-	}
+	const char *f = *format;
 	int r;
-	unsigned i;
-	for(i = 0; i < LENGTH_OF(printfHandler); i++){
-		int specLength = strlen(printfHandler[i].specifier);
-		if(strncmp(printfHandler[i].specifier, f, specLength) == 0){
-			r = printfHandler[i].handler(&bufPtr->buffer, &pa, argList);
-			f += specLength;
-			break;
-		}
-	}
-	if(i == LENGTH_OF(printfHandler)){
-		r = 1;
+	if(*f != '%'){
 		bufPtr->buffer[0] = *f;
 		f++;
+		r = 1;
+	}
+	else/* if(*f == '%')*/{
+		PrintfArg pa;
+		f = parsePrintfArg(f + 1, &pa, printCount);
+		r = -1;
+		unsigned i;
+		for(i = 0; i < LENGTH_OF(printfHandler); i++){
+			int specLength = strlen(printfHandler[i].specifier);
+			if(strncmp(printfHandler[i].specifier, f, specLength) == 0){
+				r = printfHandler[i].handler(&bufPtr->buffer, &pa, argList);
+				f += specLength;
+				break;
+			}
+		}
 	}
 	*format = f;
 	return r;
@@ -572,7 +426,7 @@ static int vsnprintf(char *str, size_t len, const char *format, va_list *argList
 	int printCount = 0;
 	while(*format != '\0' && printCount < slen){
 		struct PrintfBuffer bufferPtr;
-		int bufferLength = parsePrintfArg2(&format, &bufferPtr, argList, printCount);
+		int bufferLength = vsnprintf_single(&format, &bufferPtr, printCount, argList);
 		if(bufferLength < 0){
 			printCount = -1;
 			break;
@@ -598,13 +452,12 @@ int snprintf(char *str, size_t len, const char *format, ...){
 }
 
 int printk(const char *format, ...){
-
 	va_list argList;
 	va_start(argList, format);
 	int printCount = 0;
 	while(*format != '\0'){
 		struct PrintfBuffer bufferPtr;
-		int bufferLength = parsePrintfArg2(&format, &bufferPtr, &argList, printCount);
+		int bufferLength = vsnprintf_single(&format, &bufferPtr, printCount, &argList);
 		if(bufferLength < 0){
 			printCount = -1;
 			break;
@@ -616,19 +469,181 @@ int printk(const char *format, ...){
 	return printCount;
 }
 
+#define SCANF_NUMBER(INT_NAME, LL_NAME, SIGNED) \
+static int scanf_##SIGNED(int base, const char *buffer, int bufferLength, PrintfArg *arg, va_list *argList){\
+	if(arg->lCount >= 2){\
+		SIGNED long long *v = va_arg(*argList, SIGNED long long*);\
+		return stringTo##LL_NAME(buffer, bufferLength, v, base);\
+	}\
+	else{\
+		SIGNED int *v = va_arg(*argList, SIGNED int*);\
+		return stringTo##INT_NAME(buffer, bufferLength, v, base);\
+	}\
+}
+
+SCANF_NUMBER(INT, LL, signed)
+//SCANF_NUMBER(UINT, ULL, unsigned)
+
+#undef SCANF_NUMBER
+
+#define SCANF_(NAME, SIGNED, BASE) \
+static int scanf_##NAME(const char *buffer, int bufferLength, PrintfArg *arg, va_list *argList){\
+	return scanf_##SIGNED((BASE), buffer, bufferLength, arg, argList);\
+}
+
+SCANF_(b, signed, 2)
+SCANF_(o, signed, 8)
+SCANF_(u, signed, 10) // d and u are equivalent in scanf
+SCANF_(d, signed, 10)
+SCANF_(x, signed, 16)
+
+#undef SCANF_
+
+static int scanf_n(__attribute__((__unused__)) const char *buffer, __attribute__((__unused__)) int bufferLength, PrintfArg *arg, va_list *argList){
+	int *p = va_arg(*argList, int*);
+	*p = arg->printCount;
+	return 0;
+}
+
+static int scanf_s(const char *buffer, int bufferLength, __attribute__((__unused__)) PrintfArg *arg, va_list *argList){
+	char *a = va_arg(*argList, char*);
+	int i = 0;
+	while(i < bufferLength){
+		if(isspace(buffer[i]))
+			break;
+		a[i] = buffer[i];
+		i++;
+	}
+	a[i] = '\0';
+	return (i > 0? i: -1);
+}
+
+static int scanf_percent(
+	const char *buffer, int bufferLength,
+	__attribute__((__unused__)) PrintfArg *arg, __attribute__((__unused__)) va_list *argList
+){
+	if(bufferLength == 0 || buffer[0] != '%'){
+		return -1;
+	}
+	return 1;
+}
+
+static int scanf_c(const char *buffer, int bufferLength, __attribute__((__unused__)) PrintfArg *arg, va_list *argList){
+	if(bufferLength == 0){
+		return -1;
+	}
+	char *p = va_arg(*argList, char*);
+	*p = buffer[0];
+	return 1;
+}
+
+static int scanf_I(const char *buffer, int bufferLength, __attribute__((__unused__)) PrintfArg *arg, va_list *argList){
+	int bi = 0;
+	int i;
+	unsigned *p = va_arg(*argList, unsigned*);
+	*p = 0;
+	for(i = 0; i < 32; i += 8){
+		if(i != 0){
+			if(buffer[bi] != '.'){
+				return -1;
+			}
+			bi++;
+		}
+		unsigned u;
+		int bi2 = stringToUINT(buffer + bi, bufferLength - bi, &u, 10);
+		if(bi2 < 0 || u > 0xff){
+			return -1;
+		}
+		bi += bi2;
+		(*p) |= (u << i);
+	}
+	return bi;
+}
+
+// return number of bytes read from buffer
+typedef int ScanfHandler(const char *buffer, int bufferLength, PrintfArg *arg, va_list *argList);
+
+#define SCANF_HANDLER(NAME, ADD_SCAN_COUNT, SKIP_SPACE) {TO_STRING(NAME), (ADD_SCAN_COUNT), (SKIP_SPACE), scanf_##NAME}
+struct{
+	const char *specifier;
+	int addScanCount;
+	int skipSpace;
+	ScanfHandler *handler;
+}scanfHandler[] = {
+	{"%", 0, 0, scanf_percent},
+	SCANF_HANDLER(b, 1, 1),
+	SCANF_HANDLER(o, 1, 1),
+	SCANF_HANDLER(d, 1, 1),
+	SCANF_HANDLER(u, 1, 1),
+	SCANF_HANDLER(x, 1, 1),
+	SCANF_HANDLER(n, 0, 0),
+	SCANF_HANDLER(s, 1, 1),
+	SCANF_HANDLER(c, 1, 0),
+	SCANF_HANDLER(I, 1, 1)
+};
+#undef SCANF_HANDLER
+
+static int skipSpace(const char *buffer, int bufferLength){
+	int readCount;
+	for(readCount = 0; readCount < bufferLength; readCount++){
+		if(isspace(buffer[readCount]) == 0)
+			break;
+	}
+	return readCount;
+}
+
+static int vsnscanf_single(const char *buffer, int *bufferIndex, size_t bufferLength, const char **format, va_list *argList){
+	const char *f = *format;
+	int bi = *bufferIndex;
+	int r = 0;
+	if(f[0] == ' '){
+		bi += skipSpace(buffer + bi, bufferLength - bi);
+		f++;
+	}
+	else if(f[0] != '%'){
+		if(buffer[bi] != f[0])
+			return -1;
+		f++;
+		bi++;
+	}
+	else/* if(f[0] == '%')*/{
+		PrintfArg pa;
+		f = parsePrintfArg(f + 1, &pa, bi);
+		r = -1;
+		unsigned i;
+		for(i = 0; i < LENGTH_OF(scanfHandler); i++){
+			int specLength = strlen(scanfHandler[i].specifier);
+			if(strncmp(scanfHandler[i].specifier, f, specLength) == 0){
+				if(scanfHandler[i].skipSpace){
+					bi += skipSpace(buffer + bi, bufferLength - bi);
+				}
+				int scanLength = scanfHandler[i].handler(buffer + bi, bufferLength - bi, &pa, argList);
+				if(scanLength < 0){
+					r = -1;
+				}
+				else{
+					bi += scanLength;
+					r = scanfHandler[i].addScanCount;
+					f += specLength;
+				}
+				break;
+			}
+		}
+	}
+	*format = f;
+	*bufferIndex = bi;
+	return r;
+}
+
 static int vsnscanf(const char *str, size_t len, const char *format, va_list *argList){
 	int scanCount = 0;
 	int scanLength = 0;
 	while(*format != '\0'){
-		struct PrintfArg pa;
-		format = parsePrintfArg(format, &pa);
-		int isScanned = setScanfArg(&pa, argList);
-		int newScanLength = outputScanfArg(&pa, str, scanLength, len);
-		if(newScanLength < 0){
+		int newScanCount = vsnscanf_single(str, &scanLength, len, &format, argList);
+		if(newScanCount < 0){
 			break;
 		}
-		scanLength = newScanLength;
-		scanCount += (isScanned? 1: 0);
+		scanCount += newScanCount;
 	}
 	return scanCount;
 }
@@ -668,7 +683,7 @@ void printAndHalt(const char *condition, const char *file, int line){
 void testSscanf(void);
 void testSscanf(void){
 	int a, b, c;
-	c = sscanf("+15-f", "%u%x",&a, &b);
+	c = sscanf("+15-f", "%u%x", &a, &b);
 	assert(c == 2 && a == 15 && b == -15);
 
 	char s[]=" 345  a567a789";
@@ -700,6 +715,13 @@ void testSscanf(void){
 
 	c = sscanf("123  456", "%n123 %n", &a, &b);
 	assert(c == 0 && a == 0 && b == 5);
+
+	long long d, e;
+	c = sscanf(" -10000000000 ffffffffffffffff ", "%lld %llx", &d, &e);
+	assert(c == 2 && d == -100000 * (long long)100000 && e == (long long)-1);
+
+	c = sscanf(" 192.168.100.255", "%I", &a);
+	assert(c == 1 && (unsigned)a == 0xff64a8c0);
 
 	printk("test sscanf ok\n");
 }

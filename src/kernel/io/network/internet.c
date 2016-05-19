@@ -795,24 +795,11 @@ static int scanIPAddress(
 	const char *name, uintptr_t nameLength,
 	IPV4Address *address, IPV4Address *subnet, uint16_t *port, unsigned *scanLength
 ){
-	unsigned u[LENGTH_OF(address->bytes)];
 	unsigned scanIndex = 0;
 	int scanCount = 0;
 	// ip address
-	int r = snscanf(name, nameLength, "%u.%u.%u.%u%n",
-		u + 0, u + 1, u + 2, u + 3, &scanIndex
-	);
-	if(r < (signed)LENGTH_OF(address->bytes)){
+	if(snscanf(name, nameLength, "%I%n", &address->value, &scanIndex) != 1){
 		return 0;
-	}
-	unsigned i;
-	for(i = 0; i < LENGTH_OF(address->bytes); i++){
-		if(u[i] > 0xff){
-			return 0;
-		}
-	}
-	for(i = 0; i < LENGTH_OF(address->bytes); i++){
-		address->bytes[i] = u[i];
 	}
 	scanCount++;
 	// subnet
