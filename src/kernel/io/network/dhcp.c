@@ -2,6 +2,7 @@
 #include"multiprocessor/processorlocal.h"
 #include"task/task.h"
 #include"network.h"
+#include"ethernet.h"
 
 struct DHCPClient{
 	uintptr_t udpFile;

@@ -114,3 +114,9 @@ typedef struct{
 typedef struct DHCPClient DHCPClient;
 
 DHCPClient *createDHCPClient(const FileEnumeration *fe, IPConfig *ipConfig, Spinlock *ipConfigLock, uint64_t macAddress);
+
+//arp.c
+
+typedef struct ARPServer ARPServer;
+
+ARPServer *createARPServer(const FileEnumeration *fe, IPConfig *ipConfig, Spinlock *ipConfigLock, uint64_t macAddress);

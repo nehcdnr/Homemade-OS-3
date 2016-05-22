@@ -1,4 +1,4 @@
-#include"io.h"
+#include"network/ethernet.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
 #include"interrupt/controller/pic.h"
@@ -8,18 +8,12 @@
 
 #define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
 
-#define TO_BIG_ENDIAN_16(X) ((uint16_t)((((X) << 8) & 0xff00) | (((X) >> 8) & 0xff)))
-
-#define ETHERTYPE_IPV4 TO_BIG_ENDIAN_16(0x0800)
-#define ETHERTYPE_ARP TO_BIG_ENDIAN_16(0x0806)
-#define ETHERTYPE_VLAN_TAG TO_BIG_ENDIAN_16(0x8100)
-
 typedef struct{
 	// big endian
 	uint8_t dstMACAddress[MAC_ADDRESS_SIZE];
 	uint8_t srcMACAddress[MAC_ADDRESS_SIZE];
 	// IPv4 = 0x0800; ARP = 0x0806 in big endian
-	uint16_t etherType;
+	uint16_t etherType;// EtherType etherType;
 	uint8_t payload[0];
 }EthernetHeader;
 
@@ -307,11 +301,12 @@ typedef struct RWI8254xRequest{
 	RWFileRequest *rwfr;
 	uint8_t *buffer;
 	uintptr_t rwSize;
+	EtherType etherType;
 
 	struct RWI8254xRequest **prev, *next;
 }RWI8254xRequest;
 
-static RWI8254xRequest *createRWI8254xRequest(RWFileRequest *rwfr, uint8_t *buffer, uintptr_t rwSize){
+static RWI8254xRequest *createRWI8254xRequest(RWFileRequest *rwfr, uint8_t *buffer, uintptr_t rwSize, EtherType etherType){
 	RWI8254xRequest *NEW(r);
 	if(r == NULL){
 		return NULL;
@@ -319,6 +314,7 @@ static RWI8254xRequest *createRWI8254xRequest(RWFileRequest *rwfr, uint8_t *buff
 	r->rwfr = rwfr;
 	r->buffer = buffer;
 	r->rwSize = rwSize;
+	r->etherType = etherType;
 	r->prev = NULL;
 	r->next = NULL;
 	return r;
@@ -471,6 +467,7 @@ typedef struct I8254xDevice{
 
 typedef struct{
 	I8254xDevice *device;
+	EtherType transmitEtherType;
 	I8254xReader reader;
 }OpenedI8254xDevice;
 
@@ -480,6 +477,7 @@ static OpenedI8254xDevice *createOpenedI8254xDevice(I8254xDevice *d){
 		return NULL;
 	}
 	od->device = d;
+	od->transmitEtherType = ETHERTYPE_IPV4;
 	initI8254xReader(&od->reader, &d->receive);
 	return od;
 }
@@ -845,7 +843,7 @@ static void i8254xTransmitTask(void *arg){
 				// TODO: destination address as a parameter of openFile
 				toMACAddress(h->dstMACAddress, BROADCAST_MAC_ADDRESS);
 				toMACAddress(h->srcMACAddress, srcMAC);
-				h->etherType = ETHERTYPE_IPV4;
+				h->etherType = req->etherType;
 				payloadBegin = h->payload;
 				payloadSize = MIN(req->rwSize - writtenSize, q->maxBufferSize - sizeof(*h));
 				writingSize = payloadSize + sizeof(*h);
@@ -963,7 +961,8 @@ static int i8254xHandler(const InterruptParam *p){
 
 static int readI8254x(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t readSize){
 	OpenedI8254xDevice *od = getFileInstance(of);
-	RWI8254xRequest *r = createRWI8254xRequest(rwfr, buffer, readSize);
+	// TODO: filter received packet by EtherType
+	RWI8254xRequest *r = createRWI8254xRequest(rwfr, buffer, readSize, ETHERTYPE_0);
 	EXPECT(r != NULL);
 	addReadI8254xRequest(&od->reader, r);
 	return 1;
@@ -975,7 +974,7 @@ static int readI8254x(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uint
 static int writeI8254x(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t writeSize){
 	EXPECT(writeSize <= MAX_PAYLOAD_SIZE);
 	OpenedI8254xDevice *od = getFileInstance(of);
-	RWI8254xRequest *w = createRWI8254xRequest(rwfr, (uint8_t *)buffer, writeSize);
+	RWI8254xRequest *w = createRWI8254xRequest(rwfr, (uint8_t *)buffer, writeSize, od->transmitEtherType);
 	EXPECT(w != NULL);
 	addPendingRWI8254xRequest(&od->device->transmit, w);
 	return 1;
@@ -985,7 +984,7 @@ static int writeI8254x(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffe
 	return 0;
 }
 
-static int getI8254Parameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t parameterCode){
+static int getI8254xParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t parameterCode){
 	OpenedI8254xDevice *od = getFileInstance(of);
 	switch(parameterCode){
 	case FILE_PARAM_MAX_WRITE_SIZE:
@@ -996,6 +995,26 @@ static int getI8254Parameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param
 		break;
 	case FILE_PARAM_SOURCE_ADDRESS:
 		completeFileIO64(r2, od->device->macAddress);
+		break;
+	case FILE_PARAM_TRANSMIT_ETHERTYPE:
+		completeFileIO64(r2, od->transmitEtherType);
+		break;
+	default:
+		return 0;
+	}
+	return 1;
+}
+
+static int setI8254xParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t parameterCode, uint64_t value){
+	OpenedI8254xDevice *od = getFileInstance(of);
+	switch(parameterCode){
+//	case FILE_PARAM_DESTINATION_ADDRESS:
+//		od->destinationAddress = value;
+//		completeFileIO0(r2);
+//		break;
+	case FILE_PARAM_TRANSMIT_ETHERTYPE:
+		od->transmitEtherType = (EtherType)value;
+		completeFileIO0(r2);
 		break;
 	default:
 		return 0;
@@ -1062,7 +1081,8 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 	if(mode.writable){
 		ff.write = writeI8254x;
 	}
-	ff.getParameter = getI8254Parameter;
+	ff.getParameter = getI8254xParameter;
+	ff.setParameter = setI8254xParameter;
 	ff.close = closeI8254x;
 	completeOpenFile(ofr, od, &ff);
 

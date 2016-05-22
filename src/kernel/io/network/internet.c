@@ -225,6 +225,7 @@ typedef struct DataLinkDevice{
 	uintptr_t fileHandle;
 
 	DHCPClient *dhcpClient;
+	ARPServer *arpServer;
 
 	struct DataLinkDevice **prev, *next;
 }DataLinkDevice;
@@ -258,6 +259,8 @@ static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	EXPECT(r != IO_REQUEST_FAILURE);
 	d->dhcpClient = createDHCPClient(fe, &d->ipConfig, &d->ipConfigLock, macAddress);
 	EXPECT(d->dhcpClient != NULL);
+	d->arpServer = createARPServer(fe, &d->ipConfig, &d->ipConfigLock, macAddress);
+	EXPECT(d->arpServer != NULL);
 	d->prev = NULL;
 	d->next = NULL;
 	Task *t = createSharedMemoryTask(ipDeviceReader, &d, sizeof(d), processorLocalTask());
@@ -265,6 +268,8 @@ static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	resume(t);
 	return d;
 	// terminate task
+	ON_ERROR;
+	// TODO: terminate ARP server
 	ON_ERROR;
 	// TODO: delete DHCP client
 	ON_ERROR;
