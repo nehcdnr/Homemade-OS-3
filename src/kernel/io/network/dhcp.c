@@ -348,7 +348,7 @@ static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	EXPECT(ok);
 	IPConfig ipConf;
 	uintptr_t leaseTime;
-	ok =readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_OFFER, &ipConf, &leaseTime);
+	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_OFFER, &ipConf, &leaseTime);
 	EXPECT(ok);
 
 	packetSize = initDHCPRequestPacket(packet, maxPacketSize, id, dhcp->macAddress, ipConf.localAddress, ipConf.dhcpServer);
@@ -377,7 +377,7 @@ static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	ON_ERROR;
 	DELETE(packet);
 	ON_ERROR;
-	printk("warning: DHCP request failed. Retry in 5 seconds.");
+	printk("warning: DHCP request failed. Retry in 5 seconds.\n");
 	return 5000;
 }
 

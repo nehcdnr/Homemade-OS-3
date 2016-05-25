@@ -1232,7 +1232,7 @@ void testI8254xTransmit2(void){
 		uint8_t rbuf[MIN_PAYLOAD_SIZE + 4];
 		memset(rbuf, 3, sizeof(rbuf));
 		// zero-length packet
-		uintptr_t writeSize = (i % 2? 1: 0), readSize = sizeof(rbuf);
+		uintptr_t writeSize = (i % 2), readSize = sizeof(rbuf);
 		wbuf[0] = '0' + i;
 		r = syncWriteFile(f1, wbuf, &writeSize);
 		assert(writeSize == (i % 2) && r != IO_REQUEST_FAILURE);

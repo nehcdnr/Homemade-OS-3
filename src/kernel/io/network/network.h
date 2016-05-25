@@ -59,10 +59,11 @@ typedef IPV4Header *CreatePacket(
 	IPSocket *ipSocket, IPV4Address src, IPV4Address dst,
 	const uint8_t *buffer, uintptr_t bufferLength
 );
-typedef int ReceivePacket(
+typedef int FilterPacket(IPSocket *ipSocket, const IPV4Header *packet, uintptr_t packetSize);
+typedef void ReceivePacket(
 	IPSocket *ipSocket,
 	uint8_t *buffer, uintptr_t *bufferSize,
-	const IPV4Header *packet, uintptr_t packetSize, int isBroadcast
+	const IPV4Header *packet, uintptr_t packetSize
 );
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 // one receive queue & task for every socket
@@ -77,13 +78,14 @@ struct IPSocket{
 	uintptr_t deviceNameLength;
 
 	CreatePacket *createPacket;
+	FilterPacket *filterPacket;
 	ReceivePacket *receivePacket;
 	DeletePacket *deletePacket;
 
 	struct RWIPQueue *receive, *transmit;
 };
 
-void initIPSocket(IPSocket *socket, void *inst, CreatePacket *c, ReceivePacket *r, DeletePacket *d);
+void initIPSocket(IPSocket *socket, void *inst, CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d);
 int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
 int startIPSocket(IPSocket *socket);
 
