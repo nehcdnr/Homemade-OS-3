@@ -310,35 +310,59 @@ static int parseDHCPOffer(
 	return 6;
 }
 
-// TODO: timeout
 static int readDHCPReply(
 	uintptr_t udpFile, DHCPPacket *packet, uintptr_t maxPacketSize,
 	uint32_t id, enum DHCPMessageType msgType,
-	IPConfig *ipConf, uintptr_t *leaseTime
+	IPConfig *ipConf, uintptr_t *leaseTime,
+	uintptr_t timeout
 ){
+	uintptr_t timeoutHandle = systemCall_setAlarm(timeout, 0);
+	if(timeoutHandle == IO_REQUEST_FAILURE){
+		return 0;
+	}
+	int ok = 0;
 	while(1){
 		uintptr_t r = syncSetFileParameter(udpFile, FILE_PARAM_DESTINATION_ADDRESS, ANY_IPV4_ADDRESS.value);
 		if(r == IO_REQUEST_FAILURE)
-			return 0;
+			break;
 		uintptr_t readSize = maxPacketSize;
-		r = syncReadFile(udpFile, packet, &readSize);
-		if(r == IO_REQUEST_FAILURE)
+		uintptr_t readHandle = systemCall_readFile(udpFile, packet, readSize);
+		if(readHandle == IO_REQUEST_FAILURE)
+			break;
+		r = systemCall_waitIOReturn(UINTPTR_NULL, 1, &readSize);
+		if(r == readHandle){ // normal case
+			//if(rwSize == maxPacketSize){
+			//	printk("warning: DHCP packet too big %u\n", rwSize);
+			//}
+			MEMSET0(ipConf);
+			int parseCount = parseDHCPOffer(packet, readSize, id, msgType,
+				&ipConf->localAddress, &ipConf->dhcpServer, leaseTime, &ipConf->subnetMask,
+				&ipConf->gateway, &ipConf->dnsServer);
+			if(parseCount >= 4){
+				ok = 1;
+				break;
+			}
+		}
+		else if(r == timeoutHandle){ // timeout
+			if(cancelOrWaitIO(readHandle) == 0){
+				printk("warning: cannot cancel DHCP read reply\n");
+			}
 			return 0;
-		//if(rwSize == maxPacketSize){
-		//	printk("warning: DHCP packet too big %u\n", rwSize);
-		//}
-		MEMSET0(ipConf);
-		int parseCount = parseDHCPOffer(packet, readSize, id, msgType,
-			&ipConf->localAddress, &ipConf->dhcpServer, leaseTime, &ipConf->subnetMask,
-			&ipConf->gateway, &ipConf->dnsServer);
-		if(parseCount >= 4)
-			return 1;
+		}
+		else{
+			printk("warning: unexpected handle in DHCP service %x\n", r);
+		}
 	}
+	if(cancelOrWaitIO(timeoutHandle) == 0){
+		printk("warning: cannot cancel DHCP timeout alarm\n");
+	}
+	return ok;
 }
 
 #define MAX_DHCP_OPTION_COUNT (30)
-// return the lease time
-static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
+// return lease time if ok
+// return 0 if failed
+static uintptr_t dhcpTransaction(DHCPClient *dhcp, uint32_t id, uintptr_t replyTimeout){
 	const uintptr_t maxPacketSize = sizeof(DHCPPacket) + sizeof(DHCPOption) * MAX_DHCP_OPTION_COUNT;
 	DHCPPacket *packet = allocateKernelMemory(maxPacketSize);
 	EXPECT(packet != NULL);
@@ -348,14 +372,14 @@ static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	EXPECT(ok);
 	IPConfig ipConf;
 	uintptr_t leaseTime;
-	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_OFFER, &ipConf, &leaseTime);
+	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_OFFER, &ipConf, &leaseTime, replyTimeout);
 	EXPECT(ok);
 
 	packetSize = initDHCPRequestPacket(packet, maxPacketSize, id, dhcp->macAddress, ipConf.localAddress, ipConf.dhcpServer);
 	ok = sendDHCPRequest(dhcp->udpFile, packet, packetSize);
 	EXPECT(ok);
 
-	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_ACK, &ipConf, &leaseTime);
+	ok = readDHCPReply(dhcp->udpFile, packet, maxPacketSize, id, DHCP_TYPE_ACK, &ipConf, &leaseTime, replyTimeout);
 	EXPECT(ok);
 
 	acquireLock(dhcp->outputLock);
@@ -377,18 +401,27 @@ static int dhcpTransaction(DHCPClient *dhcp, uint32_t id){
 	ON_ERROR;
 	DELETE(packet);
 	ON_ERROR;
-	printk("warning: DHCP request failed. Retry in 5 seconds.\n");
-	return 5000;
+	return 0;
 }
 
 static void dhcpClientTask(void *arg){
 	DHCPClient *dhcp = *(DHCPClient**)arg;
 	printk("DHCP client started\n");
 	uint32_t id0 = ((uint32_t)&arg);
+	const uintptr_t maxRetryTime = 300 * 1000, initRetryTime = 3 * 1000, maxReplyTimeout = 60 * 1000;
+	uintptr_t retryTime = initRetryTime;
 	uint32_t i;
 	for(i = 0; 1; i = (i + 1) % 10){
-		uintptr_t leaseTime = dhcpTransaction(dhcp, id0 + i);
-		sleep(leaseTime * (1000 / 2));
+		uintptr_t leaseTime = dhcpTransaction(dhcp, id0 + i, MIN(maxReplyTimeout, retryTime));
+		if(leaseTime != 0){
+			sleep(leaseTime * (1000 / 2));
+			retryTime = initRetryTime;
+		}
+		else{
+			printk("warning: DHCP request failed. Retry in %u seconds\n", retryTime / 1000);
+			sleep(retryTime);
+			retryTime = MIN(retryTime * 2, maxRetryTime);
+		}
 	}
 	systemCall_terminate();
 }

@@ -734,11 +734,12 @@ void waitIO(IORequest *expected){
 
 static void waitIOHandler(InterruptParam *p){
 	sti();
-	IORequest *ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
-	if(ior == NULL){
+	IORequest *ior;
+	if(SYSTEM_CALL_ARGUMENT_0(p) == UINTPTR_NULL){
 		ior = waitAnyIO();
 	}
 	else{
+		ior = (IORequest*)SYSTEM_CALL_ARGUMENT_0(p);
 		Task *t = processorLocalTask();
 		acquireLock(&t->ioListLock);
 		int ok = (searchIOList_noLock(t->pendingIOList, ior) || searchIOList_noLock(t->completedIOList, ior));
@@ -811,7 +812,7 @@ static void cacnelIOHandler(InterruptParam *p){
 		ok = ior->cancellable;
 	}
 	if(ok){
-		REMOVE_FROM_DQUEUE(ior);if(ior->cancellable == 0)printk("err\n");
+		REMOVE_FROM_DQUEUE(ior);
 		ior->cancellable = 0;
 	}
 	releaseLock(&t->ioListLock);
@@ -823,6 +824,14 @@ static void cacnelIOHandler(InterruptParam *p){
 
 int systemCall_cancelIO(uintptr_t io){
 	return (int)systemCall2(SYSCALL_CANCEL_IO, io);
+}
+
+int cancelOrWaitIO(uintptr_t io){
+	int cancelled = systemCall_cancelIO(io);
+	if(cancelled){
+		return io;
+	}
+	return systemCall_waitIO(io) == io;
 }
 
 int isCancellable(IORequest *ior){
@@ -844,7 +853,7 @@ int setCancellable(IORequest *ior, int value){
 }
 
 void notSupportCancelIO(void *instance){
-	printk("instance=%x\n", processorLocalTask(), instance);
+	printk("instance: %x\n", instance);
 	panic("notSupportCancelIORequest");
 }
 

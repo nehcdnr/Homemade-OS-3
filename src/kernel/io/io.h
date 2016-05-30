@@ -37,6 +37,7 @@ void completeIO(IORequest *ior); // IORequestHandler
 uintptr_t systemCall_waitIO(uintptr_t ioNumber);
 uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
 int systemCall_cancelIO(uintptr_t io);
+int cancelOrWaitIO(uintptr_t io);
 
 int isCancellable(IORequest *ior);
 // if value == 0 and ior is being cancelled (see taskmanager.c), return 0

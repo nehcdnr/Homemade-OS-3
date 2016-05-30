@@ -145,6 +145,7 @@ typedef struct RWIPRequest{
 	uint8_t *buffer;
 	uintptr_t size;
 
+	RWIPQueue *queue;
 	struct RWIPRequest **prev, *next;
 }RWIPRequest;
 
@@ -158,16 +159,32 @@ static RWIPRequest *createRWIPArgument(RWFileRequest *rwfr, IPSocket *ips, uint8
 	arg->ipSocket = ips;
 	arg->buffer = (uint8_t*)buffer;
 	arg->size = size;
+	arg->queue = NULL;
 	arg->prev = NULL;
 	arg->next = NULL;
 	return arg;
 }
 
-static void addToRWIPQueue(RWIPQueue *t, RWIPRequest *arg){
-	acquireLock(&t->lock);
-	ADD_TO_DQUEUE(arg, &t->argList);
-	releaseLock(&t->lock);
-	releaseSemaphore(t->argCount);
+static void cancelRWIPRequest(void *voidArg){
+	RWIPRequest *arg = voidArg;
+	int ok = tryAcquireSemaphore(arg->queue->argCount);
+	if(!ok){
+		assert(0);
+	}
+	acquireLock(&arg->queue->lock);
+	REMOVE_FROM_DQUEUE(arg);
+	releaseLock(&arg->queue->lock);
+	DELETE(arg);
+}
+
+static void addToRWIPQueue(RWIPQueue *q, RWIPRequest *arg){
+	assert(arg->queue == NULL);
+	arg->queue = q;
+	acquireLock(&q->lock);
+	ADD_TO_DQUEUE(arg, &q->argList);
+	setRWFileIOCancellable(arg->rwfr, arg, cancelRWIPRequest);
+	releaseLock(&q->lock);
+	releaseSemaphore(q->argCount);
 }
 
 int createAddRWIPArgument(RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size){
@@ -176,7 +193,6 @@ int createAddRWIPArgument(RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint
 	if(arg == NULL){
 		return 0;
 	}
-	// TODO: cancellable
 	addToRWIPQueue(q, arg);
 	return 1;
 }
@@ -201,9 +217,11 @@ static int matchReadIPRequest(RWIPQueue *q, RWIPRequest **request, struct Queued
 	const int t = q->terminateFlag;
 	RWIPRequest *r = q->argList;
 	if(t == 0){
-		assert(r != NULL);
+		assert(r != NULL && r->queue == q);
 		if(queuedPacket == NULL || acceptQueuedPacket(r->ipSocket, queuedPacket)){
 			REMOVE_FROM_DQUEUE(r);
+			setRWFileIONotCancellable(r->rwfr);
+			r->queue = NULL;
 		}
 		else{
 			r = NULL;
@@ -1084,6 +1102,34 @@ void testIPFileName(void){
 	assert(s.remotePort == 2 && s.localPort == 1);
 	assert(s.bindToDevice && isStringEqual(s.deviceName, s.deviceNameLength, "i8254x:aa", strlen("i8254x:aa")));
 	printk("test IP file name OK\n");
+}
+
+void testCancelRWIP(void);
+void testCancelRWIP(void){
+	sleep(2000);
+	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
+	assert(ok);
+	const char *fileName = "ip:0.0.0.0;dev=i8254x:eth0";
+	uintptr_t fileHandle = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
+	assert(fileHandle != IO_REQUEST_FAILURE);
+	uintptr_t req[20];
+	uint8_t buf[4];
+	unsigned i;
+	for(i = 0; i < LENGTH_OF(req); i++){
+		req[i] = systemCall_readFile(fileHandle, buf, sizeof(buf));
+		assert(req[i] != IO_REQUEST_FAILURE);
+	}
+	for(i = 0; i < LENGTH_OF(req); i++){
+		unsigned i2 = (i * 7) % LENGTH_OF(req);
+		ok = systemCall_cancelIO(req[i2]);
+		assert(ok);
+		ok = systemCall_cancelIO(req[i2]);
+		assert(!ok);
+		req[i2] = IO_REQUEST_FAILURE;
+	}
+	printk("test cancel read IP OK\n");
+	syncCloseFile(fileHandle);
+	systemCall_terminate();
 }
 
 #endif
