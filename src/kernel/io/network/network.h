@@ -1,5 +1,6 @@
 #include"std.h"
 #include"file/file.h"
+#include"memory/referencecount.h"
 
 typedef union{
 	uint32_t value;
@@ -49,9 +50,9 @@ void initIPV4Header(
 );
 uintptr_t getIPHeaderSize(const IPV4Header *h);
 uintptr_t getIPDataSize(const IPV4Header *h);
+void *getIPData(const IPV4Header *h);
 
-// return little endian number which can be greater than 0xffff
-uint32_t calculatePseudoIPChecksum(const IPV4Header *h);
+uint16_t calculateIPDataChecksum(const IPV4Header *h);
 
 typedef struct IPSocket IPSocket;
 
@@ -66,6 +67,8 @@ typedef void ReceivePacket(
 	const IPV4Header *packet, uintptr_t packetSize
 );
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
+typedef void DeleteSocket(IPSocket *ipSocket);
+
 // one receive queue & task for every socket
 struct IPSocket{
 	void *instance;
@@ -81,13 +84,16 @@ struct IPSocket{
 	FilterPacket *filterPacket;
 	ReceivePacket *receivePacket;
 	DeletePacket *deletePacket;
+	DeleteSocket *deleteSocket;
 
+	ReferenceCount referenceCount;
 	struct RWIPQueue *receive, *transmit;
 };
 
-void initIPSocket(IPSocket *socket, void *inst, CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d);
+void initIPSocket(IPSocket *s, void *inst, CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d, DeleteSocket *ds);
 int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
-int startIPSocket(IPSocket *socket);
+int startIPSocketTasks(IPSocket *socket);
+void stopIPSocketTasks(IPSocket *socket);
 
 void setIPSocketLocalAddress(IPSocket *s, IPV4Address a);
 void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a);
@@ -95,15 +101,17 @@ void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nam
 
 int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet, int isBroadcast);
 
-void destroyIPSocket(IPSocket *socket);
+typedef struct RWIPQueue RWIPQueue;
 
-int createAddRWIPArgument(struct RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
+int createAddRWIPArgument(RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
 
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
 // udp.c
-
 void initUDP(void);
+
+// tcp.c
+void initTCP(void);
 
 // dhcp.c
 typedef struct{

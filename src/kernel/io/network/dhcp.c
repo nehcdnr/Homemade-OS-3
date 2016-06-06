@@ -350,7 +350,7 @@ static int readDHCPReply(
 			return 0;
 		}
 		else{
-			printk("warning: unexpected handle in DHCP service %x\n", r);
+			printk("warning: DHCP service waited unexpected IO handle %x\n", r);
 		}
 	}
 	if(cancelOrWaitIO(timeoutHandle) == 0){

@@ -22,8 +22,12 @@ uintptr_t getIPDataSize(const IPV4Header *h){
 	return getIPPacketSize(h) - getIPHeaderSize(h);
 }
 
+void *getIPData(const IPV4Header *h){
+	return ((uint8_t*)h) + getIPHeaderSize(h);
+}
+
 // return big endian number
-static uint16_t calculateIPChecksum(const IPV4Header *h){
+static uint16_t calculateIPHeaderChecksum(const IPV4Header *h){
 	uint32_t cs = 0;
 	uintptr_t i;
 	uintptr_t headerSize = getIPHeaderSize(h);
@@ -36,7 +40,8 @@ static uint16_t calculateIPChecksum(const IPV4Header *h){
 	return changeEndian16(cs ^ 0xffff);
 }
 
-uint32_t calculatePseudoIPChecksum(const IPV4Header *h){
+// return little endian number which can be greater than 0xffff
+static uint32_t calculatePseudoIPHeaderChecksum(const IPV4Header *h){
 	uint32_t cs = 0;
 	cs += changeEndian16(h->source.value & 0xffff);
 	cs += changeEndian16(h->source.value >> 16);
@@ -47,8 +52,30 @@ uint32_t calculatePseudoIPChecksum(const IPV4Header *h){
 	return cs;
 }
 
+uint16_t calculateIPDataChecksum(const IPV4Header *h){
+	// pseudo ip header
+	uint32_t cs = calculatePseudoIPHeaderChecksum(h);
+	// udp header + udp data
+	const uint16_t *data = getIPData(h);
+	const uintptr_t dataSize = getIPDataSize(h);
+	uintptr_t i;
+	for(i = 0; (i + 1) * sizeof(uint16_t) <= dataSize; i++){
+		cs += (uint32_t)changeEndian16((data)[i]);
+	}
+	// padding
+	if(dataSize % sizeof(uint16_t) != 0){
+		uint16_t lastByte = (uint16_t)(((const uint8_t*)data)[dataSize - 1]);
+		cs += (uint32_t)changeEndian16(lastByte);
+	}
+	while(cs > 0xffff){
+		cs = (cs & 0xffff) + (cs >> 16);
+	}
+	cs = changeEndian16(cs ^ 0xffff);
+	return cs;
+}
+
 void initIPV4Header(
-	IPV4Header *h, uint16_t dataLength, IPV4Address localAddr, IPV4Address remoteAddr,
+	IPV4Header *h, uint16_t dataSize, IPV4Address localAddr, IPV4Address remoteAddr,
 	enum IPDataProtocol dataProtocol
 ){
 	h->version = 4;
@@ -56,7 +83,7 @@ void initIPV4Header(
 	h->headerLength = sizeof(IPV4Header) / sizeof(uint32_t);
 	h->differentiateService = 0;
 	h->congestionNotification = 0;
-	h->totalLength = changeEndian16(sizeof(IPV4Header) + dataLength);
+	h->totalLength = changeEndian16(sizeof(IPV4Header) + dataSize);
 	h->identification = changeEndian16(0);
 	h->fragmentOffsetHigh = 0;
 	h->flags = 2; // 2 = don't fragment; 4 = more fragment
@@ -68,21 +95,20 @@ void initIPV4Header(
 	h->source = localAddr;
 	h->destination = remoteAddr;
 
-	h->headerChecksum = calculateIPChecksum(h);
-	assert(calculateIPChecksum(h) == 0);
+	h->headerChecksum = calculateIPHeaderChecksum(h);
+	assert(calculateIPHeaderChecksum(h) == 0);
 }
 
 #define MAX_IP_PAYLOAD_SIZE (MAX_IP_PACKET_SIZE - sizeof(IPV4Header))
 
-static IPV4Header *createIPV4Header(uintptr_t dataLength, IPV4Address localAddr, IPV4Address remoteAddr){
-	if(dataLength > MAX_IP_PAYLOAD_SIZE)
+static IPV4Header *createIPV4Header(uintptr_t dataSize, IPV4Address localAddr, IPV4Address remoteAddr){
+	if(dataSize > MAX_IP_PAYLOAD_SIZE)
 		return NULL;
-	IPV4Header *h = allocateKernelMemory(sizeof(IPV4Header) + dataLength);
+	IPV4Header *h = allocateKernelMemory(sizeof(IPV4Header) + dataSize);
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(h, dataLength, localAddr, remoteAddr, IP_DATA_PROTOCOL_TEST254);
-	//memset(h->payload, 0, dataLength);
+	initIPV4Header(h, dataSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TEST254);
 	return h;
 }
 
@@ -100,20 +126,20 @@ static uintptr_t enumNextDataLinkDevice(uintptr_t f, const char *namePattern, Fi
 	return enumNextResource(f, fe, (uintptr_t)namePattern, matchWildcardName);
 }
 
-typedef struct RWIPQueue{
+struct RWIPQueue{
 	Semaphore *argCount;
 	Spinlock lock;
 	struct RWIPRequest *argList;
 	int terminateFlag;
-}RWIPQueue;
+	IPSocket *socket;
+};
 
-// TODO: create transmit queue for each socket
+static void addIPSocketReference(IPSocket *ips, int v);
+
 // the device file is opened by the internetService() thread,
 // so it is not writable by the socket thread
-// create only one global transmit queue shared by every socket
-static RWIPQueue *globalTransmit = NULL;
-
-static RWIPQueue *createRWIPQueue(void (*taskEntry)(void*)){
+// the sharedMemoryTask should be
+static RWIPQueue *createRWIPQueue(void (*taskEntry)(void*), IPSocket *ipSocket, Task *sharedMemoryTask){
 	RWIPQueue *NEW(t);
 	EXPECT(t != NULL);
 	t->argCount = createSemaphore(0);
@@ -121,8 +147,10 @@ static RWIPQueue *createRWIPQueue(void (*taskEntry)(void*)){
 	t->lock = initialSpinlock;
 	t->argList = NULL;
 	t->terminateFlag = 0;
-	Task *task = createSharedMemoryTask(taskEntry, &t, sizeof(t), processorLocalTask());
+	t->socket = ipSocket;
+	Task *task = createSharedMemoryTask(taskEntry, &t, sizeof(t), sharedMemoryTask);
 	EXPECT(task != NULL);
+	addIPSocketReference(t->socket, 1);
 	resume(task);
 	return t;
 	// terminate task
@@ -135,6 +163,7 @@ static RWIPQueue *createRWIPQueue(void (*taskEntry)(void*)){
 }
 
 static void deleteRWIPQueue(RWIPQueue *t){
+	addIPSocketReference(t->socket, -1);
 	deleteSemaphore(t->argCount);
 	DELETE(t);
 }
@@ -206,11 +235,10 @@ static void setIPTaskTerminateFlag(RWIPQueue *t){
 }
 
 struct QueuedPacket;
-static int acceptQueuedPacket(IPSocket *ipSocket, struct QueuedPacket *queuedPacket);
-// if terminated, return 0 and *request = NULL
-// if q has valid new packet, return 1 and *request = matched RWIPRequest
-// if q has invalid new packet, return 1 and *request = NULL
-static int matchReadIPRequest(RWIPQueue *q, RWIPRequest **request, struct QueuedPacket *queuedPacket){
+static int filterQueuedPacket(IPSocket *ipSocket, struct QueuedPacket *queuedPacket);
+// if success, return RWIPRequest
+// if¡@the socket is closed, return NULL
+static RWIPRequest *nextRWIPRequest(RWIPQueue *q){
 	assert(q->argCount != NULL);
 	acquireSemaphore(q->argCount);
 	acquireLock(&q->lock);
@@ -218,27 +246,14 @@ static int matchReadIPRequest(RWIPQueue *q, RWIPRequest **request, struct Queued
 	RWIPRequest *r = q->argList;
 	if(t == 0){
 		assert(r != NULL && r->queue == q);
-		if(queuedPacket == NULL || acceptQueuedPacket(r->ipSocket, queuedPacket)){
 			REMOVE_FROM_DQUEUE(r);
 			setRWFileIONotCancellable(r->rwfr);
 			r->queue = NULL;
-		}
-		else{
-			r = NULL;
-		}
 	}
 	releaseLock(&q->lock);
-	if(t == 0 && r == NULL){
-		releaseSemaphore(q->argCount);
-	}
-	*request = r;
-	return (t == 0);
+	assert(r != NULL || t != 0);
+	return r;
 }
-
-static int nextRWIPArgument(RWIPQueue *q, RWIPRequest **request){
-	return matchReadIPRequest(q, request, NULL);
-}
-
 
 /*
 enum DeviceIPAddressType{
@@ -432,8 +447,8 @@ static int transmitIP(const RWIPRequest *arg){
 static void transmitIPTask(void *voidArg){
 	RWIPQueue *tran = *(RWIPQueue**)voidArg;
 	while(1){
-		RWIPRequest *arg;
-		if(nextRWIPArgument(tran, &arg) == 0){
+		RWIPRequest *arg = nextRWIPRequest(tran);
+		if(arg == NULL){
 			break;
 		}
 		int ok = transmitIP(arg);
@@ -463,7 +478,7 @@ static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO
 		printk("bad IP packet size %u; header size %u; read size %u\n", packetSize, headerSize, readSize);
 		return 0;
 	}
-	if(calculateIPChecksum(packet) != 0){
+	if(calculateIPHeaderChecksum(packet) != 0){
 		printk("bad IP packet checksum\n");
 		return 0;
 	}
@@ -483,7 +498,6 @@ struct IPFIFOList{
 	Semaphore *semaphore;
 	IPFIFO *head;
 };
-static struct IPFIFOList readIPFIFOList; // see initInternet()
 
 static int initIPFIFOList(struct IPFIFOList *ifl){
 	ifl->semaphore = createSemaphore(1);
@@ -579,11 +593,33 @@ static void deleteIPFIFO(IPFIFO *ipf){
 	DELETE(ipf);
 }
 
+struct IPService{
+	struct IPFIFOList readFIFOList;
+	Task *mainTask;
+};
+
+static struct IPService ipService;
+
+static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm);
+
+static void initIP(void){
+	if(initIPFIFOList(&ipService.readFIFOList) == 0){
+		panic("cannot initialize IP FIFO");
+	}
+	ipService.mainTask = processorLocalTask();
+
+	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
+	fnf.open = openIPSocket;
+	if(addFileSystem(&fnf, "ip", strlen("ip")) == 0){
+		panic("cannot create IP service");
+	}
+}
+
 static void ipDeviceReader(void *voidArg){
 	DataLinkDevice *dev = *(DataLinkDevice**)voidArg;
 	const uintptr_t fileHandle = dev->fileHandle;
 	const uintptr_t mtu = dev->mtu;
-	const struct IPFIFOList *const ipFIFOList = &readIPFIFOList;
+	const struct IPFIFOList *const ipFIFOList = &ipService.readFIFOList;
 	uintptr_t r;
 	IPV4Header *const packet = allocateKernelMemory(mtu);
 	if(packet == NULL){
@@ -619,100 +655,90 @@ static void ipDeviceReader(void *voidArg){
 
 static void receiveIPTask(void *voidArg){
 	RWIPQueue *rece = *(RWIPQueue**)voidArg;
+	IPSocket *ips = rece->socket;
 	IPFIFO *const ipFIFO = createIPFIFO(64);
+	struct IPFIFOList *const ipFIFOList = &ipService.readFIFOList;
 	EXPECT(ipFIFO != NULL);
-	addToIPFIFOList(&readIPFIFOList, ipFIFO);
+	addToIPFIFOList(ipFIFOList, ipFIFO);
 	while(1){
 		// wait for a valid IPv4 packet
 		QueuedPacket *qp = readIPFIFO(ipFIFO);
+		if(filterQueuedPacket(ips, qp) == 0){
+			addQueuedPacketRef(qp, -1);
+			continue;
+		}
 		const uintptr_t packetSize = getIPPacketSize(qp->packet);
 		// match the packet with receiver
-		RWIPRequest *arg;
-		if(matchReadIPRequest(rece, &arg, qp) == 0){
+		RWIPRequest *arg = nextRWIPRequest(rece);
+		if(arg == NULL){
 			addQueuedPacketRef(qp, -1);
 			break; // rece->terminateFlag == 1
 		}
-
-		if(arg != NULL){
-			// truncate packet
-			uintptr_t returnSize = arg->size;
-			arg->ipSocket->receivePacket(
-					arg->ipSocket, arg->buffer,
-					&returnSize, qp->packet, packetSize
-			);
-			completeRWFileIO(arg->rwfr, returnSize, 0);
-			DELETE(arg);
-		}
+		// truncate packet
+		uintptr_t returnSize = arg->size;
+		ips->receivePacket(
+			ips, arg->buffer,
+			&returnSize, qp->packet, packetSize
+		);
+		completeRWFileIO(arg->rwfr, returnSize, 0);
+		DELETE(arg);
 		addQueuedPacketRef(qp, -1);
 	}
-	removeFromIPFIFOList(&readIPFIFOList, ipFIFO);
+	removeFromIPFIFOList(ipFIFOList, ipFIFO);
 	deleteIPFIFO(ipFIFO);
 	deleteRWIPQueue(rece);
 	systemCall_terminate();
 	// no return
+	// 	deleteIPFIFO(ipFIFO);
 	ON_ERROR;
-	{
-		RWIPRequest *arg;
-		while(nextRWIPArgument(rece, &arg) != 0){
-			completeRWFileIO(arg->rwfr, 0, 0);
-			DELETE(arg);
+	while(1){
+		RWIPRequest *arg = nextRWIPRequest(rece);
+		if(arg == NULL){
+			break;
 		}
+		completeRWFileIO(arg->rwfr, 0, 0);
+		DELETE(arg);
 	}
 	deleteRWIPQueue(rece);
 	systemCall_terminate();
 }
 
-void destroyIPSocket(IPSocket *socket){
-	if(socket->receive != NULL)
-		setIPTaskTerminateFlag(socket->receive);
-	// use globalTransmit; see internetService
-	//if(socket->transmit != NULL)
-	//	setIPTerminateFlag(socket->transmit);
+void initIPSocket(
+	IPSocket *s, void *inst,
+	CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d, DeleteSocket *ds
+){
+	s->instance = inst;
+	s->localAddress = ANY_IPV4_ADDRESS;
+	s->localPort = 0;
+	s->remoteAddress = ANY_IPV4_ADDRESS;
+	s->remotePort = 0;
+	s->bindToDevice = 0;
+	memset(s->deviceName, 0, sizeof(s->deviceName));
+	s->deviceNameLength = 0;
+	s->createPacket = c;
+	s->filterPacket = f;
+	s->receivePacket = r;
+	s->deletePacket = d;
+	s->deleteSocket = ds;
+	initReferenceCount(&s->referenceCount, 1);
+	s->receive = NULL;
+	s->transmit = NULL;
 }
 
-static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
-	IPSocket *ips = getFileInstance(of);
-	destroyIPSocket(ips);
-	completeCloseFile(cfr);
-	DELETE(ips);
-}
-
-void initIPSocket(IPSocket *socket, void *inst, CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d){
-	socket->instance = inst;
-	socket->localAddress = ANY_IPV4_ADDRESS;
-	socket->localPort = 0;
-	socket->remoteAddress = ANY_IPV4_ADDRESS;
-	socket->remotePort = 0;
-	socket->bindToDevice = 0;
-	memset(socket->deviceName, 0, sizeof(socket->deviceName));
-	socket->deviceNameLength = 0;
-	socket->createPacket = c;
-	socket->filterPacket = f;
-	socket->receivePacket = r;
-	socket->deletePacket = d;
-	socket->receive = NULL;
-	socket->transmit = NULL;
-}
-
-static IPSocket *createIPSocket(CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d){
+static IPSocket *createIPSocket(
+	void *inst,
+	CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d, DeleteSocket *ds
+){
 	IPSocket *NEW(s);
 	if(s == NULL){
 		return NULL;
 	}
-	initIPSocket(s, s, c, f, r, d);
+	initIPSocket(s, inst, c, f, r, d, ds);
 	return s;
 }
 
-int startIPSocket(IPSocket *socket){
-	socket->transmit = globalTransmit;
-	assert(socket->transmit != NULL);
-	socket->receive = createRWIPQueue(receiveIPTask);
-	EXPECT(socket->receive != NULL);
-	return 1;
-	//setIPTaskTerminateFlag(socket->receive);
-	// socket->receive = NULL;
-	ON_ERROR;
-	return 0;
+static void deleteIPSocket(IPSocket *s){
+	DELETE(s);
 }
 
 void setIPSocketLocalAddress(IPSocket *s, IPV4Address a){
@@ -726,6 +752,41 @@ void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a){
 void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength){
 }
 */
+static void addIPSocketReference(IPSocket *ips, int v){
+	if(addReference(&ips->referenceCount, v) == 0){
+		ips->deleteSocket(ips);
+	}
+}
+
+int startIPSocketTasks(IPSocket *socket){
+	assert(socket->transmit == NULL && socket->receive == NULL);
+	socket->receive = createRWIPQueue(receiveIPTask, socket, ipService.mainTask);
+	EXPECT(socket->receive != NULL);
+	socket->transmit = createRWIPQueue(transmitIPTask, socket, ipService.mainTask);
+	EXPECT(socket->transmit != NULL);
+	return 1;
+	//setIPTaskTerminateFlag(socket->transmit);
+	//socket->transmit = NULL;
+	ON_ERROR;
+	setIPTaskTerminateFlag(socket->receive);
+	socket->receive = NULL;
+	ON_ERROR;
+	return 0;
+}
+
+void stopIPSocketTasks(IPSocket *socket){
+	if(socket->receive != NULL)
+		setIPTaskTerminateFlag(socket->receive);
+	if(socket->transmit != NULL)
+		setIPTaskTerminateFlag(socket->transmit);
+	addIPSocketReference(socket, -1);
+}
+
+static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
+	IPSocket *ips = getFileInstance(of);
+	stopIPSocketTasks(ips);
+	completeCloseFile(cfr);
+}
 
 static IPV4Header *createIPV4Packet(
 	__attribute__((__unused__)) IPSocket *ips, IPV4Address src, IPV4Address dst,
@@ -763,7 +824,7 @@ int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet, int is
 	return 1;
 }
 
-static int acceptQueuedPacket(IPSocket *s, QueuedPacket *qp){
+static int filterQueuedPacket(IPSocket *s, QueuedPacket *qp){
 	if(matchSocketBindingDevice(s, qp->fromDevice) == 0){
 		return 0;
 	}
@@ -900,8 +961,6 @@ static int scanIPSocketArgument(IPSocket *s, const char *k, uintptr_t keyLen, co
 }
 
 // ip:REMOTE;src=LOCAL;dev=DEVICE
-// return number of parsed characters if success
-// return 0 otherwise
 int scanIPSocketArguments(IPSocket *s, const char *fileName, uintptr_t nameLength){
 	const char separator = ';';
 	const char separator2 = '=';
@@ -944,11 +1003,11 @@ int scanIPSocketArguments(IPSocket *s, const char *fileName, uintptr_t nameLengt
 }
 
 static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
-	IPSocket *socket = createIPSocket(createIPV4Packet, filterIPV4Packet, copyIPV4Data, deleteIPV4Packet);
+	IPSocket *socket = createIPSocket(NULL, createIPV4Packet, filterIPV4Packet, copyIPV4Data, deleteIPV4Packet, deleteIPSocket);
 	EXPECT(socket != NULL);
 	int ok = scanIPSocketArguments(socket, fileName, nameLength);
 	EXPECT(ok && ofm.writable);
-	ok = startIPSocket(socket);
+	ok = startIPSocketTasks(socket);
 	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.setParameter = setIPParameter;
@@ -967,20 +1026,9 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 }
 
 void internetService(void){
-	if(initIPFIFOList(&readIPFIFOList) == 0){
-		panic("cannot initialize IP FIFO");
-	}
-	globalTransmit = createRWIPQueue(transmitIPTask);
-	if(globalTransmit == NULL){
-		panic("cannot initialize IP transmit queue");
-	}
-
-	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
-	fnf.open = openIPSocket;
-	if(addFileSystem(&fnf, "ip", strlen("ip")) == 0){
-		panic("cannot create IP service");
-	}
+	initIP();
 	initUDP();
+	initTCP();
 	uintptr_t enumDataLink = syncEnumerateFile(resourceTypeToFileName(RESOURCE_DATA_LINK_DEVICE));
 	while(1){
 		FileEnumeration fe;
@@ -999,14 +1047,13 @@ void internetService(void){
 	}
 	printk("warning: IP service error\n");
 	syncCloseFile(enumDataLink);
-	setIPTaskTerminateFlag(globalTransmit);
 	systemCall_terminate();
 }
 
 
 #ifndef NDEBUG
 
-static void testRWNetwork(const char *fileName, uint64_t src, uint64_t dst, int cnt, int isWrite){
+static void testRWNetwork(const char *fileName, uintptr_t srcAddr, uintptr_t dstAddr, int cnt, int isWrite){
 	uintptr_t f = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
 	assert(f != IO_REQUEST_FAILURE);
 	//IPV4Address src1 = {bytes: {0, 0, 0, 1}};
@@ -1017,9 +1064,9 @@ static void testRWNetwork(const char *fileName, uint64_t src, uint64_t dst, int 
 		memset(buffer, i + 10, sizeof(buffer));
 		uintptr_t rwSize = sizeof(buffer);
 
-		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, src);
+		r = syncSetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, srcAddr);
 		assert(r != IO_REQUEST_FAILURE);
-		r = syncSetFileParameter(f, FILE_PARAM_DESTINATION_ADDRESS, dst);
+		r = syncSetFileParameter(f, FILE_PARAM_DESTINATION_ADDRESS, dstAddr);
 		assert(r != IO_REQUEST_FAILURE);
 		if(isWrite){
 			r = syncWriteFile(f, buffer, &rwSize);
@@ -1049,16 +1096,14 @@ static void testRWIP(int cnt, int isWrite){
 	ok = waitForFirstResource("udp", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	IPV4Address src0 = ANY_IPV4_ADDRESS;
-	uint16_t srcPort = 60001;
+	//uint16_t srcPort = 60001;
 	IPV4Address dst0 = ANY_IPV4_ADDRESS;
-	uint16_t dstPort = 0;
+	//uint16_t dstPort = 0;
 
 	// wait for device
 	sleep(1000);
 	testRWNetwork("ip:0.0.0.0", src0.value, dst0.value, cnt, isWrite);
-	testRWNetwork("udp:0.0.0.0:60000;srcport=60001",
-		src0.value + (((uint64_t)srcPort) << 32),
-		dst0.value + (((uint64_t)dstPort) << 32), cnt, isWrite);
+	testRWNetwork("udp:0.0.0.0:60000;srcport=60001", src0.value, dst0.value, cnt, isWrite);
 	systemCall_terminate();
 }
 
