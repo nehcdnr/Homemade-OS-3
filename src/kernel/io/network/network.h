@@ -55,17 +55,15 @@ void *getIPData(const IPV4Header *h);
 uint16_t calculateIPDataChecksum(const IPV4Header *h);
 
 typedef struct IPSocket IPSocket;
+typedef struct RWIPQueue RWIPQueue;
 
 typedef IPV4Header *CreatePacket(
 	IPSocket *ipSocket, IPV4Address src, IPV4Address dst,
 	const uint8_t *buffer, uintptr_t bufferLength
 );
 typedef int FilterPacket(IPSocket *ipSocket, const IPV4Header *packet, uintptr_t packetSize);
-typedef void ReceivePacket(
-	IPSocket *ipSocket,
-	uint8_t *buffer, uintptr_t *bufferSize,
-	const IPV4Header *packet, uintptr_t packetSize
-);
+// return 0 the socket is closed and has no more read request
+typedef int ReceivePacket(IPSocket *ipSocket, RWIPQueue *receiveQueue, const IPV4Header *packet);
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
 typedef void DeleteSocket(IPSocket *ipSocket);
 
@@ -99,11 +97,8 @@ void setIPSocketLocalAddress(IPSocket *s, IPV4Address a);
 void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a);
 void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength);
 
-int isIPV4PacketAcceptable(const IPSocket *ips, const IPV4Header *packet, int isBroadcast);
-
-typedef struct RWIPQueue RWIPQueue;
-
 int createAddRWIPArgument(RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
+int nextRWIPRequest(RWIPQueue *q, RWFileRequest **rwfr, uint8_t **buffer, uintptr_t *size);
 
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
