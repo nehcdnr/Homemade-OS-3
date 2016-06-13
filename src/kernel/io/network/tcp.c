@@ -49,6 +49,8 @@ typedef struct{
 	TCPHeader tcp;
 }TCPIPHeader;
 
+// data == NULL indicates the packet will be retransmitted
+// initialize the header but do not copy the data
 static void initTCPIPPacket(
 	TCPIPHeader *h, const uint8_t *data, uint16_t dataSize,
 	uint32_t seqNumber, uint16_t windowSize,
@@ -57,7 +59,8 @@ static void initTCPIPPacket(
 ){
 	initIPV4Header(&h->ip, dataSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
 	TCPHeader *tcp = &h->tcp;
-	MEMSET0(tcp);
+	// do not modify data here
+	memset(tcp, 0, sizeof(TCPHeader));
 	tcp->sourcePort = changeEndian16(localPort);
 	tcp->destinationPort = changeEndian16(remotePort);
 	tcp->sequenceNumber = changeEndian32(seqNumber);
@@ -79,34 +82,48 @@ static void initTCPIPPacket(
 	tcp->checksum = 0;
 	//urgentPointer;
 	//options
-	memcpy(getTCPData(tcp), data, dataSize);
+	if(data != NULL){
+		memcpy(getTCPData(tcp), data, dataSize);
+	}
 	tcp->checksum = calculateIPDataChecksum(&h->ip);
 	assert(calculateIPDataChecksum(&h->ip) == 0);
 }
+
+typedef struct TCPQueuedPacket{
+	struct TCPQueuedPacket *next;
+	uint16_t dataSize, offset;
+	TCPIPHeader header;
+}TCPQueuedPacket;
+
 __attribute__((__unused__))
-static TCPIPHeader *createTCPIPPacket(
+static TCPQueuedPacket *createTCPQueuedPacket(
 	const uint8_t *data, uint16_t dataSize,
 	uint32_t seqNumber, uint16_t windowSize,
 	IPV4Address localAddr, uint16_t localPort,
 	IPV4Address remoteAddr, uint16_t remotePort
 ){
-	TCPIPHeader *NEW(h);
+	TCPQueuedPacket *h = allocateKernelMemory(sizeof(*h) + dataSize);
 	if(h == NULL){
 		return NULL;
 	}
-	initTCPIPPacket(h, data, dataSize, seqNumber, windowSize, localAddr, localPort, remoteAddr, remotePort);
+	h->next = NULL;
+	h->dataSize = dataSize;
+	h->offset = 0;
+	initTCPIPPacket(&h->header, data, dataSize, seqNumber, windowSize, localAddr, localPort, remoteAddr, remotePort);
 	return h;
 }
 
 typedef struct{
 	IPSocket ipSocket;
+	// receive
+	uint32_t receiveSequenceBegin;
+	uintptr_t receiveLength;
+	QueuedPacket **receiveBuffer;
+	uintptr_t receiveWindowSize;
+	// transmit
+	TCPQueuedPacket *transmitHead, **transmitTail;
 }TCPSocket;
-/*
-static void TCPClientTask(void *arg){
-	TCPSocket *tcps = *(TCPSocket**)arg;
 
-}
-*/
 static void closeTCP(CloseFileRequest *cfr, OpenedFile *of){
 	TCPSocket *tcps = getFileInstance(of);
 	stopIPSocketTasks(&tcps->ipSocket);
@@ -121,13 +138,12 @@ static void deleteTCPSocket(IPSocket *ips){
 static int openTCPClient(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
 	TCPSocket *NEW(tcps);
 	EXPECT(tcps != NULL);
-	initIPSocket(&tcps->ipSocket, tcps, NULL, NULL, NULL, NULL, deleteTCPSocket);
+	initIPSocket(&tcps->ipSocket, tcps, NULL,NULL,NULL, deleteTCPSocket);
 	int ok = scanIPSocketArguments(&tcps->ipSocket, fileName, nameLength);
 	EXPECT(ok && ofm.writable);
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.close = closeTCP;
-	//Task *t = createSharedMemoryTask(TCPClientTask);
 	completeOpenFile(ofr, tcps, &ff);
 	return 1;
 	ON_ERROR;

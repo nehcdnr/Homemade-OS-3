@@ -94,6 +94,10 @@ static void deleteUDPIPPacket(IPV4Header *h){
 	releaseKernelMemory(h);
 }
 
+static int transmitUDPPacket(IPSocket *s, RWIPQueue *q){
+	return transmitSinglePacket(s, q, createUDPIPPacketFromSocket, deleteUDPIPPacket);
+}
+
 static const UDPHeader *validateUDPHeader(const IPV4Header *packet, uintptr_t packetSize){
 	if(packet->protocol != IP_DATA_PROTOCOL_UDP){
 		return NULL;
@@ -128,19 +132,19 @@ static int filterUDPPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t pa
 	return 1;
 }
 
-static int receiveUDPPacket(__attribute__((__unused__)) IPSocket *ips, RWIPQueue *q, const IPV4Header *packet){
-	RWFileRequest *rwfr;
-	uint8_t *buffer;
-	uintptr_t size;
-	if(nextRWIPRequest(q, &rwfr, &buffer, &size) == 0){
-		return 0;
-	}
+static uintptr_t copyUDPPacketData(
+	__attribute__((__unused__)) IPSocket *ipSocket,
+	uint8_t *buffer, uintptr_t bufferSize, const IPV4Header *packet
+){
 	const UDPHeader *h = getIPData(packet);
-	uintptr_t udpDataSize = getUDPDataSize(h);
-	size = MIN(udpDataSize, size);
-	memcpy(buffer, h->payload, size);
-	completeRWFileIO(rwfr, size, 0);
-	return 1;
+	uintptr_t returnSize = getUDPDataSize(h);
+	returnSize = MIN(returnSize, bufferSize);
+	memcpy(buffer, h->payload, returnSize);
+	return returnSize;
+}
+
+static int receiveUDPPacket(IPSocket *ips, RWIPQueue *q, QueuedPacket *qp){
+	return receiveSinglePacket(ips, q, qp, copyUDPPacketData);
 }
 
 static int writeUDP(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t size){
@@ -189,7 +193,7 @@ static void deleteUDPSocket(IPSocket *ips){
 static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
-	initIPSocket(&udps->ipSocket, udps, createUDPIPPacketFromSocket, filterUDPPacket, receiveUDPPacket, deleteUDPIPPacket, deleteUDPSocket);
+	initIPSocket(&udps->ipSocket, udps, transmitUDPPacket, filterUDPPacket, receiveUDPPacket, deleteUDPSocket);
 	int ok = scanIPSocketArguments(&udps->ipSocket, fileName, nameLength);
 	EXPECT(ok && ofm.writable);
 	// TODO: is port using

@@ -56,16 +56,25 @@ uint16_t calculateIPDataChecksum(const IPV4Header *h);
 
 typedef struct IPSocket IPSocket;
 typedef struct RWIPQueue RWIPQueue;
+typedef struct QueuedPacket QueuedPacket;
+typedef struct DataLinkDevice DataLinkDevice;
 
+// return 0 the socket is closed and has no more read request
+typedef int TransmitPacket(IPSocket *ipSocket, RWIPQueue *transmitQueue);
+typedef int FilterPacket(IPSocket *ipSocket, const IPV4Header *packet, uintptr_t packetSize);
+// return 0 the socket is closed and has no more read request
+typedef int ReceivePacket(IPSocket *ipSocket, RWIPQueue *receiveQueue, QueuedPacket *packet);
+typedef void DeleteSocket(IPSocket *ipSocket);
+
+// packet based transmission for UDP/IP
 typedef IPV4Header *CreatePacket(
 	IPSocket *ipSocket, IPV4Address src, IPV4Address dst,
 	const uint8_t *buffer, uintptr_t bufferLength
 );
-typedef int FilterPacket(IPSocket *ipSocket, const IPV4Header *packet, uintptr_t packetSize);
-// return 0 the socket is closed and has no more read request
-typedef int ReceivePacket(IPSocket *ipSocket, RWIPQueue *receiveQueue, const IPV4Header *packet);
 typedef void DeletePacket(/*IPSocket *ipSocket, */IPV4Header *packet);
-typedef void DeleteSocket(IPSocket *ipSocket);
+typedef uintptr_t CopyPacketData(IPSocket *ipSocket, uint8_t *buffer, uintptr_t bufferSize, const IPV4Header *packet);
+int transmitSinglePacket(IPSocket *ips, RWIPQueue *tran, CreatePacket *c, DeletePacket *d);
+int receiveSinglePacket(IPSocket *ips, RWIPQueue *rece, QueuedPacket *qp, CopyPacketData *copyPacketData);
 
 // one receive queue & task for every socket
 struct IPSocket{
@@ -78,17 +87,16 @@ struct IPSocket{
 	char deviceName[MAX_FILE_ENUM_NAME_LENGTH];
 	uintptr_t deviceNameLength;
 
-	CreatePacket *createPacket;
+	TransmitPacket *transmitPacket;
 	FilterPacket *filterPacket;
 	ReceivePacket *receivePacket;
-	DeletePacket *deletePacket;
 	DeleteSocket *deleteSocket;
 
 	ReferenceCount referenceCount;
 	struct RWIPQueue *receive, *transmit;
 };
 
-void initIPSocket(IPSocket *s, void *inst, CreatePacket *c, FilterPacket *f, ReceivePacket *r, DeletePacket *d, DeleteSocket *ds);
+void initIPSocket(IPSocket *s, void *inst, TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d);
 int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
 int startIPSocketTasks(IPSocket *socket);
 void stopIPSocketTasks(IPSocket *socket);
@@ -99,6 +107,13 @@ void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nam
 
 int createAddRWIPArgument(RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
 int nextRWIPRequest(RWIPQueue *q, RWFileRequest **rwfr, uint8_t **buffer, uintptr_t *size);
+
+const IPV4Header *getQueuedPacketHeader(QueuedPacket *p);
+void addQueuedPacketRef(QueuedPacket *p, int n);
+
+
+DataLinkDevice *resolveLocalAddress(const IPSocket *s, IPV4Address *a);
+int transmitIPPacket(DataLinkDevice *device, const IPV4Header *packet);
 
 int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value);
 
