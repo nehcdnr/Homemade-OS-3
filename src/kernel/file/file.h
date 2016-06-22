@@ -49,10 +49,11 @@ enum FileParameter{
 	// MAC address, IP address
 	FILE_PARAM_SOURCE_ADDRESS = 0x30,
 	FILE_PARAM_DESTINATION_ADDRESS = 0x31,
-	//FILE_PARAM_SOURCE_PORT = 34,
-	//FILE_PARAM_DESTINATION_PORT = 35
-	FILE_PARAM_TRANSMIT_ETHERTYPE = 36,
+	FILE_PARAM_SOURCE_PORT = 0x32,
+	FILE_PARAM_DESTINATION_PORT = 0x33,
+	FILE_PARAM_TRANSMIT_ETHERTYPE = 0x36,
 	//FILE_PARAM_RECEIVE_ETHERTYPE = 37
+	FILE_PARAM_FILE_INSTANCE = 0x50
 };
 
 // if failed, return IO_REQUEST_FAILURE
@@ -195,6 +196,14 @@ void closeAllOpenFileRequest(OpenFileManager *ofm);
 void fatService(void);
 
 // kernel file
-void kernelFileService(void);
+void initKernelFile(void);
+
+// FIFO with file system call
+void initFIFOFile(void);
+typedef struct FIFOFile FIFOFile;
+// open/close/write are non-blocking; read is blocking
+uintptr_t syncOpenFIFOFile(void);
+FIFOFile *syncGetFIFOFile(uintptr_t fileHandle);
+int directWriteFIFOFile(FIFOFile *fifo, const uint8_t *buffer, uintptr_t bufferSize);
 
 #endif

@@ -119,7 +119,7 @@ uintptr_t enumNextDiskPartition(uintptr_t f, DiskPartitionType t, FileEnumeratio
 	return enumNextResource(f, fe, t, matchDiskType);
 }
 
-#define MAX_FILE_SERVICE_NAME_LENGTH (8)
+#define MAX_FILE_SERVICE_NAME_LENGTH (12)
 
 typedef struct FileSystem{
 	FileNameFunctions fileNameFunctions;

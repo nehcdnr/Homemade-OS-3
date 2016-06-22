@@ -94,8 +94,8 @@ static void deleteUDPIPPacket(IPV4Header *h){
 	releaseKernelMemory(h);
 }
 
-static int transmitUDPPacket(IPSocket *s, RWIPQueue *q){
-	return transmitSinglePacket(s, q, createUDPIPPacketFromSocket, deleteUDPIPPacket);
+static int transmitUDPPacket(IPSocket *s){
+	return transmitSinglePacket(s, createUDPIPPacketFromSocket, deleteUDPIPPacket);
 }
 
 static const UDPHeader *validateUDPHeader(const IPV4Header *packet, uintptr_t packetSize){
@@ -114,7 +114,7 @@ static const UDPHeader *validateUDPHeader(const IPV4Header *packet, uintptr_t pa
 		return NULL;
 	}
 	if(h->checksum != 0 && calculateIPDataChecksum(packet) != 0){
-		printk("bad UDP checksum %x %x\n", h->checksum, calculateIPDataChecksum(packet));
+		printk("bad UDP checksum %x; calculated %x\n", h->checksum, calculateIPDataChecksum(packet));
 		return NULL;
 	}
 	return h;
@@ -125,17 +125,14 @@ static int filterUDPPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t pa
 	if(h == NULL){
 		return 0;
 	}
-	UDPSocket *udps = ips->instance;
-	if(changeEndian16(h->destinationPort) != udps->ipSocket.localPort){
+	//UDPSocket *udps = ips->instance;
+	if(changeEndian16(h->destinationPort) != ips->localPort){
 		return 0;
 	}
 	return 1;
 }
 
-static uintptr_t copyUDPPacketData(
-	__attribute__((__unused__)) IPSocket *ipSocket,
-	uint8_t *buffer, uintptr_t bufferSize, const IPV4Header *packet
-){
+static uintptr_t copyUDPPacketData(uint8_t *buffer, uintptr_t bufferSize, const IPV4Header *packet){
 	const UDPHeader *h = getIPData(packet);
 	uintptr_t returnSize = getUDPDataSize(h);
 	returnSize = MIN(returnSize, bufferSize);
@@ -143,8 +140,8 @@ static uintptr_t copyUDPPacketData(
 	return returnSize;
 }
 
-static int receiveUDPPacket(IPSocket *ips, RWIPQueue *q, QueuedPacket *qp){
-	return receiveSinglePacket(ips, q, qp, copyUDPPacketData);
+static int receiveUDPPacket(IPSocket *ips, QueuedPacket *qp){
+	return receiveSinglePacket(ips, qp, copyUDPPacketData);
 }
 
 static int writeUDP(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t size){
@@ -155,6 +152,16 @@ static int writeUDP(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, 
 static int readUDP(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t size){
 	UDPSocket *udps = getFileInstance(of);
 	return createAddRWIPArgument(udps->ipSocket.receive, rwfr, &udps->ipSocket, buffer, size);
+}
+
+static int getUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param){
+	UDPSocket *udps = getFileInstance(of);
+	uint64_t value = 0;
+	int ok = getIPSocketParam(&udps->ipSocket, param, &value);
+	if(ok){
+		completeFileIO64(r2, value);
+	}
+	return ok;
 }
 
 static int setUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param, uint64_t value){
@@ -172,7 +179,7 @@ static int setUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param, 
 	default:
 		ok = 0;
 	}
-	ok = (ok || setIPAddress(&udps->ipSocket, param, value));
+	ok = (ok || setIPSocketParam(&udps->ipSocket, param, value));
 	if(ok){
 		completeFileIO0(r2);
 	}
@@ -202,6 +209,7 @@ static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t n
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.write = writeUDP;
 	ff.read = readUDP;
+	ff.getParameter = getUDPParameter;
 	ff.setParameter = setUDPParameter;
 	ff.close = closeUDPSocket;
 	completeOpenFile(ofr, udps, &ff);

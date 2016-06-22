@@ -124,7 +124,7 @@ static int openKFS(OpenFileRequest *fior, const char *fileName, uintptr_t length
 	return 0;
 }
 
-void kernelFileService(void){
+void initKernelFile(void){
 	kfDirectory.name = "";
 	kfDirectory.begin = (uintptr_t)blobList;
 	kfDirectory.end = (uintptr_t)(blobList + blobCount);
@@ -133,13 +133,10 @@ void kernelFileService(void){
 	ff.open = openKFS;
 	int ok = addFileSystem(&ff, "kernelfs", strlen("kernelfs"));
 	if(!ok){
-		printk("cannot register kernel image as file system\n");
-		systemCall_terminate();
-	}
-	while(1){
-		sleep(1000);
+		panic("cannot register kernel image as file system\n");
 	}
 }
+
 #ifndef NDEBUG
 static void testListKFS(void){
 	int a;

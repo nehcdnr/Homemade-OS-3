@@ -1,4 +1,6 @@
 #include"std.h"
+
+// see fifo.c
 typedef struct FIFO FIFO;
 
 // return 1 if written, 0 if not
@@ -15,3 +17,9 @@ uintptr_t getDataLength(FIFO *fifo);
 FIFO *createFIFO(uintptr_t maxLength, uintptr_t elementSize);
 void deleteFIFO(FIFO *fifo);
 
+// see fifolist.c
+typedef struct FIFOList FIFOList;
+int writeFIFOList(FIFOList *fifo, void *data, uintptr_t dataSize);
+uintptr_t readFIFOList(FIFOList *fifo, void *data, uintptr_t dataSize);
+FIFOList *createFIFOList(void);
+void deleteFIFOList(FIFOList *fifoList);

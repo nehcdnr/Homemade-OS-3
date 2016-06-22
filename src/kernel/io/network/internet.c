@@ -41,30 +41,31 @@ static uint16_t calculateIPHeaderChecksum(const IPV4Header *h){
 }
 
 // return little endian number which can be greater than 0xffff
-static uint32_t calculatePseudoIPHeaderChecksum(const IPV4Header *h){
+static uint32_t calculatePseudoIPHeaderChecksum(IPV4Address src, IPV4Address dst, uint8_t protocol, uintptr_t dataSize){
 	uint32_t cs = 0;
-	cs += changeEndian16(h->source.value & 0xffff);
-	cs += changeEndian16(h->source.value >> 16);
-	cs += changeEndian16(h->destination.value & 0xffff);
-	cs += changeEndian16(h->destination.value >> 16);
-	cs += h->protocol;
-	cs += getIPDataSize(h);
+	cs += changeEndian16(src.value & 0xffff);
+	cs += changeEndian16(src.value >> 16);
+	cs += changeEndian16(dst.value & 0xffff);
+	cs += changeEndian16(dst.value >> 16);
+	cs += protocol;
+	cs += dataSize;
 	return cs;
 }
 
-uint16_t calculateIPDataChecksum(const IPV4Header *h){
+uint16_t calculateIPDataChecksum2(
+	const void *voidIPData, uintptr_t dataSize,
+	IPV4Address src, IPV4Address dst, uint8_t protocol
+){
 	// pseudo ip header
-	uint32_t cs = calculatePseudoIPHeaderChecksum(h);
+	uint32_t cs = calculatePseudoIPHeaderChecksum(src, dst, protocol, dataSize);
 	// udp header + udp data
-	const uint16_t *data = getIPData(h);
-	const uintptr_t dataSize = getIPDataSize(h);
 	uintptr_t i;
 	for(i = 0; (i + 1) * sizeof(uint16_t) <= dataSize; i++){
-		cs += (uint32_t)changeEndian16((data)[i]);
+		cs += (uint32_t)changeEndian16(((const uint16_t*)voidIPData)[i]);
 	}
 	// padding
 	if(dataSize % sizeof(uint16_t) != 0){
-		uint16_t lastByte = (uint16_t)(((const uint8_t*)data)[dataSize - 1]);
+		uint16_t lastByte = (uint16_t)(((const uint8_t*)voidIPData)[dataSize - 1]);
 		cs += (uint32_t)changeEndian16(lastByte);
 	}
 	while(cs > 0xffff){
@@ -72,6 +73,10 @@ uint16_t calculateIPDataChecksum(const IPV4Header *h){
 	}
 	cs = changeEndian16(cs ^ 0xffff);
 	return cs;
+}
+
+uint16_t calculateIPDataChecksum(const IPV4Header *h){
+	return calculateIPDataChecksum2(getIPData(h), getIPDataSize(h), h->source, h->destination, h->protocol);
 }
 
 void initIPV4Header(
@@ -126,13 +131,13 @@ static uintptr_t enumNextDataLinkDevice(uintptr_t f, const char *namePattern, Fi
 	return enumNextResource(f, fe, (uintptr_t)namePattern, matchWildcardName);
 }
 
-struct RWIPQueue{
+typedef struct RWIPQueue{
 	Semaphore *argCount;
 	Spinlock lock;
 	struct RWIPRequest *argList;
 	int terminateFlag;
 	IPSocket *socket;
-};
+}RWIPQueue;
 
 static void addIPSocketReference(IPSocket *ips, int v);
 
@@ -372,13 +377,55 @@ static DataLinkDevice *searchDeviceByRoutingTable(DataLinkDeviceList *devList, _
 	return d;
 }
 
-int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value){
+int getIPSocketParam(IPSocket *ips, uintptr_t param, uint64_t *value){
+	*value = 0;
 	switch(param){
+	case FILE_PARAM_MAX_WRITE_SIZE:
+		{
+			IPV4Address a;
+			DataLinkDevice *d = resolveLocalAddress(ips, &a);
+			if(d == NULL){
+				return 0;
+			}
+			*value = d->mtu - sizeof(IPV4Header);
+		}
+		break;
 	case FILE_PARAM_SOURCE_ADDRESS:
-		setIPSocketLocalAddress(ips, (IPV4Address)(uint32_t)value);
+		{
+			IPV4Address a;
+			if(resolveLocalAddress(ips, &a) != NULL){
+				*value = a.value;
+				break;
+			}
+			*value = ips->localAddress.value; // IMPROVE: atomic
+		}
 		break;
 	case FILE_PARAM_DESTINATION_ADDRESS:
-		setIPSocketRemoteAddress(ips, (IPV4Address)(uint32_t)value);
+		*value = ips->remoteAddress.value;
+		break;
+	case FILE_PARAM_SOURCE_PORT:
+		*value = ips->localPort;
+		break;
+	case FILE_PARAM_DESTINATION_PORT:
+		*value = ips->remotePort;
+		break;
+	}
+	return 1;
+}
+
+int setIPSocketParam(IPSocket *ips, uintptr_t param, uint64_t value){
+	switch(param){
+	case FILE_PARAM_SOURCE_ADDRESS:
+		ips->localAddress = (IPV4Address)(uint32_t)value; // IMPROVE: atomic
+		break;
+	case FILE_PARAM_DESTINATION_ADDRESS:
+		ips->remoteAddress = (IPV4Address)(uint32_t)value;
+		break;
+	case FILE_PARAM_SOURCE_PORT:
+		ips->localPort = (uint16_t)value;
+		break;
+	case FILE_PARAM_DESTINATION_PORT:
+		ips->remotePort = (uint16_t)value;
 		break;
 	default:
 		return 0;
@@ -386,9 +433,19 @@ int setIPAddress(IPSocket *ips, uintptr_t param, uint64_t value){
 	return 1;
 }
 
+static int getIPParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t param){
+	IPSocket *ips = getFileInstance(of);
+	uint64_t value;
+	int ok = getIPSocketParam(ips, param, &value);
+	if(ok){
+		completeFileIO64(fior2, value);
+	}
+	return ok;
+}
+
 static int setIPParameter(FileIORequest2 *fior2, OpenedFile *of, uintptr_t param, uint64_t value){
 	IPSocket *ips = getFileInstance(of);
-	int ok = setIPAddress(ips, param, value);
+	int ok = setIPSocketParam(ips, param, value);
 	if(ok){
 		completeFileIO0(fior2);
 	}
@@ -440,7 +497,7 @@ int transmitIPPacket(DataLinkDevice *device, const IPV4Header *packet){
 static void transmitIPTask(void *voidArg){
 	RWIPQueue *tran = *(RWIPQueue**)voidArg;
 	IPSocket *ips = tran->socket;
-	while(ips->transmitPacket(ips, tran) != 0){
+	while(ips->transmitPacket(ips) != 0){
 	}
 	deleteRWIPQueue(tran);
 	systemCall_terminate();
@@ -676,13 +733,6 @@ static int filterQueuedPacket(IPSocket *s, QueuedPacket *qp){
 	return 1;
 }
 
-static int receiveIP(IPSocket *ips, RWIPQueue *rece, QueuedPacket *qp){
-	if(filterQueuedPacket(ips, qp)){
-		return ips->receivePacket(ips, rece, qp);
-	}
-	return 1;
-}
-
 static void flushRWIPRequests(RWIPQueue *q){
 	while(1){
 		RWFileRequest *rwfr;
@@ -705,7 +755,10 @@ static void receiveIPTask(void *voidArg){
 	while(1){
 		// wait for a valid IPv4 packet
 		QueuedPacket *qp = readIPFIFO(ipFIFO);
-		int continueFlag = receiveIP(ips, rece, qp);
+		int continueFlag = 1;
+		if(filterQueuedPacket(ips, qp)){
+			continueFlag = ips->receivePacket(ips, qp);
+		}
 		addQueuedPacketRef(qp, -1);
 		if(continueFlag == 0){
 			break;
@@ -760,21 +813,16 @@ static void deleteIPSocket(IPSocket *s){
 	DELETE(s);
 }
 
-void setIPSocketLocalAddress(IPSocket *s, IPV4Address a){
-	s->localAddress = a;
-}
-
-void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a){
-	s->remoteAddress = a;
-}
-/*
-void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength){
-}
-*/
 static void addIPSocketReference(IPSocket *ips, int v){
 	if(addReference(&ips->referenceCount, v) == 0){
 		ips->deleteSocket(ips);
 	}
+}
+
+// TODO: see tcp.c
+Task *getIPServiceTask(void);
+Task *getIPServiceTask(void){
+	return ipService.mainTask;
 }
 
 int startIPSocketTasks(IPSocket *socket){
@@ -823,7 +871,8 @@ static void deleteIPV4Packet(IPV4Header *h){
 	releaseKernelMemory(h);
 }
 
-int transmitSinglePacket(IPSocket *s, RWIPQueue *tran, CreatePacket *createPacket, DeletePacket *deletePacket){
+int transmitSinglePacket(IPSocket *s, CreatePacket *createPacket, DeletePacket *deletePacket){
+	RWIPQueue *tran = s->transmit;
 	RWFileRequest *rwfr;
 	uint8_t *buffer;
 	uintptr_t size;
@@ -853,8 +902,8 @@ int transmitSinglePacket(IPSocket *s, RWIPQueue *tran, CreatePacket *createPacke
 	return 0;
 }
 
-static int transmitIPV4Packet(IPSocket *s, RWIPQueue *tran){
-	return transmitSinglePacket(s, tran, createIPV4Packet, deleteIPV4Packet);
+int transmitIPV4Packet(IPSocket *ips){
+	return transmitSinglePacket(ips, createIPV4Packet, deleteIPV4Packet);
 }
 
 static int filterIPV4Packet(
@@ -866,9 +915,7 @@ static int filterIPV4Packet(
 	return 1;
 }
 
-static uintptr_t copyIPV4PacketData(
-	__attribute__((__unused__)) IPSocket *ipSocket,
-	uint8_t *buffer, uintptr_t bufferSize,	const IPV4Header *packet
+static uintptr_t copyIPV4PacketData(uint8_t *buffer, uintptr_t bufferSize,	const IPV4Header *packet
 ){
 	uintptr_t returnSize = getIPDataSize(packet);
 	returnSize = MIN(bufferSize, returnSize); // truncate
@@ -876,7 +923,8 @@ static uintptr_t copyIPV4PacketData(
 	return returnSize;
 }
 
-int receiveSinglePacket(IPSocket *ips, RWIPQueue *rece, QueuedPacket *qp, CopyPacketData *copyPacketData){
+int receiveSinglePacket(IPSocket *ips, QueuedPacket *qp, CopyPacketData *copyPacketData){
+	RWIPQueue *rece = ips->receive;
 	// match the packet with receiver
 	RWFileRequest *rwfr;
 	uint8_t *buffer;
@@ -886,13 +934,13 @@ int receiveSinglePacket(IPSocket *ips, RWIPQueue *rece, QueuedPacket *qp, CopyPa
 		return 0;
 	}
 	const IPV4Header *packet = getQueuedPacketHeader(qp);
-	uintptr_t returnSize = copyPacketData(ips, buffer, size, packet);
+	uintptr_t returnSize = copyPacketData(buffer, size, packet);
 	completeRWFileIO(rwfr, returnSize, 0);
 	return 1;
 }
 
-static int receiveIPV4Packet(IPSocket *ips, RWIPQueue *rece, QueuedPacket *qp){
-	return receiveSinglePacket(ips, rece, qp, copyIPV4PacketData);
+int receiveIPV4Packet(IPSocket *ips, QueuedPacket *qp){
+	return receiveSinglePacket(ips, qp, copyIPV4PacketData);
 }
 
 static int scanPort(const char *name, uintptr_t nameLength, uint16_t *port, unsigned *scanLength){
@@ -1045,6 +1093,7 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.setParameter = setIPParameter;
+	ff.getParameter = getIPParameter;
 	ff.read = readIPSocket;
 	ff.write = writeIPSocket;
 	ff.close = closeIPSocket;
@@ -1102,6 +1151,12 @@ static void testRWNetwork(const char *fileName, uintptr_t srcAddr, uintptr_t dst
 		assert(r != IO_REQUEST_FAILURE);
 		r = syncSetFileParameter(f, FILE_PARAM_DESTINATION_ADDRESS, dstAddr);
 		assert(r != IO_REQUEST_FAILURE);
+		{
+			uint64_t srcAddr2 = 0;
+			r = syncGetFileParameter(f, FILE_PARAM_SOURCE_ADDRESS, &srcAddr2);
+			printk("%x %x %x\n",r, srcAddr2, srcAddr);
+			assert(r != IO_REQUEST_FAILURE && 0 != (uint32_t)srcAddr2);
+		}
 		if(isWrite){
 			r = syncWriteFile(f, buffer, &rwSize);
 			assert(rwSize == sizeof(buffer));
@@ -1134,7 +1189,7 @@ static void testRWIP(int cnt, int isWrite){
 	IPV4Address dst0 = ANY_IPV4_ADDRESS;
 	//uint16_t dstPort = 0;
 
-	// wait for device
+	// wait for device & dhcp
 	sleep(1000);
 	testRWNetwork("ip:0.0.0.0", src0.value, dst0.value, cnt, isWrite);
 	testRWNetwork("udp:0.0.0.0:60000;srcport=60001", src0.value, dst0.value, cnt, isWrite);

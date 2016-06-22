@@ -14,22 +14,35 @@
 
 SystemGlobal global;
 
+static void builtInService(void){
+	initKernelFile();
+	initFIFOFile();
+	systemCall_terminate();
+}
+
 static void initService(void){
 	void (*services[])(void) = {
+		builtInService,
 		ps2Driver,
 		//vbeDriver,
 		kernelConsoleService,
 		pciDriver,
 		ahciDriver,
-		kernelFileService,
-		fatService,
 		i8254xDriver,
-		internetService
-		//testMemoryTask,
+		fatService,
+		internetService,
+		//testResource,
 		//testKFS,
+		//testAHCI,
+		//testPCI,
 		//testFAT,
-		//testAHCI
-		//testI8254xTransmit
+		//testI8254xTransmit2
+		//testI8254xTransmit,
+		//testI8254xReceive,
+		//testMemoryTask,
+		//testCreateThread,
+		//testTimer,
+		//testRWLock
 	};
 	unsigned int i;
 	Task *t;
@@ -40,16 +53,6 @@ static void initService(void){
 		}
 		resume(t);
 	}
-	/*
-	for(i = 0; i < 1000; i++){
-		t = createUserTask(testMemoryTask, 1);
-		if(t!= NULL)
-			resume(t);
-		else{
-			i--;
-		}
-	}
-	*/
 }
 
 void c_entry(void);
@@ -64,6 +67,11 @@ void c_entry(void){
 		initKernelConsole();
 		//kprintf("available memory: %u KB\n", getUsableSize(page) / 1024);
 #ifndef NDEBUG
+		//testSscanf();
+		//testPrintf();
+		//testIPFileName();
+		//testBigEndian();
+		//testWildcard();
 		//testMemoryManager();
 		//testMemoryManager2();
 		//testMemoryManager3();
@@ -102,11 +110,9 @@ void c_entry(void){
 		initTimer(global.syscallTable);
 	}
 	initLocalTimer(pic, global.idt, timer);
-
 	//printk("kernel memory usage: %u\n", getAllocatedSize());
 	printk("CPU #%d is ready...\n", getMemoryMappedLAPICID());
 	sti();
-
 	if(isBSP){
 		initService();
 	}
