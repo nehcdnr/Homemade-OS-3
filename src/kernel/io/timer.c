@@ -5,6 +5,7 @@
 #include"multiprocessor/spinlock.h"
 #include"memory/memory.h"
 #include"common.h"
+#include"kernel.h"
 #include"interrupt/handler.h"
 #include"interrupt/controller/pic.h"
 #include"assembly/assembly.h"

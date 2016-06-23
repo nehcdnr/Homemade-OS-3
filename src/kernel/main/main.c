@@ -1,9 +1,10 @@
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"interrupt/interrupt.h"
-#include"interrupt/systemcall.h"
 #include"interrupt/controller/pic.h"
+#include"interrupt/systemcalltable.h"
 #include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 #include"memory/segment.h"
 #include"task/task.h"
@@ -31,6 +32,7 @@ static void initService(void){
 		i8254xDriver,
 		fatService,
 		internetService,
+#ifndef NDEBUG
 		//testResource,
 		//testKFS,
 		//testAHCI,
@@ -43,6 +45,7 @@ static void initService(void){
 		//testCreateThread,
 		//testTimer,
 		//testRWLock
+#endif
 	};
 	unsigned int i;
 	Task *t;

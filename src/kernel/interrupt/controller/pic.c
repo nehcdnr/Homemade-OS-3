@@ -1,6 +1,7 @@
 #include"pic_private.h"
 #include"io/io.h"
 #include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 #include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"

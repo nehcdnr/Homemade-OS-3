@@ -2,6 +2,7 @@
 #include"interrupt.h"
 #include"internalinterrupt.h"
 #include"multiprocessor/processorlocal.h"
+#include"kernel.h"
 #include"common.h"
 
 // return 1 if ok

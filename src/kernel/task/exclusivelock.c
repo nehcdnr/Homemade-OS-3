@@ -1,6 +1,7 @@
+#include"kernel.h"
+#include"interrupt/systemcalltable.h"
 #include"exclusivelock.h"
 #include"task_private.h"
-#include"interrupt/systemcall.h"
 #include"memory/memory.h"
 #include"multiprocessor/processorlocal.h"
 #include"assembly/assembly.h"

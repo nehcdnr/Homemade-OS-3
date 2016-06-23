@@ -1,3 +1,4 @@
+#include"kernel.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"multiprocessor/processorlocal.h"

@@ -5,6 +5,7 @@
 #include"task/exclusivelock.h"
 #include"file/file.h"
 #include"resource/resource.h"
+#include"kernel.h"
 
 #define BROADCAST_MAC_ADDRESS ((((uint64_t)0xffff) << 32) | 0xffffffff)
 

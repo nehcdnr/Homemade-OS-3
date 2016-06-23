@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"network.h"
 
 typedef struct{

@@ -1,5 +1,5 @@
 #include<std.h>
-#include"interrupt/systemcall.h"
+#include "../interrupt/systemcalltable.h"
 #include"interrupt/handler.h"
 
 typedef struct SystemCallTable SystemCallTable;

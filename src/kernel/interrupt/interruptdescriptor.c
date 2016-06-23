@@ -1,13 +1,14 @@
 #include"interrupt/handler.h"
+#include"interrupt/systemcalltable.h"
 #include"interrupt.h"
 #include"internalinterrupt.h"
 #include"memory/segment.h"
 #include"controller/pic_private.h"
 #include"common.h"
+#include"kernel.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"task/task.h"
-#include"systemcall.h"
 #include"multiprocessor/spinlock.h"
 
 static_assert((SPURIOUS_INTERRUPT & 0xf) == 0xf);

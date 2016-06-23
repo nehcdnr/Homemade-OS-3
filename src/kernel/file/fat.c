@@ -1,11 +1,12 @@
 #include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 #include"io/io.h"
 #include"file.h"
 #include"resource/resource.h"
-#include"interrupt/systemcall.h"
 #include"task/exclusivelock.h"
 #include"task/task.h"
+#include"interrupt/systemcalltable.h"
 #include"multiprocessor/processorlocal.h"
 #include"multiprocessor/spinlock.h"
 

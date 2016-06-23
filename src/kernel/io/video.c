@@ -1,12 +1,13 @@
 #include"bios.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
-#include"interrupt/systemcall.h"
 #include"io.h"
 #include"task/task.h"
+#include"interrupt/systemcalltable.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"common.h"
+#include"kernel.h"
 #include"fifo.h"
 
 /*

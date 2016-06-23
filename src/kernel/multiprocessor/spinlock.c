@@ -1,5 +1,6 @@
 
 #include"common.h"
+#include"kernel.h"
 #include"assembly/assembly.h"
 #include"spinlock.h"
 

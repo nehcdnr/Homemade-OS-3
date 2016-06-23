@@ -2,6 +2,7 @@
 #include"interrupt/interrupt.h"
 #include"memory/memory.h"
 #include"common.h"
+#include"kernel.h"
 #include"assembly/assembly.h"
 
 // refer to chipset datasheet

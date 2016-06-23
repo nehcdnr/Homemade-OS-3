@@ -1,5 +1,6 @@
 #include"file/file.h"
 #include"task/exclusivelock.h"
+#include"kernel.h"
 #include"io/fifo.h"
 
 typedef struct FIFOElement{

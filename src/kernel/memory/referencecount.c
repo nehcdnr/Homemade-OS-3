@@ -1,4 +1,5 @@
 #include"referencecount.h"
+#include"kernel.h"
 
 void initReferenceCount(ReferenceCount *rc, int value){
 	rc->lock = initialSpinlock;

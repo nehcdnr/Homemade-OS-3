@@ -3,6 +3,7 @@
 #include"task/task.h"
 #include"network.h"
 #include"ethernet.h"
+#include"kernel.h"
 
 struct DHCPClient{
 	uintptr_t udpFile;

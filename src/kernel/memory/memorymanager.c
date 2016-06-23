@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"memory.h"
 #include"assembly/assembly.h"
 #include"multiprocessor/spinlock.h"

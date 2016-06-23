@@ -1,5 +1,5 @@
-#include<std.h>
-#include<common.h>
+#include"common.h"
+#include"kernel.h"
 #include"memory.h"
 #include"memory_private.h"
 #include"multiprocessor/spinlock.h"

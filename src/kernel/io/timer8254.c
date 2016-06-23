@@ -2,6 +2,7 @@
 #include"interrupt/controller/pic.h"
 #include"io.h"
 #include"common.h"
+#include"kernel.h"
 #include"assembly/assembly.h"
 
 void setTimer8254Frequency(unsigned frequency){

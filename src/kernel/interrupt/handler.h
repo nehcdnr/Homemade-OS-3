@@ -1,6 +1,8 @@
 #ifndef HANDLER_H_INCLUDED
 #define HANDLER_H_INCLUDED
 #include<std.h>
+
+#include "../../lib/systemcall.h"
 #include"assembly/assembly.h"
 
 typedef struct InterruptVector InterruptVector;
@@ -67,7 +69,7 @@ enum ReservedInterruptVector{
 	BEGIN_GENERAL_VECTOR = 32,
 	END_GENERAL_VECTOR = 96,
 
-	SYSTEM_CALL = 126,
+	SYSTEM_CALL = SYSTEM_CALL_VECTOR, // 126
 	SPURIOUS_INTERRUPT = 127
 };
 #define SYSTEM_CALL_VECTOR_STRING "126"

@@ -24,7 +24,6 @@ int toupper(int c);
 int isspace(int c);
 
 // assert.h
-void printAndHalt(const char *condition, const char *file, int line);
 #define _TO_STRING(A) #A
 #define TO_STRING(A) _TO_STRING(A)
 #define _STRCAT(A,B) A##B
@@ -35,17 +34,10 @@ void printAndHalt(const char *condition, const char *file, int line);
 #define __BASE_FILE__ ""
 #endif
 
-#define panic(A) printAndHalt((A), __BASE_FILE__, __LINE__)
-#ifndef NDEBUG
-	#define assert(A) do{if(!(A)){panic(TO_STRING(A));}}while(0)
-#else
-	#define assert(A) do{}while(0)
-#endif
-
-#define static_assert(A) enum{STRCAT(_ASSERT_,__COUNTER__)=1/(A)}
-
 #define EXPECT(CONDITION) do{if(!(CONDITION))break
 #define ON_ERROR }while(0)
+
+#define static_assert(A) enum{STRCAT(_ASSERT_,__COUNTER__)=1/(A)}
 
 // other
 #define DIV_CEIL(A, B) (((A)+(B)-1)/(B))
@@ -68,14 +60,6 @@ uintptr_t indexOfNot(const char *s, uintptr_t i, uintptr_t len, char c);
 // return type of ternary operator is the 1st value
 #define MAX(A,B) ((A)>(B)?(A):(B))
 #define MIN(A,B) ((A)<(B)?(A):(B))
-
-// see console.c
-int printString(const char *s, size_t length);
-
-int snprintf(char *str, size_t len, const char *format, ...);
-int printk(const char *format, ...);
-int snscanf(const char *str, size_t len, const char *format, ...);
-int sscanf(const char *str, const char *format, ...);
 
 #define LENGTH_OF(A) (sizeof(A)/sizeof((A)[0]))
 #define MEMBER_OFFSET(T, M) ((size_t)&(((T*)0)->M))

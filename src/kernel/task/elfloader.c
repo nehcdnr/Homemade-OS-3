@@ -1,5 +1,5 @@
-#include<std.h>
-#include<common.h>
+#include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 #include"memory/memory_private.h"
 #include"file/file.h"

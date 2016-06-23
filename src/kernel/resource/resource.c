@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"resource.h"
 #include"task/task.h"
 #include"multiprocessor/spinlock.h"

@@ -1,4 +1,5 @@
 #include"memory_private.h"
+#include"kernel.h"
 #include"buddy.h"
 
 enum MemoryBlockStatus{

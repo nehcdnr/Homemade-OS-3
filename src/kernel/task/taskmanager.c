@@ -1,3 +1,5 @@
+#include"common.h"
+#include"kernel.h"
 #include"task.h"
 #include"task_private.h"
 #include"exclusivelock.h"
@@ -6,12 +8,11 @@
 #include"memory/memory.h"
 #include"memory/memory_private.h"
 #include"interrupt/handler.h"
+#include"interrupt/systemcalltable.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"io/io.h"
 #include"file/file.h"
-#include"interrupt/systemcall.h"
-#include"common.h"
 
 typedef struct TaskMemoryManager{
 	LinearMemoryManager manager;

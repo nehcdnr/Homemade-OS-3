@@ -1,4 +1,3 @@
-#include"std.h"
 #include"memory/memory.h"
 #include"resource/resource.h"
 #include"task/task.h"
@@ -6,6 +5,7 @@
 #include"multiprocessor/processorlocal.h"
 #include"io/fifo.h"
 #include"network.h"
+#include"kernel.h"
 
 static_assert(sizeof(IPV4Address) == 4);
 static_assert(sizeof(IPV4Header) / sizeof(uint32_t) == 5);

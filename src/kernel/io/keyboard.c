@@ -1,12 +1,13 @@
 #include"interrupt/handler.h"
 #include"assembly/assembly.h"
-#include"interrupt/systemcall.h"
+#include"interrupt/systemcalltable.h"
 #include"interrupt/controller/pic.h"
 #include"multiprocessor/processorlocal.h"
 #include"file/file.h"
 #include"keyboard.h"
 #include"task/task.h"
 #include"common.h"
+#include"kernel.h"
 #include"fifo.h"
 
 static const unsigned short scan1[][2] = {

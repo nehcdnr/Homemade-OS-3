@@ -3,8 +3,9 @@ NDEBUG=-DNDEBUG
 NASM=./tool/nasm-2.11.06/nasm.exe
 ASMFLAGS=-f elf32
 CC=./tool/toolchain32/bin/i686-linux-gnu-gcc.exe
-CFLAGS=-freg-struct-return -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel
+CFLAGS=-freg-struct-return -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel -Isrc\lib
 LD=./tool/toolchain32/bin/i686-linux-gnu-ld.exe
+AR=./tool/toolchain32/bin/i686-linux-gnu-ar.exe
 LDFLAGS=--strip-debug
 LIBGCC=$(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
 BFI=./tool/bfi10/bfi.exe
@@ -35,19 +36,21 @@ CURRENT_DIR=$(shell echo %cd%)
 # source
 ASM_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.asm)
 C_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.c)
+C_LIB_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\lib\*.c)
 BLOB_SRC=$(shell dir /A-D /B /S $(BLOB_DIR)\*)
 BLOB_LIST_SRC=$(BLOB_BUILD_DIR)\bloblist.c
 
 ASM_OBJ=$(patsubst $(CURRENT_DIR)\\%.asm,%.o,$(ASM_SRC))
 C_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_SRC))
+C_LIB_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_LIB_SRC))
 BLOB_OBJ=$(patsubst $(CURRENT_DIR)\$(BLOB_DIR)\\%,$(BLOB_BUILD_DIR)\\%.o,$(BLOB_SRC))
 BLOB_LIST_OBJ=$(BLOB_BUILD_DIR)\bloblist.o
 
-OBJ=$(C_OBJ) $(ASM_OBJ) $(BLOB_OBJ) $(BLOB_LIST_OBJ)
+OBJ=$(C_OBJ) $(C_LIB_OBJ) $(ASM_OBJ) $(BLOB_OBJ) $(BLOB_LIST_OBJ)
 
 BOOTLOADER_ASM=$(SRC_DIR)\bootloader\floppyloader.asm
 
-all: os3.img
+all: os3.img os3.a
 
 os3.img: floppyloader.bin $(BUILD_DIR)/kernel.bin
 	$(BFI) -t=6 -b=$< -f=$@ $(BUILD_DIR)
@@ -59,6 +62,9 @@ $(BUILD_DIR)/kernel.bin: $(OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
 	objcopy -O binary kernel.o $(BUILD_DIR)/kernel.bin
 
+os3.a: $(C_LIB_OBJ)
+	del os3.a
+	$(AR) -qv os3.a $(C_LIB_OBJ)
 
 .SUFFIXES: .o .asm
 .asm.o:

@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
 #include"segment.h"

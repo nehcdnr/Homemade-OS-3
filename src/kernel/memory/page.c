@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"memory.h"
 #include"memory_private.h"
 #include"assembly/assembly.h"

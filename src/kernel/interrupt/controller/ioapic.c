@@ -2,6 +2,7 @@
 #include"pic_private.h"
 #include"interrupt/interrupt.h"
 #include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 
 #pragma pack(1)

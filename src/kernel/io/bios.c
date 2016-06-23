@@ -3,6 +3,7 @@
 #include"task/task.h"
 #include"fifo.h"
 #include"common.h"
+#include"kernel.h"
 
 #define DEFAULT_EBDA_BEGIN (0x9fc00)
 uintptr_t findAddressOfEBDA(uintptr_t kernelLinearBegin){

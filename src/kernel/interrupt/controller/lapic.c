@@ -2,6 +2,7 @@
 #include"io/io.h"
 #include"interrupt/interrupt.h"
 #include"common.h"
+#include"kernel.h"
 #include"memory/memory.h"
 #include"assembly/assembly.h"
 

@@ -1,10 +1,11 @@
 #include"io.h"
 #include"assembly/assembly.h"
 #include"memory/memory.h"
-#include"interrupt/systemcall.h"
 #include"file/file.h"
+#include"interrupt/systemcalltable.h"
 #include"multiprocessor/processorlocal.h"
 #include"multiprocessor/spinlock.h"
+#include"kernel.h"
 
 // USB 1.0 (UHCI)
 /*

@@ -1,5 +1,5 @@
 #include"common.h"
-#include"std.h"
+#include"kernel.h"
 #include"io.h"
 #include"keyboard.h"
 #include"memory/memory.h"
@@ -8,8 +8,8 @@
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
 #include"assembly/assembly.h"
-#include"interrupt/systemcall.h"
 #include"interrupt/handler.h"
+#include"interrupt/systemcalltable.h"
 #include"task/task.h"
 
 typedef struct ConsoleDisplay{

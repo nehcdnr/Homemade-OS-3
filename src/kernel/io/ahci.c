@@ -1,4 +1,5 @@
 #include"common.h"
+#include"kernel.h"
 #include"io.h"
 #include"memory/memory.h"
 #include"multiprocessor/processorlocal.h"

@@ -1,4 +1,5 @@
 #include"buddy.h"
+#include"kernel.h"
 
 typedef struct PhysicalMemoryBlock{
 	uint32_t referenceCount;

@@ -2,6 +2,7 @@
 #include"multiprocessor/processorlocal.h"
 #include"ethernet.h"
 #include"network.h"
+#include"kernel.h"
 
 #pragma pack(1)
 
