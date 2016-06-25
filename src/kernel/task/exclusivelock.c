@@ -57,12 +57,16 @@ static int acquireExLock(ExclusiveLock *e, int (*acquire)(void*), void (*pushLoc
 	return acquired;
 }
 
-static void releaseExLock(ExclusiveLock *e, Task *(*release)(void*)){
-	Task *t;
+static void releaseExLock(ExclusiveLock *e, void (*release)(void*, TaskQueue*)){
+	TaskQueue q = INITIAL_TASK_QUEUE;
 	acquireLock(&e->lock);
-	t = release(e->instance);
+	release(e->instance, &q);
 	releaseLock(&e->lock);
-	if(t != NULL){
+	while(1){
+		Task *t = popQueue(&q);
+		if(t == NULL){
+			break;
+		}
 		resume(t);
 	}
 }
@@ -88,14 +92,16 @@ static void _pushSemaphoreQueue(void *inst, Task *t){
 	pushQueue(&((Semaphore*)inst)->taskQueue, t);
 }
 
-static Task *_releaseSemaphore(void *inst){
+static void _releaseSemaphore(void *inst, TaskQueue *q){
 	Semaphore *s = inst;
 	Task *t = popQueue(&s->taskQueue);
 	if(t == NULL){
 		assert(s->quota + 1 != 0x7fffffff);
 		s->quota += 1;
 	}
-	return t;
+	else{
+		pushQueue(q, t);
+	}
 }
 
 int tryAcquireSemaphore(Semaphore *s){
@@ -209,9 +215,8 @@ void acquireWriterLock(ReaderWriterLock *rwl){
 	acquireExLock(&rwl->exLock, _acquireWriterLock, _pushWriterQueue, 1);
 }
 
-static Task *_releaseReaderWriterLock(void *instance){
+static void _releaseReaderWriterLock(void *instance, TaskQueue *q){
 	ReaderWriterLock *rwl = instance;
-	Task *t = NULL;
 	if(rwl->writerCount != 0){ // current task is writer
 		rwl->writerCount--;
 	}
@@ -220,18 +225,22 @@ static Task *_releaseReaderWriterLock(void *instance){
 	}
 	if((rwl->writerFirst && IS_TASK_QUEUE_EMPTY(&rwl->writerQueue) == 0) ||
 		IS_TASK_QUEUE_EMPTY(&rwl->readerQueue)){ // next writer
-		t = popQueue(&rwl->writerQueue);
+		Task *t = popQueue(&rwl->writerQueue);
 		if(t != NULL){
 			rwl->writerCount++;
+			pushQueue(q, t);
 		}
 	}
-	else{ // next reader
-		t = popQueue(&rwl->readerQueue);
-		if(t != NULL){
+	else{ // next readers
+		while(1){
+			Task *t = popQueue(&rwl->readerQueue);
+			if(t == NULL){
+				break;
+			}
 			rwl->readerCount++;
+			pushQueue(q, t);
 		}
 	}
-	return t;
 }
 
 void releaseReaderWriterLock(ReaderWriterLock *rwl){

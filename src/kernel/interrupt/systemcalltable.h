@@ -58,9 +58,6 @@ int systemCall_queryServiceN(const char *name, uintptr_t nameLength);
 typedef struct InterruptTable InterruptTable;
 SystemCallTable *initSystemCall(InterruptTable *t);
 
-#define KEYBOARD_SERVICE_NAME ("keyboard")
-#define MOUSE_SERVICE_NAME ("mouse")
 #define VIDEO_SERVICE_NAME ("video")
-#define KERNEL_CONSOLE_SERVICE_NAME ("kernelconsole")
 
 #endif

@@ -17,9 +17,13 @@ uintptr_t getDataLength(FIFO *fifo);
 FIFO *createFIFO(uintptr_t maxLength, uintptr_t elementSize);
 void deleteFIFO(FIFO *fifo);
 
-// see fifolist.c
+// see fifofile.c
+/*
 typedef struct FIFOList FIFOList;
 int writeFIFOList(FIFOList *fifo, void *data, uintptr_t dataSize);
 uintptr_t readFIFOList(FIFOList *fifo, void *data, uintptr_t dataSize);
+// Each write operation corresponds to one read operation
+// The data is truncated if read buffer size < write size
 FIFOList *createFIFOList(void);
 void deleteFIFOList(FIFOList *fifoList);
+*/

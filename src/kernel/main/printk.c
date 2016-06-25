@@ -296,7 +296,7 @@ int printk(const char *format, ...){
 			printCount = -1;
 			break;
 		}
-		printString(bufferPtr.buffer, bufferLength);
+		printkString(bufferPtr.buffer, bufferLength);
 		printCount += bufferLength;
 	}
 	va_end(argList);

@@ -1,7 +1,7 @@
 #include"std.h"
 
 // see console.c
-int printString(const char *s, size_t length);
+int printkString(const char *s, size_t length);
 
 int snprintf(char *str, size_t len, const char *format, ...);
 int printk(const char *format, ...);

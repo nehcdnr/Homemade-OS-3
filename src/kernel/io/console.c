@@ -4,6 +4,7 @@
 #include"keyboard.h"
 #include"memory/memory.h"
 #include"file/file.h"
+#include"io/fifo.h"
 #include"resource/resource.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
@@ -23,7 +24,7 @@ typedef struct ConsoleDisplay{
 #define DEFAULT_TEXT_VIDEO_ADDRESS ((uintptr_t)0xb8000)
 #define DEFAULT_VIDEO_ADDRESS_END ((uintptr_t)0xc0000)
 
-ConsoleDisplay kernelConsole = {
+ConsoleDisplay kernelDisplay = {
 	0, 0,
 	80, 25 * 80,
 	(volatile uint16_t*)DEFAULT_TEXT_VIDEO_ADDRESS,
@@ -114,34 +115,40 @@ static int printConsole(ConsoleDisplay *cd, const char *s, size_t length){
 	return a;
 }
 
-
-static int printBackspace(int length){
+static int printBackspace(ConsoleDisplay *cd, int length){
 	int a;
-	acquireLock(&kernelConsole.lock);
+	acquireLock(&cd->lock);
 	{
-		ConsoleDisplay *cd = &kernelConsole;
 		for(a = 0; a < length && cd->cursor > cd->screen; a++){
 			cd->cursor--;
 			printWhiteSpace(cd);
 		}
 		updateCursor(cd);
 	}
-	releaseLock(&kernelConsole.lock);
+	releaseLock(&cd->lock);
 	return a;
 }
 
-int printString(const char *s, size_t length){
+static int printkBackspace(int length){
+	return printBackspace(&kernelDisplay, length);
+}
+
+static int printString(ConsoleDisplay *cd, const char *s, size_t length){
 	int a;
-	acquireLock(&kernelConsole.lock); //IMPROVE: 1 lock&unlock per kprintf
-	a = printConsole(&kernelConsole, s, length);
-	updateCursor(&kernelConsole);
-	updateVideoAddress(&kernelConsole);
-	releaseLock(&kernelConsole.lock);
+	acquireLock(&cd->lock); //IMPROVE: 1 lock&unlock per kprintf
+	a = printConsole(cd, s, length);
+	updateCursor(cd);
+	updateVideoAddress(cd);
+	releaseLock(&cd->lock);
 	return a;
+}
+
+int printkString(const char *s, size_t length){
+	return printString(&kernelDisplay, s, length);
 }
 
 void initKernelConsole(void){
-	ConsoleDisplay *cd = &kernelConsole;
+	ConsoleDisplay *cd = &kernelDisplay;
 	PhysicalAddress defaultTextVideoAddress = {DEFAULT_TEXT_VIDEO_ADDRESS};
 	cd->screen = 0;
 	cd->cursor = 0;
@@ -199,7 +206,7 @@ static uintptr_t _openCommand(const char *cmdLine, uintptr_t length, OpenFileMod
 	arg = nextArgument(&cmdLine, &length);
 	if(arg == NULL)
 		return UINTPTR_NULL;
-	printString(arg, cmdLine - arg);
+	printkString(arg, cmdLine - arg);
 	printk("\n");
 	uintptr_t file = syncOpenFileN(arg, cmdLine - arg, mode);
 	return file;
@@ -306,46 +313,125 @@ static void parseCommand(const char *cmdLine, uintptr_t length){
 		}
 	}
 	printk("command not found: ");
-	printString(arg, argLen);
+	printkString(arg, argLen);
 	printk("\n");
 }
 
-static void printConsoleHandler(InterruptParam *p){
-	//ConsoleDisplay *cd = (ConsoleDisplay*)p->argument;
-	const char *string = (const char*)SYSTEM_CALL_ARGUMENT_0(p);
-	size_t length = SYSTEM_CALL_ARGUMENT_1(p);
-	//TODO: isValidUserAddress(string, length);
-	printString(string, length);
-	sti();
-}
+typedef struct RWConsoleRequest{
+	RWFileRequest *rwfr;
+	uint8_t *buffer;
+	uintptr_t bufferSize;
+	struct RWConsoleRequest *next, **prev;
+}RWConsoleRequest;
 
+
+#define MAX_HISTORY_LENGTH (8)
 #define MAX_COMMAND_LINE_LENGTH (160)
-static int backspaceHandler(int index){
-	if(index <= 0){
-		return index;
+typedef struct{
+	char line[MAX_COMMAND_LINE_LENGTH];
+	int lineEnd;
+	Spinlock lock;
+	int listenerCount;
+	// if openCount == 0, then the console will execute the command
+	// Otherwise, the command is sent to lineFIFO
+	// see enterHandler()
+	FIFO *lineFIFO;
+	RWConsoleRequest *requestHead;
+}ConsoleCommandLine;
+
+// see kernelConsoleService
+static ConsoleCommandLine kernelCommand;
+
+static int initConsoleCommandLine(ConsoleCommandLine *cmd){
+	cmd->lineEnd = 0;
+	cmd->lock = initialSpinlock;
+	cmd->listenerCount = 0;
+	cmd->lineFIFO = createFIFO(1024, sizeof(uint8_t));
+	if(cmd->lineFIFO == NULL){
+		return 0;
 	}
-	index -= printBackspace(1);
-	return index;
+	return 1;
 }
 
-static int enterHandler(char *cmdLine, int index){
-	cmdLine[index] = '\n';
-	printString("\n", 1);
+static void addCmdListenerCount(ConsoleCommandLine *cmd, int v){
+	acquireLock(&cmd->lock);
+	cmd->listenerCount += v;
+	releaseLock(&cmd->lock);
+}
 
-	parseCommand(cmdLine, index);
+// return 1 if need to continue iteration
+static int processConsoleInput(ConsoleCommandLine *cmd){
+	acquireLock(&cmd->lock);
+	RWConsoleRequest *r = cmd->requestHead;
+	if(r != NULL){
+		REMOVE_FROM_DQUEUE(r);
+	}
+	releaseLock(&cmd->lock);
+	EXPECT(r != NULL);
+	uintptr_t readCount;
+	for(readCount = 0; readCount < r->bufferSize; readCount++){
+		if(readFIFONonBlock(cmd->lineFIFO, r->buffer + readCount) == 0){
+			break;
+		}
+	}
+	EXPECT(readCount > 0 || readCount == r->bufferSize);
+	completeRWFileIO(r->rwfr, readCount, 0);
+	DELETE(r);
+	return 1;
+
+	ON_ERROR;
+	acquireLock(&cmd->lock);
+	ADD_TO_DQUEUE(r, &cmd->requestHead);
+	releaseLock(&cmd->lock);
+	ON_ERROR;
 	return 0;
 }
 
-static int printHandler(char *cmdLine, int index, int key){
-	if(index >= MAX_COMMAND_LINE_LENGTH - 1){
-		return index;
+static int backspaceHandler(ConsoleCommandLine *cmd){
+	if(cmd->lineEnd > 0){
+		cmd->lineEnd -= printkBackspace(1);
+	}
+	return cmd->lineEnd;
+}
+
+static int enterHandler(ConsoleCommandLine *cmd){
+	cmd->line[cmd->lineEnd] = '\n';
+	printkString("\n", 1);
+	cmd->lineEnd++;
+
+	acquireLock(&cmd->lock);
+	int openCount = cmd->listenerCount;
+	releaseLock(&cmd->lock);
+	if(openCount == 0){
+		parseCommand(cmd->line, cmd->lineEnd - 1);
+	}
+	else{
+		int i;
+		for(i = 0; i < cmd->lineEnd; i++){
+			if(writeFIFO(cmd->lineFIFO, cmd->line + i) == 0){
+				break;
+			}
+		}
+		if(i < cmd->lineEnd){
+			printk("warning: command line is truncated because buffer is full.\n");
+		}
+		while(processConsoleInput(cmd)){
+		}
+	}
+	cmd->lineEnd = 0;
+	return 0;
+}
+
+static int printHandler(ConsoleCommandLine *cmd, int key){
+	if(cmd->lineEnd >= MAX_COMMAND_LINE_LENGTH - 1){
+		return cmd->lineEnd;
 	}
 	if(key >= 256){
 		key = '?';
 	}
-	cmdLine[index] = (key & 0xff);
-	index += printString(cmdLine + index, 1);
-	return index;
+	cmd->line[cmd->lineEnd] = (key & 0xff);
+	cmd->lineEnd += printkString(cmd->line + cmd->lineEnd, 1);
+	return cmd->lineEnd;
 }
 
 #define SHIFT_ARRAY_LENGTH (128)
@@ -378,7 +464,7 @@ struct KeyboardState{
 	int shiftPressed;
 };
 
-static void kernelConsoleLoop(void){
+static void kernelConsoleLoop(ConsoleCommandLine *cmd){
 	const char *shiftKeyMap = createShiftKeyMap();
 	if(shiftKeyMap == NULL){
 		printk("cannot allocate memory for kernel console\n");
@@ -391,8 +477,7 @@ static void kernelConsoleLoop(void){
 		systemCall_terminate();
 	}
 	struct KeyboardState kbState = {0};
-	char cmdLine[MAX_COMMAND_LINE_LENGTH];
-	int index = 0;
+
 	while(1){
 		KeyboardEvent ke;
 		uintptr_t readSize = sizeof(ke);
@@ -415,13 +500,13 @@ static void kernelConsoleLoop(void){
 				kbState.shiftPressed = 1;
 				break;
 			case BACKSPACE:
-				index = backspaceHandler(index);
+				backspaceHandler(cmd);
 				break;
 			case ENTER:
-				index = enterHandler(cmdLine, index);
+				enterHandler(cmd);
 				break;
 			default:
-				index = printHandler(cmdLine, index, (kbState.shiftPressed? shiftKey(shiftKeyMap, ke.key): ke.key));
+				printHandler(cmd, (kbState.shiftPressed? shiftKey(shiftKeyMap, ke.key): ke.key));
 				break;
 			}
 		}
@@ -430,11 +515,98 @@ static void kernelConsoleLoop(void){
 	systemCall_terminate();
 }
 
-void kernelConsoleService(void){
-	int result = registerService(global.syscallTable,
-		KERNEL_CONSOLE_SERVICE_NAME, printConsoleHandler, (uintptr_t)&kernelConsole);
-	EXPECT(result >= 0);
-	kernelConsoleLoop();
-	ON_ERROR;
-	panic("cannot create kernelConsoleService");
+typedef struct OpenedConsole{
+	ConsoleDisplay *display;
+	ConsoleCommandLine *commandLine;
+}OpenedConsole;
+
+static int readConsole(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, uintptr_t bufferSize){
+	OpenedConsole *oc = getFileInstance(of);
+	RWConsoleRequest *NEW(rwcr);
+	if(rwcr == NULL){
+		return 0;
+	}
+	rwcr->rwfr = rwfr;
+	rwcr->buffer = buffer;
+	rwcr->bufferSize = bufferSize;
+	acquireLock(&oc->commandLine->lock);
+	ADD_TO_DQUEUE(rwcr, &oc->commandLine->requestHead);
+	releaseLock(&oc->commandLine->lock);
+	while(processConsoleInput(oc->commandLine)){
+	}
+	return 1;
 }
+
+static int writeConsole(RWFileRequest *rwfr, OpenedFile *of, const uint8_t *buffer, uintptr_t bufferSize){
+	OpenedConsole *oc = getFileInstance(of);
+	printString(oc->display, (const char*)buffer, bufferSize);
+	completeRWFileIO(rwfr, bufferSize, 0);
+	return 1;
+}
+
+static void closeConsole(CloseFileRequest *cfr, OpenedFile *of){
+	OpenedConsole *oc = getFileInstance(of);
+	addCmdListenerCount(oc->commandLine, -1);
+	DELETE(oc);
+	completeCloseFile(cfr);
+}
+
+static int openConsole(OpenFileRequest *ofr, __attribute__((__unused__)) const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
+	if(nameLength != 0 || ofm.writable == 0){
+		return 0;
+	}
+	OpenedConsole *NEW(oc);
+	EXPECT(oc != NULL);
+	oc->display = &kernelDisplay;
+	oc->commandLine = &kernelCommand;
+	addCmdListenerCount(oc->commandLine, 1);
+	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
+	ff.read = readConsole;
+	ff.write = writeConsole;
+	ff.close = closeConsole;
+	completeOpenFile(ofr, oc, &ff);
+	return 1;
+	//DELETE(oc);
+	ON_ERROR;
+	return 0;
+}
+
+void kernelConsoleService(void){
+	if(initConsoleCommandLine(&kernelCommand) == 0){
+		panic("cannot initialize kernel console");
+	}
+	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
+	fnf.open = openConsole;
+	int ok =addFileSystem(&fnf, "console", strlen("console"));
+	if(!ok){
+		panic("cannot initialize console service");
+	}
+	kernelConsoleLoop(&kernelCommand);
+}
+
+#ifndef NDEBUG
+void testDelayEcho(void);
+void testDelayEcho(void){
+	int ok = waitForFirstResource("console", RESOURCE_FILE_SYSTEM, matchName);
+	assert(ok);
+	uintptr_t f = syncOpenFileN("console:", strlen("console:"), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t r;
+	while(1){
+		sleep(1000);
+		char buf[8];
+		const char *pre = "echo>";
+		uintptr_t rCnt = sizeof(buf);
+		r = syncReadFile(f, buf, &rCnt);
+		assert(r != IO_REQUEST_FAILURE);
+		uintptr_t wCnt = strlen(pre);
+		r = syncWriteFile(f, pre, &wCnt);
+		assert(r != IO_REQUEST_FAILURE && wCnt == (unsigned)strlen(pre));
+		wCnt = rCnt;
+		r = syncWriteFile(f, buf, &wCnt);
+		assert(r != IO_REQUEST_FAILURE && wCnt == rCnt);
+	}
+	r = syncCloseFile(f);
+	systemCall_terminate();
+}
+
+#endif

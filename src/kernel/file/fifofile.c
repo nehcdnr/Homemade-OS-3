@@ -20,44 +20,49 @@ static FIFOElement *createFIFOElement(const uint8_t *buffer, uintptr_t bufferSiz
 	return e;
 }
 
-static uintptr_t deleteFIFOElement(FIFOElement *e, uint8_t *buffer, uintptr_t bufferSize){
+static uintptr_t copyFIFOElement(FIFOElement *e, uint8_t *buffer, uintptr_t bufferSize){
 	uintptr_t copySize = MIN(e->bufferSize, bufferSize);
 	memcpy(buffer, e->buffer, copySize);
-	releaseKernelMemory(e);
 	return copySize;
 }
 
-typedef struct FIFOHeadTail{
-	FIFOElement *head, *tail;
-}FIFOHeadTail;
-
-static const struct FIFOHeadTail initialFIFOHeadTail = {NULL, NULL};
-
-static void pushFIFOElement_noLock(FIFOHeadTail *ht, FIFOElement *e){
-	e->next = NULL;
-	if(ht->tail == NULL){
-		ht->head =
-		ht->tail = e;
-	}
-	else{
-		ht->tail->next = e;
-	}
+static void deleteFIFOElement(FIFOElement *e){
+	assert(e->next == NULL);
+	releaseKernelMemory(e);
 }
 
-static FIFOElement *popFIFOElement_noLock(FIFOHeadTail *ht){
-	FIFOElement *e = ht->head;
-	assert(e != NULL);
-	ht->head = e->next;
-	if(ht->tail == e){
-		ht->tail = NULL;
+typedef struct FIFOList{
+	FIFOElement *head, *tail;
+}FIFOList;
+
+const struct FIFOList initialFIFOList = {NULL, NULL};
+
+static void pushFIFOElement_noLock(FIFOList *fifo, FIFOElement *e){
+	e->next = NULL;
+	if(fifo->head == NULL){
+		fifo->head = e;
 	}
+	else{
+		fifo->tail->next = e;
+	}
+	fifo->tail = e;
+}
+
+static FIFOElement *popFIFOElement_noLock(FIFOList *fifo){
+	FIFOElement *e = fifo->head;
+	assert(e != NULL);
+	fifo->head = e->next;
+	if(fifo->head == NULL){
+		fifo->tail = NULL;
+	}
+	e->next = NULL;
 	return e;
 }
 
-static int hasFIFOElement_noLock(FIFOHeadTail *ht){
-	return ht->head != NULL;
+static int hasFIFOElement_noLock(FIFOList *fifo){
+	return fifo->head != NULL;
 }
-
+/*
 struct FIFOList{
 	Semaphore *elementCount;
 	Spinlock lock;
@@ -81,12 +86,15 @@ uintptr_t readFIFOList(FIFOList *fifo, void *data, uintptr_t dataSize){
 	acquireLock(&fifo->lock);
 	FIFOElement *e = popFIFOElement_noLock(&fifo->elementList);
 	releaseLock(&fifo->lock);
-	return deleteFIFOElement(e, data, dataSize);
+	uintptr_t copySize = copyFIFOElement(e, data, dataSize);
+	deleteFIFOElement(e);
+	return copySize;
 }
 
 FIFOList *createFIFOList(void){
 	FIFOList *NEW(fifo);
 	EXPECT(fifo != NULL);
+
 	fifo->elementCount = createSemaphore(0);
 	EXPECT(fifo->elementCount != NULL);
 	fifo->lock = initialSpinlock;
@@ -104,7 +112,7 @@ void deleteFIFOList(FIFOList *fifo){
 	deleteSemaphore(fifo->elementCount);
 	DELETE(fifo);
 }
-
+*/
 // file interface
 
 typedef struct RWFIFORequest{
@@ -134,7 +142,7 @@ static void deleteRWFIFORequest(RWFIFORequest *r){
 
 typedef struct FIFOFile{
 	Spinlock lock;
-	struct FIFOHeadTail headTail;
+	struct FIFOList headTail;
 	RWFIFORequest *pendingRead; // TODO: move to OpenedFile
 }FIFOFile;
 
@@ -177,7 +185,8 @@ static void processFIFO(FIFOFile *fifo){
 		if(e == NULL || r == NULL){
 			break;
 		}
-		uintptr_t copySize = deleteFIFOElement(e, r->buffer, r->bufferSize);
+		uintptr_t copySize = copyFIFOElement(e, r->buffer, r->bufferSize);
+		deleteFIFOElement(e);
 		completeRWFileIO(r->rwfr, copySize, 0);
 		deleteRWFIFORequest(r);
 	}
@@ -238,7 +247,7 @@ static void closeFIFOFile(CloseFileRequest *cfr, OpenedFile *of){
 		if(e == NULL){
 			break;
 		}
-		deleteFIFOElement(e, NULL, 0);
+		deleteFIFOElement(e);
 	}
 	assert(HAS_FIFO_REQUEST_NO_LOCK(fifo) == 0);
 	completeCloseFile(cfr);
@@ -255,7 +264,7 @@ static int openFIFOFile(
 	}
 	struct FIFOFile *NEW(fifo);
 	fifo->lock = initialSpinlock;
-	fifo->headTail = initialFIFOHeadTail;
+	fifo->headTail = initialFIFOList;
 	fifo->pendingRead = NULL;
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.read = readFIFOFile;
