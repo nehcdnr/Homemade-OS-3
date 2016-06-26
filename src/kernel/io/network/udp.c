@@ -201,7 +201,10 @@ static void deleteUDPSocket(IPSocket *ips){
 static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
-	initIPSocket(&udps->ipSocket, udps, transmitUDPPacket, filterUDPPacket, receiveUDPPacket, deleteUDPSocket);
+	initIPSocket(
+		&udps->ipSocket, udps, IP_DATA_PROTOCOL_UDP,
+		transmitUDPPacket, filterUDPPacket, receiveUDPPacket, deleteUDPSocket
+	);
 	int ok = scanIPSocketArguments(&udps->ipSocket, fileName, nameLength);
 	EXPECT(ok && ofm.writable);
 	// TODO: is port using

@@ -106,14 +106,17 @@ void initIPV4Header(
 
 #define MAX_IP_PAYLOAD_SIZE (MAX_IP_PACKET_SIZE - sizeof(IPV4Header))
 
-static IPV4Header *createIPV4Header(uintptr_t dataSize, IPV4Address localAddr, IPV4Address remoteAddr){
+static IPV4Header *createIPV4Header(
+	uintptr_t dataSize, IPV4Address localAddr, IPV4Address remoteAddr,
+	enum IPDataProtocol protocol
+){
 	if(dataSize > MAX_IP_PAYLOAD_SIZE)
 		return NULL;
 	IPV4Header *h = allocateKernelMemory(sizeof(IPV4Header) + dataSize);
 	if(h == NULL){
 		return NULL;
 	}
-	initIPV4Header(h, dataSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TEST254);
+	initIPV4Header(h, dataSize, localAddr, remoteAddr, protocol);
 	return h;
 }
 
@@ -777,10 +780,11 @@ static void receiveIPTask(void *voidArg){
 }
 
 void initIPSocket(
-	IPSocket *s, void *inst,
+	IPSocket *s, void *inst, enum IPDataProtocol p,
 	TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d
 ){
 	s->instance = inst;
+	s->protocol = p;
 	s->localAddress = ANY_IPV4_ADDRESS;
 	s->localPort = 0;
 	s->remoteAddress = ANY_IPV4_ADDRESS;
@@ -805,7 +809,7 @@ static IPSocket *createIPSocket(
 	if(s == NULL){
 		return NULL;
 	}
-	initIPSocket(s, inst, t, f, r, d);
+	initIPSocket(s, inst, IP_DATA_PROTOCOL_TEST254, t, f, r, d);
 	return s;
 }
 
@@ -856,10 +860,10 @@ static void closeIPSocket(CloseFileRequest *cfr, OpenedFile *of){
 }
 
 static IPV4Header *createIPV4Packet(
-	__attribute__((__unused__)) IPSocket *s, IPV4Address src, IPV4Address dst,
+	IPSocket *s, IPV4Address src, IPV4Address dst,
 	const uint8_t *buffer, uintptr_t dataSize
 ){
-	IPV4Header *h = createIPV4Header(dataSize, src, dst);
+	IPV4Header *h = createIPV4Header(dataSize, src, dst, s->protocol);
 	if(h == NULL){
 		return NULL;
 	}
@@ -1099,7 +1103,7 @@ static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t na
 	ff.close = closeIPSocket;
 	completeOpenFile(ofr, socket, &ff);
 	return 1;
-	// destroyIPSocket
+	// stopIPSocketTasks
 	ON_ERROR;
 	// wrong argument
 	ON_ERROR;

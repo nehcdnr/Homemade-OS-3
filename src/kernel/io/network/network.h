@@ -88,8 +88,9 @@ int receiveSinglePacket(IPSocket *ips, QueuedPacket *qp, CopyPacketData *copyPac
 struct IPSocket{
 	void *instance;
 	IPV4Address localAddress;
-	uint16_t localPort;
 	IPV4Address remoteAddress;
+	enum IPDataProtocol protocol;
+	uint16_t localPort;
 	uint16_t remotePort;
 	int bindToDevice;
 	char deviceName[MAX_FILE_ENUM_NAME_LENGTH];
@@ -104,7 +105,7 @@ struct IPSocket{
 	struct RWIPQueue *receive, *transmit;
 };
 
-void initIPSocket(IPSocket *s, void *inst, TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d);
+void initIPSocket(IPSocket *s, void *inst, enum IPDataProtocol p, TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d);
 int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
 int startIPSocketTasks(IPSocket *socket);
 void stopIPSocketTasks(IPSocket *socket);

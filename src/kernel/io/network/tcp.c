@@ -1,6 +1,7 @@
 #include"common.h"
 #include"kernel.h"
 #include"file/file.h"
+#include"resource/resource.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
 #include"io/fifo.h"
@@ -10,17 +11,17 @@
 
 typedef union{
 	struct{
-		uint16_t dataOffset: 4;
-		uint16_t reserved: 3;
-		uint16_t ns: 1; // nonce sum
-		uint16_t cwr: 1; // congestion window reduced
-		uint16_t ece: 1; // ECN echo
-		uint16_t urg: 1; // urgent pointer effective
-		uint16_t ack: 1;
-		uint16_t psh: 1; // push
-		uint16_t rst: 1; // reset
-		uint16_t syn: 1; // synchronize sequence number
-		uint16_t fin: 1; // finish
+		uint8_t ns: 1; // nonce sum
+		uint8_t reserved: 3;
+		uint8_t dataOffset: 4;
+		uint8_t fin: 1; // finish
+		uint8_t syn: 1; // synchronize sequence number
+		uint8_t rst: 1; // reset
+		uint8_t psh: 1; // push
+		uint8_t ack: 1;
+		uint8_t urg: 1; // urgent pointer effective
+		uint8_t ece: 1; // ECN echo
+		uint8_t cwr: 1; // congestion window reduced
 	};
 	uint16_t value;
 }TCPFlags;
@@ -63,13 +64,12 @@ typedef struct{
 // if data == NULL then initialize the header but do not copy the data
 // flags.dataOffset and flags.reserved are ignored
 static void initTCPPacket(
-	TCPHeader *h, const uint8_t *data, uint16_t dataSize,
+	TCPHeader *tcp, const uint8_t *data, uint16_t dataSize,
 	uint32_t seqNumber, uint32_t ackNumber, uint16_t windowSize, TCPFlags flags,
 	IPV4Address localAddr, uint16_t localPort,
 	IPV4Address remoteAddr, uint16_t remotePort
 ){
-	TCPHeader *tcp = h;
-	// do not modify data here
+	// do not clear packet here
 	// memset(tcp, 0, sizeof(TCPHeader));
 	tcp->sourcePort = changeEndian16(localPort);
 	tcp->destinationPort = changeEndian16(remotePort);
@@ -85,8 +85,9 @@ static void initTCPPacket(
 	if(data != NULL){
 		memcpy(getTCPData(tcp), data, dataSize);
 	}
-	tcp->checksum = calculateIPDataChecksum2(data, dataSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
-	assert(calculateIPDataChecksum2(data, dataSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
+	const uintptr_t tcpSize = sizeof(*tcp) + dataSize;
+	tcp->checksum = calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
+	assert(calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
 }
 
 typedef struct{
@@ -133,6 +134,7 @@ static int tcpHandShake(TCPSocket *tcps){
 	if(r == IO_REQUEST_FAILURE)
 		printk("TCP handshake 1 error");
 	// TODO:
+	printk("test tcp\n");
 	while(1)
 		sleep(1);
 	return 1;
@@ -289,6 +291,7 @@ static void tcpTask(void *voidArg){
 	systemCall_terminate();
 	// deleteTCPSocket
 	ON_ERROR;
+	failOpenFile(arg->ofr);
 	systemCall_terminate();
 }
 
@@ -385,11 +388,14 @@ static void deleteTCPRawSocket(IPSocket *ips){
 
 static int openTCPRaw(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
 	TCPRawSocket *NEW(tcps);
-	initIPSocket(&tcps->ipSocket, tcps, transmitIPV4Packet, filterTCPPacket, receiveIPV4Packet, deleteTCPRawSocket);
+	initIPSocket(
+		&tcps->ipSocket, tcps, IP_DATA_PROTOCOL_TCP,
+		transmitIPV4Packet, filterTCPPacket, receiveIPV4Packet, deleteTCPRawSocket
+	);
 	int ok = scanIPSocketArguments(&tcps->ipSocket, fileName, nameLength);
-	if(!ok || ofm.writable == 0){
-		return 0;
-	}
+	EXPECT(ok && ofm.writable);
+	ok = startIPSocketTasks(&tcps->ipSocket);
+	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.getParameter= getTCPRawParameter;
 	ff.read = readTCPRawSocket;
@@ -397,10 +403,20 @@ static int openTCPRaw(OpenFileRequest *ofr, const char *fileName, uintptr_t name
 	ff.close = closeTCPRawSocket;
 	completeOpenFile(ofr, tcps, &ff);
 	return 1;
+	stopIPSocketTasks(&tcps->ipSocket);
+	ON_ERROR;
+	// invalid argument
+	ON_ERROR;
+	return 0;
 }
 
 void initTCP(void){
 	int ok;
+	// see createTCPSocket
+	ok = waitForFirstResource("fifo", RESOURCE_FILE_SYSTEM, matchName);
+	if(!ok){
+		panic("cannot initialize TCP FIFO");
+	}
 	FileNameFunctions fnf = INITIAL_FILE_NAME_FUNCTIONS;
 	fnf.open = openTCPRaw;
 	ok = addFileSystem(&fnf, "tcpraw", strlen("tcpraw"));
@@ -415,3 +431,21 @@ void initTCP(void){
 	//fnf.open = openTCPServer;
 	//addFileSystem(&fnf, "tcpserver", strlen("tcpserver"));
 }
+
+#ifndef NDEBUG
+
+void testTCP(void);
+void testTCP(void){
+	// wait for DHCP
+	sleep(1000);
+	int ok = waitForFirstResource("tcpclient", RESOURCE_FILE_SYSTEM, matchName);
+	assert(ok);
+	const char *target = "tcpclient:192.168.56.1:59999;srcport=59998";
+	uintptr_t tcp = syncOpenFileN(target, strlen(target), OPEN_FILE_MODE_WRITABLE);
+	assert(tcp != IO_REQUEST_FAILURE);
+	uintptr_t r;
+	r = syncCloseFile(tcp);
+	assert(r != IO_REQUEST_FAILURE);
+}
+
+#endif
