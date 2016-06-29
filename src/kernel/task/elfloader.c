@@ -233,6 +233,7 @@ static void elfLoader(void *arg){
 		syncCloseFile(file);
 	}
 	ON_ERROR;
+	printk("warning: cannot load task from ELF\n");
 	terminateCurrentTask();
 }
 

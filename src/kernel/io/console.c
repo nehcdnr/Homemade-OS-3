@@ -284,6 +284,22 @@ static uintptr_t dirCommand(const char *cmdLine, uintptr_t length){
 	return fileHandle;
 }
 
+static uintptr_t runCommand(const char *cmdLine, uintptr_t length){
+	const char *programName = nextArgument(&cmdLine, &length);
+	if(programName == NULL){
+		printk("missing executable file name\n");
+		return 0;
+	}
+	//TODO: arguments
+	uintptr_t programNameLength = cmdLine - programName;
+	Task *t = createUserTaskFromELF(programName, programNameLength, 3);
+	if(t == NULL){
+		printk("failed to start task\n");
+	}
+	resume(t);
+	return (uintptr_t)t;
+}
+
 static void parseCommand(const char *cmdLine, uintptr_t length){
 	const struct{
 		const char *string;
@@ -293,7 +309,8 @@ static void parseCommand(const char *cmdLine, uintptr_t length){
 		{"enum", enumCommand},
 		{"read", readCommand},
 		{"close", closeCommand},
-		{"dir", dirCommand}
+		{"dir", dirCommand},
+		{"run", runCommand}
 	};
 
 	const char *arg = nextArgument(&cmdLine, &length);

@@ -4,11 +4,15 @@ NASM=./tool/nasm-2.11.06/nasm.exe
 ASMFLAGS=-f elf32
 CC=./tool/toolchain32/bin/i686-linux-gnu-gcc.exe
 CFLAGS=-freg-struct-return -march=i586 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin -O0 -Isrc\kernel -Isrc\lib
+USER_CFLAGS=-m32 -freg-struct-return -march=i586 -Wall -Wextra -Wshadow -Wstrict-prototypes -Wmissing-prototypes -fno-builtin
+CINC=-Isrc -Isrc\kernel -Isrc\lib
+USER_CINC=-Isrc\lib
 LD=./tool/toolchain32/bin/i686-linux-gnu-ld.exe
 AR=./tool/toolchain32/bin/i686-linux-gnu-ar.exe
 LDFLAGS=--strip-debug
 LIBGCC=$(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
 BFI=./tool/bfi10/bfi.exe
+LS=dir /A-D /B /S
 
 # optional
 # virtual machine
@@ -30,27 +34,31 @@ BUILD_DIR=build
 SRC_DIR=src
 BLOB_DIR=src\blob
 BLOB_BUILD_DIR=src\blob_build
-INCLUDE_DIR=src
+
 CURRENT_DIR=$(shell echo %cd%)
 
 # source
-ASM_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.asm)
-C_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\kernel\*.c)
-C_LIB_SRC=$(shell dir /A-D /B /S $(SRC_DIR)\lib\*.c)
-BLOB_SRC=$(shell dir /A-D /B /S $(BLOB_DIR)\*)
+ASM_SRC=$(shell $(LS) $(SRC_DIR)\kernel\*.asm)
+C_SRC=$(shell $(LS) $(SRC_DIR)\kernel\*.c)
+C_LIB_SRC=$(shell $(LS) $(SRC_DIR)\lib\*.c)
+BLOB_SRC=$(shell $(LS) $(BLOB_DIR)\*)
 BLOB_LIST_SRC=$(BLOB_BUILD_DIR)\bloblist.c
+USER_C_SRC=$(shell $(LS) $(SRC_DIR)\user\*.c)
 
 ASM_OBJ=$(patsubst $(CURRENT_DIR)\\%.asm,%.o,$(ASM_SRC))
 C_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_SRC))
-C_LIB_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_LIB_SRC))
+LIB_OBJ=$(patsubst $(CURRENT_DIR)\\%.c,%.o,$(C_LIB_SRC))
 BLOB_OBJ=$(patsubst $(CURRENT_DIR)\$(BLOB_DIR)\\%,$(BLOB_BUILD_DIR)\\%.o,$(BLOB_SRC))
 BLOB_LIST_OBJ=$(BLOB_BUILD_DIR)\bloblist.o
+USER_ELF=$(patsubst $(CURRENT_DIR)\\%.c,%.elf,$(USER_C_SRC))
 
-OBJ=$(C_OBJ) $(C_LIB_OBJ) $(ASM_OBJ) $(BLOB_OBJ) $(BLOB_LIST_OBJ)
+OBJ=$(C_OBJ) $(LIB_OBJ) $(ASM_OBJ) $(BLOB_OBJ) $(BLOB_LIST_OBJ)
 
-BOOTLOADER_ASM=$(SRC_DIR)\bootloader\floppyloader.asm
+BOOTLOADER_ASM=$(SRC_DIR)\other\floppyloader.asm
+USER_ENTRY_ASM=$(SRC_DIR)\other\userentry.asm
+USER_ENTRY_OBJ=$(SRC_DIR)\other\userentry.o
 
-all: os3.img os3.a
+all: os3.img os3.a $(USER_ELF)
 
 os3.img: floppyloader.bin $(BUILD_DIR)/kernel.bin
 	$(BFI) -t=6 -b=$< -f=$@ $(BUILD_DIR)
@@ -61,18 +69,21 @@ floppyloader.bin: $(BOOTLOADER_ASM)
 $(BUILD_DIR)/kernel.bin: $(OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
 	objcopy -O binary kernel.o $(BUILD_DIR)/kernel.bin
-
-os3.a: $(C_LIB_OBJ)
+	
+os3.a: $(LIB_OBJ)
 	del os3.a
-	$(AR) -qv os3.a $(C_LIB_OBJ)
+	$(AR) -qv os3.a $(LIB_OBJ)
 
-.SUFFIXES: .o .asm
+%.elf: %.c os3.a $(USER_ENTRY_OBJ)
+	$(CC) $(USER_CFLAGS) $(USER_CINC) -c $< -o $*.o
+	$(LD) $(LDFLAGS) os3.a $(USER_ENTRY_OBJ) $*.o --entry=main -o $@
+
+.SUFFIXES: .o .asm .c	
 .asm.o:
 	$(NASM) $(ASMFLAGS) $< -o $@
 
-.SUFFIXES: .o .c
 .c.o:
-	$(CC) $(CFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+	$(CC) $(CFLAGS) $(CINC) -c $< -o $@
 
 $(BLOB_OBJ): $(BLOB_BUILD_DIR)\\%.o: $(BLOB_DIR)\\%
 	cd $(BLOB_DIR) & objcopy --binary-architecture=i386 -I binary -O elf32-i386 $* $(CURRENT_DIR)\$@
@@ -81,7 +92,7 @@ $(BLOB_LIST_SRC): $(BLOB_OBJ)
 	$(MAKE) -f Makefile-windows -C $(BLOB_BUILD_DIR) "OBJ=$(notdir $(BLOB_SRC))"
 
 clean:
-	del floppyloader.bin os3.img $(BUILD_DIR)\kernel.bin kernel.o kernel.elf $(OBJ) $(BLOB_LIST_SRC)
+	del floppyloader.bin os3.img os3.lib $(BUILD_DIR)\kernel.bin kernel.o kernel.elf $(OBJ) $(USER_ELF) $(BLOB_LIST_SRC)
 
 run: runqemu
 
@@ -103,4 +114,4 @@ disk:
 	$(MKDOSFS) -v -F 32 empty.raw
 
 archive:
-	$(7ZA) a -tzip src.zip src -xr!*.o
+	$(7ZA) a -tzip src.zip src -xr!*.o -xr!*.elf
