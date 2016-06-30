@@ -72,3 +72,30 @@ uintptr_t systemCall6Return(int systemCallNumber, uintptr_t *arg1, uintptr_t *ar
 	__asm__(SYSCALL6RETURN_ASM(*arg));
 	return r;
 }
+
+// memory
+void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribute){
+	uintptr_t address = systemCall3(SYSCALL_ALLOCATE_HEAP, size, attribute);
+	//if(address == UINTPTR_NULL);
+	return (void*)address;
+}
+
+int systemCall_releaseHeap(void *address){
+	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, (uintptr_t)address);
+	//if(ok == 0);
+	return (int)ok;
+}
+
+PhysicalAddress systemCall_translatePage(void *address){
+	PhysicalAddress p = {systemCall2(SYSCALL_TRANSLATE_PAGE, (uintptr_t)address)};
+	return p;
+}
+
+// task
+void systemCall_terminate(void){
+	systemCall1(SYSCALL_TERMINATE);
+}
+
+uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
+	return systemCall3(SYSCALL_CREATE_USER_THREAD, (uintptr_t)entry, stackSize);
+}

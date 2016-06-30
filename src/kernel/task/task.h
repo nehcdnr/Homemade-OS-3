@@ -43,14 +43,8 @@ Task *createTaskAndMemorySpace(void (*loader)(void*), void *arg, size_t argSize,
 //typedef struct LinearMemoryBlockManager LinearMemoryBlockManager;
 int initUserLinearBlockManager(uintptr_t beginAddr, uintptr_t initEndAddr);
 
-// create
-// return UINTPTR_NULL if failed
-// return task id if succeeded
-// task id is an address in kernel space. we haven't defined the usage yet
-uintptr_t systemCall_createUserThread(void (*entry)(void), uintptr_t stackSize);
 Task *createSharedMemoryTask(void (*entry)(void*), void *arg, uintptr_t argSize, Task *sharedMemoryTask);
 // always succeed and do not return
 void terminateCurrentTask(void);
-void systemCall_terminate(void);
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a);

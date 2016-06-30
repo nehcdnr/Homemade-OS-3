@@ -57,8 +57,9 @@ OBJ=$(C_OBJ) $(LIB_OBJ) $(ASM_OBJ) $(BLOB_OBJ) $(BLOB_LIST_OBJ)
 BOOTLOADER_ASM=$(SRC_DIR)\other\floppyloader.asm
 USER_ENTRY_ASM=$(SRC_DIR)\other\userentry.asm
 USER_ENTRY_OBJ=$(SRC_DIR)\other\userentry.o
+USER_LIB=os3.a
 
-all: os3.img os3.a $(USER_ELF)
+all: os3.img $(USER_LIB) $(USER_ELF) $(USER_ENTRY_OBJ)
 
 os3.img: floppyloader.bin $(BUILD_DIR)/kernel.bin
 	$(BFI) -t=6 -b=$< -f=$@ $(BUILD_DIR)
@@ -70,13 +71,13 @@ $(BUILD_DIR)/kernel.bin: $(OBJ)
 	$(LD) $(LDFLAGS) -T kernel.ld -o kernel.o $(OBJ) $(LIBGCC)
 	objcopy -O binary kernel.o $(BUILD_DIR)/kernel.bin
 	
-os3.a: $(LIB_OBJ)
-	del os3.a
-	$(AR) -qv os3.a $(LIB_OBJ)
+$(USER_LIB): $(LIB_OBJ)
+	del $(USER_LIB)
+	$(AR) -qvs $(USER_LIB) $(LIB_OBJ)
 
-%.elf: %.c os3.a $(USER_ENTRY_OBJ)
+%.elf: %.c $(USER_LIB) $(USER_ENTRY_OBJ)
 	$(CC) $(USER_CFLAGS) $(USER_CINC) -c $< -o $*.o
-	$(LD) $(LDFLAGS) os3.a $(USER_ENTRY_OBJ) $*.o --entry=main -o $@
+	$(LD) $(LDFLAGS) $*.o $(USER_LIB) $(USER_ENTRY_OBJ) --entry=main -o $@
 
 .SUFFIXES: .o .asm .c	
 .asm.o:
@@ -92,7 +93,7 @@ $(BLOB_LIST_SRC): $(BLOB_OBJ)
 	$(MAKE) -f Makefile-windows -C $(BLOB_BUILD_DIR) "OBJ=$(notdir $(BLOB_SRC))"
 
 clean:
-	del floppyloader.bin os3.img os3.lib $(BUILD_DIR)\kernel.bin kernel.o kernel.elf $(OBJ) $(USER_ELF) $(BLOB_LIST_SRC)
+	del floppyloader.bin os3.img $(USER_LIB) $(BUILD_DIR)\kernel.bin kernel.o kernel.elf $(OBJ) $(USER_ENTRY_OBJ) $(USER_ELF) $(BLOB_LIST_SRC)
 
 run: runqemu
 

@@ -1,6 +1,5 @@
 #include"common.h"
 #include"kernel.h"
-#include"file/file.h"
 #include"resource/resource.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"

@@ -5,7 +5,7 @@
 #include"multiprocessor/spinlock.h"
 #include"task/exclusivelock.h"
 #include"memory/memory.h"
-#include"file/file.h"
+#include"file/fileservice.h"
 
 typedef struct Resource{
 	struct ResourceEnumerator *waiting;

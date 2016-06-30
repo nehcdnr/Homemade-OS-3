@@ -22,9 +22,6 @@
 //void copyArguments(uintptr_t *a, const InterruptParam *p, int argumentCount);
 void copyReturnValues(InterruptParam *p, const uintptr_t *rv, int returnCount);
 
-#define SYSTEM_CALL_MAX_ARGUMENT_COUNT (5)
-#define SYSTEM_CALL_MAX_RETURN_COUNT (6)
-
 typedef InterruptHandler SystemCallFunction;
 typedef struct SystemCallTable SystemCallTable;
 // reserved system call

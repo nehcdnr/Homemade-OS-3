@@ -1,7 +1,8 @@
-#ifndef IO_H_INCLUDED
-#define IO_H_INCLUDED
+#ifndef IO_SERVICE_H_INCLUDED
+#define IO_SERVICE_H_INCLUDED
 
 #include"interrupt/handler.h"
+#include"io.h"
 
 typedef struct IORequest IORequest;
 typedef void CancelIO(void *instance);
@@ -32,13 +33,6 @@ void waitIO(IORequest *expected);
 int tryCancelIO(IORequest *ior);
 void completeIO(IORequest *ior); // IORequestHandler
 
-// call with UINTPTR_NULL to wait for any I/O request
-// IMPROVE: struct IORequestHandle{uintptr_t value;};
-uintptr_t systemCall_waitIO(uintptr_t ioNumber);
-uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...);
-int systemCall_cancelIO(uintptr_t io);
-int cancelOrWaitIO(uintptr_t io);
-
 int isCancellable(IORequest *ior);
 // if value == 0 and ior is being cancelled (see taskmanager.c), return 0
 // if value != 0 or ior is not being cancelled, return 1
@@ -54,8 +48,6 @@ void initIORequest(
 	AcceptIO *acceptIO
 );
 
-#define IO_REQUEST_FAILURE ((uintptr_t)0)
-
 // timer8254.c
 void setTimer8254Frequency(unsigned frequency);
 
@@ -65,9 +57,6 @@ typedef struct TimerEventList TimerEventList;
 typedef struct InterruptVector InterruptVector;
 #define TIMER_FREQUENCY (100)
 TimerEventList *createTimer(void);
-
-uintptr_t systemCall_setAlarm(uint64_t millisecond, int isPeriodic);
-int sleep(uint64_t millisecond);
 
 // for LAPIC timer
 void setTimerHandler(TimerEventList *tel, InterruptVector *v);
@@ -166,12 +155,7 @@ uintptr_t nextPCIConfigRegisters(uintptr_t pciEnumHandle, PCIConfigRegisters *re
 // ahci.c
 void ahciDriver(void);
 
-// return 0 if fail
-// return 1 if the io request is issued
-uintptr_t systemCall_rwAHCI(uint32_t buffer, uint64_t lba, uint32_t sectorCount, uint32_t index, int isWrite);
-
 // intel8254x.c
-
 void i8254xDriver(void);
 
 // network/internet.c

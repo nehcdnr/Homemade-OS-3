@@ -265,6 +265,9 @@ InterruptTable *initInterruptTable(SegmentTable *gdt){
 		d->privilege = 0;
 		d->present = 1;
 	}
+	// allow user program to system call
+	t->descriptor[SYSTEM_CALL_VECTOR].privilege = 3;
+
 	initInternalInterrupt(t);
 	return t;
 }

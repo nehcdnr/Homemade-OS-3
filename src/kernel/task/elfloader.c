@@ -2,8 +2,8 @@
 #include"kernel.h"
 #include"memory/memory.h"
 #include"memory/memory_private.h"
-#include"file/file.h"
-#include"io/io.h"
+#include"file.h"
+#include"io.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
 

@@ -4,7 +4,6 @@
 #include"memory/memory.h"
 #include"multiprocessor/spinlock.h"
 #include"task/exclusivelock.h"
-#include"file/file.h"
 
 struct FIFO{
 	uintptr_t begin, dataLength, bufferLength;

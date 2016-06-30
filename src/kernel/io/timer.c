@@ -1,4 +1,4 @@
-#include"io.h"
+#include"ioservice.h"
 #include"fifo.h"
 #include"task/task.h"
 #include"multiprocessor/processorlocal.h"
@@ -109,20 +109,6 @@ static void setAlarmHandler(InterruptParam *p){
 	ON_ERROR;
 	ON_ERROR;
 	SYSTEM_CALL_RETURN_VALUE_0(p) = IO_REQUEST_FAILURE;
-}
-
-uintptr_t systemCall_setAlarm(uint64_t millisecond, int isPeriodic){
-	return systemCall4(SYSCALL_SET_ALARM, LOW64(millisecond), HIGH64(millisecond), (uintptr_t)isPeriodic);
-}
-
-int sleep(uint64_t millisecond){
-	uintptr_t te = systemCall_setAlarm(millisecond, 0);
-	if(te == IO_REQUEST_FAILURE){
-		return 0;
-	}
-	uintptr_t te2 = systemCall_waitIO(te);
-	assert(te2 == te);
-	return 1;
 }
 
 static void handleTimerEvents(TimerEventList *tel){

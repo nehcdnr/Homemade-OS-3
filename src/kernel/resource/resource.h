@@ -1,4 +1,4 @@
-#include"file/file.h"
+#include"file.h"
 
 typedef enum ResourceType{
 	RESOURCE_UNKNOWN = 0,

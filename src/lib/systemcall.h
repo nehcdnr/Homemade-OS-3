@@ -40,6 +40,9 @@ enum SystemCall{
 #define SYSCALL_SERVICE_BEGIN ((int)NUMBER_OF_RESERVED_SYSTEM_CALLS)
 #define SYSCALL_SERVICE_END ((int)NUMBER_OF_SYSTEM_CALLS)
 
+#define SYSTEM_CALL_MAX_ARGUMENT_COUNT (5)
+#define SYSTEM_CALL_MAX_RETURN_COUNT (6)
+
 uintptr_t systemCall1(/*enum SystemCall*/int systemCallNumber);
 uintptr_t systemCall2(int systemCallNumber, uintptr_t arg1);
 uintptr_t systemCall3(int systemCallNumber, uintptr_t arg1, uintptr_t arg2);
@@ -50,5 +53,35 @@ uintptr_t systemCall6(int systemCallNumber, uintptr_t arg1, uintptr_t arg2, uint
 	uintptr_t arg4, uintptr_t arg5);
 uintptr_t systemCall6Return(int systemCallNumber, uintptr_t *arg1, uintptr_t *arg2, uintptr_t *arg3,
 	uintptr_t *arg4, uintptr_t *arg5);
+
+// memory
+
+typedef struct{
+	uintptr_t value;
+}PhysicalAddress;
+
+#define PRESENT_PAGE_FLAG (1 << 0)
+#define WRITABLE_PAGE_FLAG (1 << 1)
+#define USER_PAGE_FLAG (1 << 2)
+#define NON_CACHED_PAGE_FLAG (1 << 4)
+typedef enum PageAttribute{
+	KERNEL_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG,
+	KERNEL_NON_CACHED_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
+	USER_READ_ONLY_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG,
+	USER_WRITABLE_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG + WRITABLE_PAGE_FLAG,
+	USER_NON_CACHED_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG + WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG
+}PageAttribute;
+
+void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
+int systemCall_releaseHeap(void *address);
+PhysicalAddress systemCall_translatePage(void *address);
+
+// task
+
+// return UINTPTR_NULL if failed
+// return task id if succeeded
+// task id is an address in kernel space. we haven't defined the usage yet
+uintptr_t systemCall_createUserThread(void (*entry)(void), uintptr_t stackSize);
+void systemCall_terminate(void);
 
 #endif

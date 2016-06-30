@@ -9,8 +9,8 @@
 #include"memory/segment.h"
 #include"task/task.h"
 #include"assembly/assembly.h"
-#include"io/io.h"
-#include"file/file.h"
+#include"io/ioservice.h"
+#include"file/fileservice.h"
 #include"resource/resource.h"
 
 SystemGlobal global;

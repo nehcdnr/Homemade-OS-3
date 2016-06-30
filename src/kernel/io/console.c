@@ -3,7 +3,7 @@
 #include"io.h"
 #include"keyboard.h"
 #include"memory/memory.h"
-#include"file/file.h"
+#include"file/fileservice.h"
 #include"io/fifo.h"
 #include"resource/resource.h"
 #include"multiprocessor/spinlock.h"
@@ -373,7 +373,12 @@ static int initConsoleCommandLine(ConsoleCommandLine *cmd){
 static void addCmdListenerCount(ConsoleCommandLine *cmd, int v){
 	acquireLock(&cmd->lock);
 	cmd->listenerCount += v;
+	int newCount = cmd->listenerCount;
 	releaseLock(&cmd->lock);
+	if(newCount == 0){
+		uint8_t a;
+		while(readFIFONonBlock(cmd->lineFIFO, &a));
+	}
 }
 
 // return 1 if need to continue iteration

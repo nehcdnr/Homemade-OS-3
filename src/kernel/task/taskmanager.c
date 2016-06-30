@@ -11,8 +11,8 @@
 #include"interrupt/systemcalltable.h"
 #include"multiprocessor/spinlock.h"
 #include"multiprocessor/processorlocal.h"
-#include"io/io.h"
-#include"file/file.h"
+#include"io/ioservice.h"
+#include"file/fileservice.h"
 
 typedef struct TaskMemoryManager{
 	LinearMemoryManager manager;
@@ -491,10 +491,6 @@ static void createUserThreadHandler(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)newTask;
 }
 
-uintptr_t systemCall_createUserThread(void(*entry)(void), uintptr_t stackSize){
-	return systemCall3(SYSCALL_CREATE_USER_THREAD, (uintptr_t)entry, stackSize);
-}
-
 // TODO: how to check if sharedMemoryTask is valid?
 Task *createSharedMemoryTask(void (*entry)(void*), void *arg, uintptr_t argSize, Task *sharedMemoryTask){
 	return createKernelTask(entry, arg, argSize,
@@ -605,10 +601,6 @@ void terminateCurrentTask(void){
 static void terminateHandler(__attribute__((__unused__)) InterruptParam *p){
 	sti();
 	terminateCurrentTask();
-}
-
-void systemCall_terminate(void){
-	systemCall1(SYSCALL_TERMINATE);
 }
 
 void setTaskSystemCall(Task *t, SystemCallFunction f, uintptr_t a){
@@ -759,36 +751,6 @@ static void waitIOHandler(InterruptParam *p){
 	copyReturnValues(p, rv, returnCount + 1);
 }
 
-uintptr_t systemCall_waitIO(uintptr_t ioNumber){
-	return systemCall2(SYSCALL_WAIT_IO, ioNumber);
-}
-
-uintptr_t systemCall_waitIOReturn(uintptr_t ioNumber, int returnCount, ...){
-	assert(returnCount >= 0 && returnCount <= SYSTEM_CALL_MAX_RETURN_COUNT - 1);
-	va_list va;
-	va_start(va, returnCount);
-	uintptr_t ignoredReturnValue = 0;
-	uintptr_t *returnValues[SYSTEM_CALL_MAX_RETURN_COUNT - 1];
-	int i;
-	for(i = 0; i < returnCount; i++){
-		returnValues[i] = va_arg(va, uintptr_t*);
-	}
-	for(i = returnCount; i < (int)LENGTH_OF(returnValues); i++){
-		returnValues[i] = &ignoredReturnValue;
-	}
-	(*returnValues[0]) = ioNumber;
-	uintptr_t rv0 = systemCall6Return(
-		SYSCALL_WAIT_IO,
-		returnValues[0],
-		returnValues[1],
-		returnValues[2],
-		returnValues[3],
-		returnValues[4]
-	);
-	va_end(va);
-	return rv0;
-}
-
 int tryCancelIO(IORequest *ior){
 	Task *t = ior->task;
 	acquireLock(&t->ioListLock);
@@ -821,18 +783,6 @@ static void cacnelIOHandler(InterruptParam *p){
 		ior->cancel(ior->instance);
 	}
 	SYSTEM_CALL_RETURN_VALUE_0(p) = ok;
-}
-
-int systemCall_cancelIO(uintptr_t io){
-	return (int)systemCall2(SYSCALL_CANCEL_IO, io);
-}
-
-int cancelOrWaitIO(uintptr_t io){
-	int cancelled = systemCall_cancelIO(io);
-	if(cancelled){
-		return io;
-	}
-	return systemCall_waitIO(io) == io;
 }
 
 int isCancellable(IORequest *ior){
@@ -884,11 +834,6 @@ static void allocateHeapHandler(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = (uintptr_t)ret;
 }
 
-void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribute){
-	uintptr_t address = systemCall3(SYSCALL_ALLOCATE_HEAP, size, attribute);
-//assert(address != UINTPTR_NULL);
-	return (void*)address;
-}
 
 static void releaseHeapHandler(InterruptParam *p){
 	sti();
@@ -897,22 +842,11 @@ static void releaseHeapHandler(InterruptParam *p){
 	SYSTEM_CALL_RETURN_VALUE_0(p) = ret;
 }
 
-int systemCall_releaseHeap(void *address){
-	uintptr_t ok = systemCall2(SYSCALL_RELEASE_HEAP, (uintptr_t)address);
-	assert(ok); // TODO: remove this when we start working on user space tasks
-	return (int)ok;
-}
-
 static void translatePageHandler(InterruptParam *p){
 	uintptr_t address = SYSTEM_CALL_ARGUMENT_0(p);
 	PhysicalAddress ret = checkAndTranslatePage(
 		&processorLocalTask()->taskMemory->manager, (void*)address);
 	SYSTEM_CALL_RETURN_VALUE_0(p) = ret.value;
-}
-
-PhysicalAddress systemCall_translatePage(void *address){
-	PhysicalAddress p = {systemCall2(SYSCALL_TRANSLATE_PAGE, (uintptr_t)address)};
-	return p;
 }
 
 void initTaskManagement(SystemCallTable *systemCallTable){

@@ -248,7 +248,7 @@ void releaseReaderWriterLock(ReaderWriterLock *rwl){
 }
 
 #ifndef NDEBUG
-#include"io/io.h"
+#include"io.h"
 
 static void testRWLock_r(void *rwlPtr){
 	ReaderWriterLock *rwl = (*(ReaderWriterLock**)rwlPtr);

@@ -1,13 +1,10 @@
 #ifndef MEMORY_H_INCLUDED
 #define MEMORY_H_INCLUDED
 
-#include<std.h>
+#include"std.h"
+#include"systemcall.h"
 
 // physical
-typedef struct{
-	uintptr_t value;
-}PhysicalAddress;
-
 typedef struct PhysicalMemoryBlockManager PhysicalMemoryBlockManager;
 
 // return free size
@@ -30,18 +27,6 @@ void invalidatePageTable(PageManager *deletePage, PageManager *loadPage);
 void releaseInvalidatedPageTable(PageManager *deletePage);
 // called when initialization failure
 void releasePageTable(PageManager *deletePage);
-
-#define PRESENT_PAGE_FLAG (1 << 0)
-#define WRITABLE_PAGE_FLAG (1 << 1)
-#define USER_PAGE_FLAG (1 << 2)
-#define NON_CACHED_PAGE_FLAG (1 << 4)
-typedef enum PageAttribute{
-	KERNEL_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG,
-	KERNEL_NON_CACHED_PAGE = PRESENT_PAGE_FLAG + WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG,
-	USER_READ_ONLY_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG,
-	USER_WRITABLE_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG + WRITABLE_PAGE_FLAG,
-	USER_NON_CACHED_PAGE = PRESENT_PAGE_FLAG + USER_PAGE_FLAG + WRITABLE_PAGE_FLAG + NON_CACHED_PAGE_FLAG
-}PageAttribute;
 
 uint32_t toCR3(PageManager *p);
 
@@ -153,10 +138,6 @@ extern char KERNEL_LINEAR_END_SYMBOL;
 
 #define USER_LINEAR_BEGIN ((uintptr_t)0)
 #define USER_LINEAR_END KERNEL_LINEAR_BEGIN
-
-void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
-int systemCall_releaseHeap(void *address);
-PhysicalAddress systemCall_translatePage(void *address);
 
 typedef struct SlabManager SlabManager;
 SlabManager *createUserSlabManager(void);
