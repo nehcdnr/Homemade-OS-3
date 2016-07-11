@@ -46,11 +46,11 @@ static_assert(sizeof(TCPHeader) == 20);
 static uintptr_t getTCPHeaderSize(const TCPHeader *h){
 	return sizeof(uint32_t) * ((uintptr_t)h->flags.dataOffset);
 }
-
+/*
 static void *getTCPData(const TCPHeader *h){
 	return ((uint8_t*)h) + getTCPHeaderSize(h);
 }
-/*
+
 static uintptr_t getTCPDataSize(IPV4Header *ip, TCPHeader *tcp){
 	return getIPDataSize(ip) - getTCPHeaderSize(tcp);
 }
@@ -60,13 +60,22 @@ typedef struct{
 	TCPHeader tcp;
 }TCPIPHeader;
 
+enum TCPOptionCode{
+	TCP_OPTION_END = 0,
+	TCP_OPTION_NOP = 1,
+	TCP_OPTION_MAX_SEGMENT_SIZE = 2,
+	TCP_OPTION_WINDOW_SCALE = 3,
+	TCP_OPTION_SACK_PERMITTED = 4,
+	TCP_OPTION_SACK = 5,
+	TCP_OPTION_TIMESTAMP = 8
+};
+
 // if data == NULL then initialize the header but do not copy the data
 // flags.dataOffset and flags.reserved are ignored
-static void initTCPPacket(
-	TCPHeader *tcp, const uint8_t *data, uint16_t dataSize,
-	uint32_t seqNumber, uint32_t ackNumber, uint16_t windowSize, TCPFlags flags,
-	IPV4Address localAddr, uint16_t localPort,
-	IPV4Address remoteAddr, uint16_t remotePort
+static uintptr_t initTCPPacket(
+	TCPHeader *tcp,	uint32_t seqNumber, uint32_t ackNumber, uint16_t windowSize, TCPFlags flags,
+	/*IPV4Address localAddr, */uint16_t localPort,
+	/*IPV4Address remoteAddr, */uint16_t remotePort
 ){
 	// do not clear packet here
 	// memset(tcp, 0, sizeof(TCPHeader));
@@ -76,17 +85,168 @@ static void initTCPPacket(
 	tcp->acknowledgeNumber = changeEndian32(ackNumber);
 	tcp->flags = flags;
 	tcp->flags.reserved = 0;
-	tcp->flags.dataOffset = sizeof(TCPHeader) / sizeof(uint32_t);
+	// tcp->flags.dataOffset = sizeof(TCPHeader) / sizeof(uint32_t);
 	tcp->windowsSize = changeEndian16(windowSize);
 	tcp->checksum = 0;
 	tcp->urgentPointer = 0;
-	//options
-	if(data != NULL){
-		memcpy(getTCPData(tcp), data, dataSize);
-	}
-	const uintptr_t tcpSize = sizeof(*tcp) + dataSize;
+	return sizeof(*tcp);
+}
+
+static void finishInitTCPPacket(
+	TCPHeader *tcp, uintptr_t offset, const uint8_t *data, uint16_t dataSize,
+	IPV4Address localAddr, IPV4Address remoteAddr
+){
+	assert(offset % sizeof(uint32_t) == 0);
+	tcp->flags.dataOffset = offset / sizeof(uint32_t);
+	tcp->checksum = 0;
+	memcpy(((uint8_t*)tcp) + offset, data, dataSize);
+	const uintptr_t tcpSize = offset + dataSize;
 	tcp->checksum = calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
 	assert(calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
+}
+
+#define APPEND_OPTION(P, I, T, V) do{\
+	*(T*)(((uintptr_t)(P)) + (I)) = (V);\
+	(I) += sizeof(T);\
+}while(0)
+
+static uintptr_t appendTCPMaxSegmentSize(TCPHeader *tcp, uintptr_t offset, uint16_t ssize){
+	uintptr_t o = offset;
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_MAX_SEGMENT_SIZE);
+	APPEND_OPTION(tcp, o, uint8_t, 4);
+	APPEND_OPTION(tcp, o, uint16_t, changeEndian16(ssize));
+	assert(offset + 4 == o);
+	return o;
+}
+
+static uintptr_t appendTCPWindowScale(TCPHeader *tcp, uintptr_t offset, uint8_t scale){
+	uintptr_t o = offset;
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_WINDOW_SCALE);
+	APPEND_OPTION(tcp, o, uint8_t, 3);
+	APPEND_OPTION(tcp, o, uint8_t, scale);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_NOP);
+	assert(offset + 4 == o);
+	return o;
+}
+/*
+static uintptr_t appendTCPSACKPermitted(TCPHeader *tcp, uintptr_t offset){
+	uintptr_t o = offset;
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_SACK_PERMITTED);
+	APPEND_OPTION(tcp, o, uint8_t, 2);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_NOP);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_NOP);
+	assert(offset + 4 == o);
+	return o;
+}
+*/
+static uintptr_t appendTCPOptionEnd(TCPHeader *tcp, uintptr_t offset){
+	uintptr_t o = offset;
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_END);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_END);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_END);
+	APPEND_OPTION(tcp, o, uint8_t, TCP_OPTION_END);
+	assert(offset + 4 == o);
+	return o;
+}
+
+#undef APPEND_OPTION
+
+#define PARSE_OPTION_CODE(P, O) do{\
+	if((P)[0] != (O)){\
+		return 0;\
+	}\
+}while(0)
+
+#define PARSE_OPTION_SIZE(P, S) do{\
+	if((P)[1] != 2 + (S)){\
+		return 0;\
+	}\
+}while(0)
+
+#define PARSE_OPTION_DATA(P, T, V) do{\
+	PARSE_OPTION_SIZE(P, sizeof(T));\
+	(V) = (*(T*)((P) + 2));\
+}while(0)
+
+static int parseTCPOptionEnd(uint8_t *p){
+	PARSE_OPTION_CODE(p, TCP_OPTION_END);
+	return 1;
+}
+
+static int parseTCPOptionNOP(uint8_t *p){
+	PARSE_OPTION_CODE(p, TCP_OPTION_NOP);
+	return 1;
+}
+
+static int parseTCPMaxSegmentSize(uint8_t *p, uintptr_t *maxSegSize){
+	PARSE_OPTION_CODE(p, TCP_OPTION_MAX_SEGMENT_SIZE);
+	PARSE_OPTION_DATA(p, uint16_t, *maxSegSize);
+	*maxSegSize = changeEndian16(*maxSegSize);
+	return 1;
+}
+static int parseTCPWindowScale(uint8_t *p, uintptr_t *windowScale){
+	PARSE_OPTION_CODE(p, TCP_OPTION_WINDOW_SCALE);
+	PARSE_OPTION_DATA(p, uint8_t, *windowScale);
+	return 1;
+}
+static int parseTCPSACKPermitted(uint8_t *p, int *sackPermitted){
+	PARSE_OPTION_CODE(p, TCP_OPTION_SACK_PERMITTED);
+	PARSE_OPTION_SIZE(p, 0);
+	*sackPermitted = 1;
+	return 1;
+}
+
+#undef PARSE_OPTION_CODE
+#undef PARSE_OPTION_SIZE
+#undef PARSE_OPTION_DATA
+
+#define DEFAULT_TCP_MAX_SEGMENT_SIZE (1452)
+
+static int parseTCPOptions(
+	const TCPHeader *tcp,
+	uintptr_t *maxSegSize, uintptr_t *windowScale, int *sackPermitted
+){
+	*maxSegSize = DEFAULT_TCP_MAX_SEGMENT_SIZE;
+	*windowScale = 0;
+	*sackPermitted = 0;
+	const uintptr_t headerSize = getTCPHeaderSize(tcp);
+	uintptr_t offset = sizeof(*tcp);
+	uint8_t *const p = ((uint8_t*)tcp);
+	while(offset != headerSize){
+		if(parseTCPOptionEnd(p)){
+			break;
+		}
+		if(parseTCPOptionNOP(p)){
+			offset++;
+			continue;
+		}
+		// check if option size exceeds header
+		if(offset + 1 >= headerSize){
+			return 0;
+		}
+		uintptr_t optionSize = p[offset + 1];
+		if(optionSize < 2 || offset + optionSize > headerSize){
+			return 0;
+		}
+		parseTCPMaxSegmentSize(p + offset, maxSegSize);
+		parseTCPWindowScale(p + offset, windowScale);
+		parseTCPSACKPermitted(p + offset, sackPermitted);
+		offset += optionSize;
+	}
+	return 1;
+}
+
+static int validateSYNACK(const TCPHeader *tcp, uint32_t *seqNumber, uint32_t ackNumber, uint16_t *windowSize){
+	// check header size and checksum in validateTCPPacket()
+	if(tcp->flags.syn == 0 || tcp->flags.ack == 0){
+		return 0;
+	}
+	if(changeEndian32(tcp->acknowledgeNumber) != ackNumber){
+		return 0;
+	}
+	*seqNumber = changeEndian32(tcp->sequenceNumber);
+	*windowSize = changeEndian16(tcp->windowsSize);
+	return 1;
 }
 
 typedef struct{
@@ -120,20 +280,52 @@ typedef struct{
 }RWTCPRequest;
 
 static int tcpHandShake(TCPSocket *tcps){
+	const uint32_t localSeqBegin = 9999;
 	TCPFlags f;
 	f.value = 0;
 	f.syn = 1;
-	initTCPPacket(
-		tcps->rawBuffer, NULL, 0,
-		0, 0, 8192, f,
-		tcps->localAddress, tcps->localPort,
-		tcps->remoteAddress, tcps->remotePort
+	// 1. SYN
+	uintptr_t offset = initTCPPacket(
+		tcps->rawBuffer,
+		localSeqBegin, 0, 8192, f,
+		tcps->localPort,
+		tcps->remotePort
 	);
-	uintptr_t r = systemCall_writeFile(tcps->rawSocketHandle, tcps->rawBuffer, getTCPHeaderSize(tcps->rawBuffer));
-	if(r == IO_REQUEST_FAILURE)
+	offset = appendTCPWindowScale(tcps->rawBuffer, offset, 0);
+	// 1460 for Ethernet/IP/TCP
+	offset = appendTCPMaxSegmentSize(tcps->rawBuffer, offset, tcps->rawBufferSize - sizeof(TCPHeader));
+	//offset = appendTCPSACKPermitted(tcps->rawBuffer, offset);
+	offset = appendTCPOptionEnd(tcps->rawBuffer, offset);
+	finishInitTCPPacket(tcps->rawBuffer, offset, NULL, 0, tcps->localAddress, tcps->remoteAddress);
+	uintptr_t rwSize = getTCPHeaderSize(tcps->rawBuffer);
+	uintptr_t r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	if(r == IO_REQUEST_FAILURE || rwSize != getTCPHeaderSize(tcps->rawBuffer)){
 		printk("TCP handshake 1 error");
-	// TODO:
-	printk("test tcp\n");
+		return 0;
+	}
+	// 2. SYN ACK
+	uint32_t remoteSeqNumber;
+	uint16_t remoteWindowSize;
+	rwSize = tcps->rawBufferSize;
+	r = syncReadFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	if(r == IO_REQUEST_FAILURE || rwSize < getTCPHeaderSize(tcps->rawBuffer)){
+		printk("TCP handshake 2 size error\n");
+		return 0;
+	}
+	int ok = validateSYNACK(tcps->rawBuffer, &remoteSeqNumber, localSeqBegin + 1, &remoteWindowSize);
+	if(!ok){
+		printk("TCP handshake 2 flags error %x %x\n", tcps->rawBuffer->flags.value, tcps->rawBuffer->acknowledgeNumber);
+		return 0;
+	}
+	uintptr_t mss, ws;
+	int sack;
+	ok = parseTCPOptions(tcps->rawBuffer, &mss, &ws,&sack);
+	if(!ok){
+		printk("TCP handshake 2 option error\n");
+	}
+	// 3. ACK 1
+	//TODO:
+	printk("test tcp %x %d %d %d %d\n", r, rwSize, mss, ws, sack);
 	while(1)
 		sleep(1);
 	return 1;
@@ -436,7 +628,8 @@ void initTCP(void){
 void testTCP(void);
 void testTCP(void){
 	// wait for DHCP
-	sleep(1000);
+	sleep(5000);
+	printk("test TCP client\n");
 	int ok = waitForFirstResource("tcpclient", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	const char *target = "tcpclient:192.168.56.1:59999;srcport=59998";
