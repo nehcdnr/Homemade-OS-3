@@ -92,7 +92,7 @@ static uintptr_t initTCPPacket(
 	return sizeof(*tcp);
 }
 
-static void finishInitTCPPacket(
+static uintptr_t finishInitTCPPacket(
 	TCPHeader *tcp, uintptr_t offset, const uint8_t *data, uint16_t dataSize,
 	IPV4Address localAddr, IPV4Address remoteAddr
 ){
@@ -103,6 +103,7 @@ static void finishInitTCPPacket(
 	const uintptr_t tcpSize = offset + dataSize;
 	tcp->checksum = calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
 	assert(calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
+	return tcpSize;
 }
 
 #define APPEND_OPTION(P, I, T, V) do{\
@@ -280,14 +281,15 @@ typedef struct{
 }RWTCPRequest;
 
 static int tcpHandShake(TCPSocket *tcps){
-	const uint32_t localSeqBegin = 9999;
+	const uint16_t localWindowSize = 8192;
+	uint32_t localSeq = 9999;
 	TCPFlags f;
 	f.value = 0;
 	f.syn = 1;
 	// 1. SYN
 	uintptr_t offset = initTCPPacket(
 		tcps->rawBuffer,
-		localSeqBegin, 0, 8192, f,
+		localSeq, 0, localWindowSize, f,
 		tcps->localPort,
 		tcps->remotePort
 	);
@@ -296,15 +298,16 @@ static int tcpHandShake(TCPSocket *tcps){
 	offset = appendTCPMaxSegmentSize(tcps->rawBuffer, offset, tcps->rawBufferSize - sizeof(TCPHeader));
 	//offset = appendTCPSACKPermitted(tcps->rawBuffer, offset);
 	offset = appendTCPOptionEnd(tcps->rawBuffer, offset);
-	finishInitTCPPacket(tcps->rawBuffer, offset, NULL, 0, tcps->localAddress, tcps->remoteAddress);
-	uintptr_t rwSize = getTCPHeaderSize(tcps->rawBuffer);
+	uintptr_t packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, NULL, 0, tcps->localAddress, tcps->remoteAddress);
+	uintptr_t rwSize = packetSize;
 	uintptr_t r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
-	if(r == IO_REQUEST_FAILURE || rwSize != getTCPHeaderSize(tcps->rawBuffer)){
+	if(r == IO_REQUEST_FAILURE || rwSize != packetSize){
 		printk("TCP handshake 1 error");
 		return 0;
 	}
 	// 2. SYN ACK
-	uint32_t remoteSeqNumber;
+	localSeq++;
+	uint32_t remoteSeq;	// TODO: write TCP parameters to TCPSocket
 	uint16_t remoteWindowSize;
 	rwSize = tcps->rawBufferSize;
 	r = syncReadFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
@@ -312,22 +315,32 @@ static int tcpHandShake(TCPSocket *tcps){
 		printk("TCP handshake 2 size error\n");
 		return 0;
 	}
-	int ok = validateSYNACK(tcps->rawBuffer, &remoteSeqNumber, localSeqBegin + 1, &remoteWindowSize);
+	int ok = validateSYNACK(tcps->rawBuffer, &remoteSeq, localSeq, &remoteWindowSize);
 	if(!ok){
 		printk("TCP handshake 2 flags error %x %x\n", tcps->rawBuffer->flags.value, tcps->rawBuffer->acknowledgeNumber);
 		return 0;
 	}
 	uintptr_t mss, ws;
 	int sack;
-	ok = parseTCPOptions(tcps->rawBuffer, &mss, &ws,&sack);
+	ok = parseTCPOptions(tcps->rawBuffer, &mss, &ws, &sack);
 	if(!ok){
 		printk("TCP handshake 2 option error\n");
 	}
 	// 3. ACK 1
-	//TODO:
-	printk("test tcp %x %d %d %d %d\n", r, rwSize, mss, ws, sack);
-	while(1)
-		sleep(1);
+	f.value = 0;
+	f.ack = 1;
+	offset = initTCPPacket(
+		tcps->rawBuffer,
+		localSeq, remoteSeq + 1, localWindowSize, f,
+		tcps->localPort, tcps->remotePort
+	);
+	packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, (void*)"aa", 2, tcps->localAddress, tcps->remoteAddress);
+	rwSize = packetSize;
+	r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	if(r == IO_REQUEST_FAILURE || rwSize != packetSize){
+		printk("TCP handshake 3 error");
+		return 0;
+	}
 	return 1;
 }
 
@@ -356,6 +369,7 @@ static int tcpLoop(TCPSocket *tcps){
 		}
 		if(r == readSocketIO){
 			readSocketIO = IO_REQUEST_FAILURE;
+			printk("readSocketIO %d\n", readSize);
 			//TODO:
 			continue;
 		}
@@ -467,7 +481,8 @@ static void tcpTask(void *voidArg){
 
 	TCPSocket *tcps = createTCPSocket(arg->fileName, arg->nameLength);
 	EXPECT(tcps != NULL);
-	tcpHandShake(tcps);
+	int ok = tcpHandShake(tcps);
+	EXPECT(ok);
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	//ff.read = readTCP;
@@ -480,7 +495,9 @@ static void tcpTask(void *voidArg){
 
 	deleteTCPSocket(tcps);
 	systemCall_terminate();
-	// deleteTCPSocket
+
+	ON_ERROR;
+	//TODO: deleteTCPSocket
 	ON_ERROR;
 	failOpenFile(arg->ofr);
 	systemCall_terminate();
@@ -635,6 +652,9 @@ void testTCP(void){
 	const char *target = "tcpclient:192.168.56.1:59999;srcport=59998";
 	uintptr_t tcp = syncOpenFileN(target, strlen(target), OPEN_FILE_MODE_WRITABLE);
 	assert(tcp != IO_REQUEST_FAILURE);
+	while(1){
+		sleep(1);
+	}
 	uintptr_t r;
 	r = syncCloseFile(tcp);
 	assert(r != IO_REQUEST_FAILURE);
