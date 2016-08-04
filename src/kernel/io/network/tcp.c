@@ -47,7 +47,7 @@ static uintptr_t getTCPHeaderSize(const TCPHeader *h){
 	return sizeof(uint32_t) * ((uintptr_t)h->flags.dataOffset);
 }
 /*
-static void *getTCPData(const TCPHeader *h){
+static uint8_t *getTCPData(const TCPHeader *h){
 	return ((uint8_t*)h) + getTCPHeaderSize(h);
 }
 
@@ -55,6 +55,14 @@ static uintptr_t getTCPDataSize(IPV4Header *ip, TCPHeader *tcp){
 	return getIPDataSize(ip) - getTCPHeaderSize(tcp);
 }
 */
+static uint32_t diffTCPSequence(uint32_t a, uint32_t b){
+	return (a - b) & 0xffffffff;
+}
+
+static uint32_t addTCPSequence(uint32_t a, uint32_t b){
+	return (a + b) & 0xffffffff;
+}
+
 typedef struct{
 	IPV4Header ip;
 	TCPHeader tcp;
@@ -92,18 +100,23 @@ static uintptr_t initTCPPacket(
 	return sizeof(*tcp);
 }
 
-static uintptr_t finishInitTCPPacket(
-	TCPHeader *tcp, uintptr_t offset, const uint8_t *data, uint16_t dataSize,
-	IPV4Address localAddr, IPV4Address remoteAddr
-){
+static uint32_t getAcknowledgeNumber(const TCPHeader *tcp){
+	return changeEndian32(tcp->acknowledgeNumber);
+}
+
+static uintptr_t initTCPData(TCPHeader *tcp, uintptr_t offset){
 	assert(offset % sizeof(uint32_t) == 0);
 	tcp->flags.dataOffset = offset / sizeof(uint32_t);
+	return offset;
+}
+
+static uintptr_t finishInitTCPPacket(
+	TCPHeader *tcp, uintptr_t offset, IPV4Address localAddr, IPV4Address remoteAddr
+){
 	tcp->checksum = 0;
-	memcpy(((uint8_t*)tcp) + offset, data, dataSize);
-	const uintptr_t tcpSize = offset + dataSize;
-	tcp->checksum = calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
-	assert(calculateIPDataChecksum2(tcp, tcpSize, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
-	return tcpSize;
+	tcp->checksum = calculateIPDataChecksum2(tcp, offset, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP);
+	assert(calculateIPDataChecksum2(tcp, offset, localAddr, remoteAddr, IP_DATA_PROTOCOL_TCP) == 0);
+	return offset;
 }
 
 #define APPEND_OPTION(P, I, T, V) do{\
@@ -237,31 +250,159 @@ static int parseTCPOptions(
 	return 1;
 }
 
-static int validateSYNACK(const TCPHeader *tcp, uint32_t *seqNumber, uint32_t ackNumber, uint16_t *windowSize){
-	// check header size and checksum in validateTCPPacket()
-	if(tcp->flags.syn == 0 || tcp->flags.ack == 0){
+typedef struct{
+	uint32_t sequenceBegin;
+	uintptr_t sequenceLength;
+	uintptr_t windowSize;
+	uint8_t *buffer;
+}TCPReceiveWindow;
+
+static int initTCPReceiveWindow(TCPReceiveWindow *rw, uintptr_t windowSize){
+	rw->sequenceBegin = 0;
+	rw->sequenceLength = 0;
+	rw->windowSize = windowSize;
+	rw->buffer = allocateKernelMemory(windowSize);
+	if(rw->buffer == NULL){
 		return 0;
 	}
-	if(changeEndian32(tcp->acknowledgeNumber) != ackNumber){
-		return 0;
-	}
-	*seqNumber = changeEndian32(tcp->sequenceNumber);
-	*windowSize = changeEndian16(tcp->windowsSize);
 	return 1;
+}
+
+static void synReceiveWindow(TCPReceiveWindow *rw, uint32_t seq){
+	rw->sequenceBegin = seq;
+	rw->sequenceLength = 0;
+}
+
+static void copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBegin, const uint8_t *buffer, uintptr_t bufferSize){
+	uintptr_t i;
+	for(i = 0; i < bufferSize; i++){
+		uint32_t s = ((remoteSeqBegin + i) & 0xffffffff);
+		if(diffTCPSequence(s, rw->sequenceBegin) >= rw->windowSize){
+			printk("warning: packet not in window\n");
+			continue;
+		}
+		// copy
+		// assert(rw->windowSize > 0);
+		rw->buffer[s % rw->windowSize] = buffer[i];
+		// extend buffer
+		uint32_t sequenceEnd = ((rw->sequenceBegin + rw->sequenceLength) & 0xffffffff);
+		if(s == sequenceEnd && rw->sequenceLength < rw->windowSize){
+			rw->sequenceLength++;
+		}
+	}
+}
+
+static void destroyTCPReceiveWindow(TCPReceiveWindow *rw){
+	releaseKernelMemory(rw->buffer);
+}
+
+typedef struct TCPTransmitBuffer{
+	uintptr_t size;
+	uintptr_t offset;
+	struct TCPTransmitBuffer *next;
+
+	uint8_t buffer[];
+}TCPTransmitBuffer;
+/*
+static TCPTransmitBuffer *createTCPTransmitBuffer(const uint8_t *buffer, uintptr_t size){
+	TCPTransmitBuffer *tb = allocateKernelMemory(sizeof(TCPTransmitBuffer) + size);
+	if(tb == NULL){
+		return NULL;
+	}
+	tb->size = size;
+	tb->offset = 0;
+	tb->next = NULL;
+	memcpy(tb->buffer, buffer, size);
+	return tb;
+}
+*/
+static void deleteTCPTransmitBuffer(TCPTransmitBuffer *tb){
+	releaseKernelMemory(tb);
 }
 
 typedef struct{
 	uint32_t sequenceBegin;
-	uintptr_t sequenceLength;
-	uint8_t *buffer;
-	uintptr_t size;
-}TCPWindow;
+	uint32_t windowSize;
+	TCPTransmitBuffer *head, *tail;
+}TCPTransmitWindow;
 
+static void initTCPTransmitWindow(TCPTransmitWindow *tw, uint32_t seqBegin){
+	tw->sequenceBegin = seqBegin;
+	tw->windowSize = 0;
+	tw->head = NULL;
+	tw->tail = NULL;
+}
+
+static void setTransmitWindow(TCPTransmitWindow *tw, uint16_t windowSize){
+	tw->windowSize = windowSize;
+}
+/*
+static int pushTCPTransmitBuffer(TCPTransmitWindow *tw, const uint8_t *buffer, uintptr_t size){
+	TCPTransmitBuffer *tb = createTCPTransmitBuffer(buffer, size);
+	if(tb == NULL){
+		return 0;
+	}
+	// push
+	if(tw->tail == NULL){
+		tw->head = tb;
+	}
+	else{
+		tw->tail->next = tb;
+	}
+	tw->tail = tb;
+	tb->next = NULL;
+	return 1;
+}
+*/
+static TCPTransmitBuffer *popTCPTransmitBuffer(TCPTransmitWindow *tw){
+	assert(tw->tail != NULL);
+	TCPTransmitBuffer *tb = tw->head;
+	tw->head = tb->next;
+	if(tw->head == NULL){
+		tw->tail = NULL;
+	}
+	return tb;
+}
+
+//  from file request to packet
+static uintptr_t copyTCPTransmitBuffer(const TCPTransmitWindow *tw, uint8_t *buffer, uintptr_t bufferSize){
+	TCPTransmitBuffer *tb = tw->head;
+	uintptr_t offset = 0;
+	while(bufferSize - offset > 0){
+		if(tb == NULL){
+			break;
+		}
+		const uintptr_t copySize = MIN(bufferSize - offset, tb->size - tb->offset);
+		memcpy(buffer + offset, tb->buffer + tb->offset, copySize);
+		offset += copySize;
+	}
+	return offset;
+}
+
+static void ackTransmitWindow(TCPTransmitWindow *tw, uint32_t ack){
+	uint32_t receiveSize = ack - tw->sequenceBegin;
+	while(tw->tail != NULL && receiveSize != 0){
+		TCPTransmitBuffer *tb = popTCPTransmitBuffer(tw);
+		uintptr_t ackSize = MIN(tb->size - tb->offset, receiveSize);
+		tb->offset += ackSize;
+		if(tb->offset == tb->size){
+			deleteTCPTransmitBuffer(tb);
+		}
+		receiveSize -= ackSize;
+	}
+	tw->sequenceBegin = ack;
+}
+/*
+static void destroyTCPTransmitWindow(TCPTransmitWindow *tw){
+	while(tw->tail != NULL){
+		TCPTransmitBuffer *tb = popTCPTransmitBuffer(tw);
+		deleteTCPTransmitBuffer(tb);
+	}
+}
+*/
 typedef struct{
-	// the receiver adjusts both of the windows
-	// receiver ACK number = transmitWindow.sequenceEnd
-	// transmitter ACK number = receiveWindow.sequenceBegin
-	//TCPWindow receiveWindow, transmitWindow;
+	TCPReceiveWindow receiveWindow;
+	TCPTransmitWindow transmitWindow;
 	// IP packet from TCP thread to IP transmit thread
 	uintptr_t rawSocketHandle;
 	// RWTCPRequest from user thread to TCP thread
@@ -280,65 +421,113 @@ typedef struct{
 	int isWrite;
 }RWTCPRequest;
 
-static int tcpHandShake(TCPSocket *tcps){
-	const uint16_t localWindowSize = 8192;
-	uint32_t localSeq = 9999;
-	TCPFlags f;
-	f.value = 0;
-	f.syn = 1;
-	// 1. SYN
+static int transmitTCPPacket(const TCPSocket *tcps, int syn, int ack){
+	// header
+	TCPFlags flags;
+	flags.value = 0;
+	if(syn){
+		flags.syn = 1;
+	}
+	if(ack){
+		flags.ack = 1;
+	}
+	uint32_t ackNumber = addTCPSequence(tcps->receiveWindow.sequenceBegin, tcps->receiveWindow.sequenceLength);
+	uint16_t remainWindowSize = (tcps->receiveWindow.windowSize - tcps->receiveWindow.sequenceLength);
 	uintptr_t offset = initTCPPacket(
 		tcps->rawBuffer,
-		localSeq, 0, localWindowSize, f,
-		tcps->localPort,
-		tcps->remotePort
+		tcps->transmitWindow.sequenceBegin, ackNumber, remainWindowSize, flags,
+		tcps->localPort, tcps->remotePort
 	);
-	offset = appendTCPWindowScale(tcps->rawBuffer, offset, 0);
-	// 1460 for Ethernet/IP/TCP
-	offset = appendTCPMaxSegmentSize(tcps->rawBuffer, offset, tcps->rawBufferSize - sizeof(TCPHeader));
-	//offset = appendTCPSACKPermitted(tcps->rawBuffer, offset);
-	offset = appendTCPOptionEnd(tcps->rawBuffer, offset);
-	uintptr_t packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, NULL, 0, tcps->localAddress, tcps->remoteAddress);
+	if(syn){
+		offset = appendTCPWindowScale(tcps->rawBuffer, offset, 0);
+		// 1460 for Ethernet/IP/TCP
+		offset = appendTCPMaxSegmentSize(tcps->rawBuffer, offset, tcps->rawBufferSize - sizeof(TCPHeader));
+		//offset = appendTCPSACKPermitted(tcps->rawBuffer, offset);
+		offset = appendTCPOptionEnd(tcps->rawBuffer, offset);
+	}
+	// data
+	offset = initTCPData(tcps->rawBuffer, offset);
+	offset += copyTCPTransmitBuffer(&tcps->transmitWindow, ((uint8_t*)tcps->rawBuffer) + offset, tcps->rawBufferSize - offset);
+	uintptr_t packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, tcps->localAddress, tcps->remoteAddress);
 	uintptr_t rwSize = packetSize;
+	// write
 	uintptr_t r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
 	if(r == IO_REQUEST_FAILURE || rwSize != packetSize){
-		printk("TCP handshake 1 error");
 		return 0;
 	}
-	// 2. SYN ACK
-	localSeq++;
-	uint32_t remoteSeq;	// TODO: write TCP parameters to TCPSocket
-	uint16_t remoteWindowSize;
-	rwSize = tcps->rawBufferSize;
-	r = syncReadFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	return 1;
+}
+
+static int transmitTCPSYNPacket(const TCPSocket *tcps){
+	return transmitTCPPacket(tcps, 1, 0);
+}
+
+static int transmitTCPDataPacket(const TCPSocket *tcps){
+	return transmitTCPPacket(tcps, 0, 1);
+}
+
+static int receiveTCPPacket(
+	TCPHeader *rawBuffer, uintptr_t readSize,
+	TCPReceiveWindow *receiveWindow, TCPTransmitWindow *transmitWindow
+){
+	uintptr_t mss, ws;
+	int sack;
+	int ok = parseTCPOptions(rawBuffer, &mss, &ws, &sack);
+	if(!ok){
+		//printk("TCP option error\n");
+		return 0;
+	}
+	if(rawBuffer->flags.syn){
+		if(getAcknowledgeNumber(rawBuffer) != transmitWindow->sequenceBegin + 1){
+			//printk("TCP SYN ACK number error %x %x\n", rawBuffer->flags.value, rawBuffer->acknowledgeNumber);
+			return 0;
+		}
+	}
+	// modify local state
+	uint32_t remoteSeqNumber = changeEndian32(rawBuffer->sequenceNumber);
+	uint16_t remoteWindowSize = changeEndian16(rawBuffer->windowsSize);
+	if(rawBuffer->flags.ack){
+		ackTransmitWindow(transmitWindow, getAcknowledgeNumber(rawBuffer));
+	}
+	setTransmitWindow(transmitWindow, remoteWindowSize);
+	if(rawBuffer->flags.syn){
+		synReceiveWindow(receiveWindow, remoteSeqNumber + 1);
+	}
+	else{
+		uintptr_t dataBegin = getTCPHeaderSize(rawBuffer);
+		copyTCPReceiveWindow(receiveWindow, remoteSeqNumber, ((uint8_t*)rawBuffer) + dataBegin, readSize - dataBegin);
+	}
+	return 1;
+}
+
+static int receiveTCPSYNACK(TCPSocket *tcps){
+	uintptr_t rwSize = tcps->rawBufferSize;
+	uintptr_t r = syncReadFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	// check header size and checksum in validateTCPPacket()
 	if(r == IO_REQUEST_FAILURE || rwSize < getTCPHeaderSize(tcps->rawBuffer)){
 		printk("TCP handshake 2 size error\n");
 		return 0;
 	}
-	int ok = validateSYNACK(tcps->rawBuffer, &remoteSeq, localSeq, &remoteWindowSize);
-	if(!ok){
-		printk("TCP handshake 2 flags error %x %x\n", tcps->rawBuffer->flags.value, tcps->rawBuffer->acknowledgeNumber);
+	if(tcps->rawBuffer->flags.syn == 0 || tcps->rawBuffer->flags.ack == 0){
+		printk("TCP handshake 2 flags error\n", tcps->rawBuffer->flags.value);
 		return 0;
 	}
-	uintptr_t mss, ws;
-	int sack;
-	ok = parseTCPOptions(tcps->rawBuffer, &mss, &ws, &sack);
-	if(!ok){
-		printk("TCP handshake 2 option error\n");
+	return receiveTCPPacket(tcps->rawBuffer, rwSize, &tcps->receiveWindow, &tcps->transmitWindow);
+}
+
+static int tcpHandShake(TCPSocket *tcps){
+	// 1. SYN
+	if(transmitTCPSYNPacket(tcps) == 0){
+		printk("TCP handshake 1 error\n");
+		return 0;
 	}
-	// 3. ACK 1
-	f.value = 0;
-	f.ack = 1;
-	offset = initTCPPacket(
-		tcps->rawBuffer,
-		localSeq, remoteSeq + 1, localWindowSize, f,
-		tcps->localPort, tcps->remotePort
-	);
-	packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, (void*)"aa", 2, tcps->localAddress, tcps->remoteAddress);
-	rwSize = packetSize;
-	r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
-	if(r == IO_REQUEST_FAILURE || rwSize != packetSize){
-		printk("TCP handshake 3 error");
+	// 2. SYN ACK
+	if(receiveTCPSYNACK(tcps) == 0){
+		return 0;
+	}// TODO: retransmission
+	// 3. ACK
+	if(transmitTCPDataPacket(tcps) == 0){
+		printk("TCP handshake 3 error\n");
 		return 0;
 	}
 	return 1;
@@ -395,6 +584,8 @@ static int tcpLoop(TCPSocket *tcps){
 	}
 }
 
+#define DEFAULT_TCP_RECEIVE_WINDOW_SIZE (8192)
+
 static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 	const char *tcpraw = "tcpraw:";
 	const uintptr_t tcpRawNameLength = nameLength + strlen(tcpraw);
@@ -404,6 +595,9 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 
 	TCPSocket *NEW(tcps);
 	EXPECT(tcps != NULL);
+	initTCPTransmitWindow(&tcps->transmitWindow, 9999);
+	int ok = initTCPReceiveWindow(&tcps->receiveWindow, DEFAULT_TCP_RECEIVE_WINDOW_SIZE);
+	EXPECT(ok);
 	tcps->rwRequestFIFOHandle = syncOpenFIFOFile();
 	EXPECT(tcps->rwRequestFIFOHandle != IO_REQUEST_FAILURE);
 	tcps->rawSocketHandle = syncOpenFileN(tcpRawName, tcpRawNameLength, OPEN_FILE_MODE_WRITABLE);
@@ -441,6 +635,9 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 	syncCloseFile(tcps->rawSocketHandle);
 	ON_ERROR;
 	syncCloseFile(tcps->rwRequestFIFOHandle);
+	ON_ERROR;
+	destroyTCPReceiveWindow(&tcps->receiveWindow);
+	// destroyTCPTransmitWindow(&tcps->transmitWindow);
 	ON_ERROR;
 	DELETE(tcps);
 	ON_ERROR;
