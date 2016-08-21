@@ -786,14 +786,13 @@ static void i8254xReceiveTask(void *arg){
 		}
 
 		acquireSemaphore(r->readerSemaphore);
-		q->bufferHead = (q->bufferHead + doneCnt) % q->descriptorCount;
+		q->bufferHead = (q->bufferHead + doneCnt) % q->bufferCount;
 		I8254xReader *reader;
 		for(reader = r->reader; reader != NULL; reader = reader->next){
 			copyI8254xReadBuffer(reader);
 			dropI8254xReadBuffer(reader, doneCnt);
 		}
 		releaseSemaphore(r->readerSemaphore);
-		q->bufferTail = (q->bufferTail + doneCnt) % q->bufferCount;
 
 		assert(d->regs[RECEIVE_DESCRIPTORS_TAIL] == q->taskTail);
 		assert(q->receive[q->taskTail].status.value == 0);
@@ -807,6 +806,7 @@ static void i8254xReceiveTask(void *arg){
 		q->taskHead = (q->taskHead + doneCnt) % q->descriptorCount;
 		q->taskTail = (q->taskTail + doneCnt) % q->descriptorCount;
 		q->receive[q->taskTail].status.value = 0;
+		q->bufferTail = (q->bufferTail + doneCnt) % q->bufferCount;
 
 		d->regs[RECEIVE_DESCRIPTORS_TAIL] = q->taskTail;
 	}
@@ -876,9 +876,9 @@ static void i8254xTransmitTask(void *arg){
 			//TODO: reduce number of calls
 			acquireSemaphore(q->intSemaphore);
 		}
-		assert(q->taskHead == q->bufferHead);
+		assert(q->taskHead == q->bufferHead && q->descriptorCount == q->bufferCount);
 		q->taskHead = (q->taskHead + writeDescCnt) % q->descriptorCount;
-		q->bufferHead = (q->bufferHead + writeDescCnt) % q->descriptorCount;
+		q->bufferHead = (q->bufferHead + writeDescCnt) % q->bufferCount;
 		assert(q->legacy[q->taskTail].status.value == 0);
 		completeRWFileIO(req->rwfr, writtenSize, 0);
 		DELETE(req);

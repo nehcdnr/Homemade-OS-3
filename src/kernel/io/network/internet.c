@@ -93,7 +93,6 @@ void initIPV4Header(
 	h->fragmentOffsetHigh = 0;
 	h->flags = 2; // 2 = don't fragment; 4 = more fragment
 	h->fragmentOffsetLow = 0;
-	h->fragmentOffsetHigh = 0;
 	h->timeToLive = 32;
 	h->protocol = dataProtocol;
 	h->headerChecksum = 0;
@@ -513,11 +512,13 @@ static int readIPSocket(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 
 static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO: src/dst address*/){
 	if(packet->version != 4 || readSize < sizeof(*packet)){
+		printk("IP packet version = %u; read size %u\n", packet->version, readSize);
 		return 0;
 	}
 	uintptr_t packetSize = getIPPacketSize(packet);
 	uintptr_t headerSize = getIPHeaderSize(packet);
 	if(packetSize > readSize){
+		printk("%x\n",packet->flags);
 		printk("IP packet size %u > actual read size %u\n", packetSize, readSize);
 		return 0;
 	}

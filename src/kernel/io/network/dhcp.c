@@ -409,7 +409,7 @@ static void dhcpClientTask(void *arg){
 	DHCPClient *dhcp = *(DHCPClient**)arg;
 	printk("DHCP client started\n");
 	uint32_t id0 = ((uint32_t)&arg);
-	const uintptr_t maxRetryTime = 300 * 1000, initRetryTime = 3 * 1000, maxReplyTimeout = 60 * 1000;
+	const uintptr_t maxRetryTime = 60 * 1000, initRetryTime = 500, maxReplyTimeout = 60 * 1000;
 	uintptr_t retryTime = initRetryTime;
 	uint32_t i;
 	for(i = 0; 1; i = (i + 1) % 10){

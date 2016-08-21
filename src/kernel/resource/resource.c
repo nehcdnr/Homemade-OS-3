@@ -28,7 +28,6 @@ typedef struct ResourceList{
 	IsFileEnumEqual *isFileEnumEqual;
 }ResourceList;
 
-
 typedef struct ResourceEnumerator{
 	Spinlock *lock; // protect currentWaiting, rwfrList, next, and prev
 	Resource *currentWaiting;
@@ -113,7 +112,6 @@ static int isResourceNameEqual(const FileEnumeration *fe1, const FileEnumeration
 	return isStringEqual(fe1->name, fe1->nameLength, fe2->name, fe2->nameLength);
 }
 
-// return 1, 0, -1
 static int isDiskPartitionEqual(const FileEnumeration *fe1, const FileEnumeration *fe2){
 	if(isStringEqual(fe1->name, fe1->nameLength, fe2->name, fe2->nameLength) == 0)
 		return 0;
@@ -342,7 +340,7 @@ const char *resourceTypeToFileName(ResourceType rt){
 	return resourceList[rt].typeFileName;
 }
 
-// func is a function checking whether there is a existing resource
+// func is a function checking whether there is an existing resource
 static void initResourceList(ResourceType rt, const char *typeFileName, IsFileEnumEqual *func){
 	ResourceList *rl = resourceList + rt;
 	rl->typeFileName = typeFileName;
@@ -403,7 +401,7 @@ static void _testResource(void){
 	assert(r != IO_REQUEST_FAILURE);
 	ok = systemCall_cancelIO(r);
 	if(!ok){
-		// IMPROVE: an system call to check whether io is completed
+		// IMPROVE: system call to check whether io is completed
 		uintptr_t r2 = systemCall_waitIOReturn(r, 1, &readSize);
 		assert(r2 != IO_REQUEST_FAILURE && readSize == sizeof(fe2));
 	}
