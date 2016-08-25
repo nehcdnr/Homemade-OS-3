@@ -20,7 +20,7 @@ static uintptr_t openDHCPOnDevice(const FileEnumeration *fe){
 	EXPECT(fe->nameLength <= LENGTH_OF(udpName) - printLength);
 	memcpy(udpName + printLength, fe->name, fe->nameLength * sizeof(fe->name[0]));
 	printLength += fe->nameLength;
-	uintptr_t fileHandle = syncOpenFileN(udpName, printLength, OPEN_FILE_MODE_WRITABLE);
+	uintptr_t fileHandle = syncOpenFileN(udpName, printLength, OPEN_FILE_MODE_0);
 	EXPECT(fileHandle != IO_REQUEST_FAILURE);
 	return fileHandle;
 	ON_ERROR;

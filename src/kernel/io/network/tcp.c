@@ -803,7 +803,7 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 	EXPECT(ok);
 	tcps->rwRequestFIFOHandle = syncOpenFIFOFile();
 	EXPECT(tcps->rwRequestFIFOHandle != IO_REQUEST_FAILURE);
-	tcps->rawSocketHandle = syncOpenFileN(tcpRawName, tcpRawNameLength, OPEN_FILE_MODE_WRITABLE);
+	tcps->rawSocketHandle = syncOpenFileN(tcpRawName, tcpRawNameLength, OPEN_FILE_MODE_0);
 	EXPECT(tcps->rawSocketHandle != IO_REQUEST_FAILURE);
 	// get parameters
 	enum FileParameter param[5] = {
@@ -914,10 +914,10 @@ static void tcpTask(void *voidArg){
 	systemCall_terminate();
 }
 
-static int openTCPClient(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
-	if(ofm.writable == 0){
-		return 0;
-	}
+static int openTCPClient(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
 	struct TCPTaskArgument arg = {ofr, fileName, nameLength};
 	Task *t = createSharedMemoryTask(tcpTask, &arg, sizeof(arg), processorLocalTask());
 	if(t == NULL){
@@ -1002,14 +1002,17 @@ static void deleteTCPRawSocket(IPSocket *ips){
 	DELETE(tcps);
 }
 
-static int openTCPRaw(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
+static int openTCPRaw(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
 	TCPRawSocket *NEW(tcps);
 	initIPSocket(
 		&tcps->ipSocket, tcps, IP_DATA_PROTOCOL_TCP,
 		transmitIPV4Packet, filterTCPPacket, receiveIPV4Packet, deleteTCPRawSocket
 	);
 	int ok = scanIPSocketArguments(&tcps->ipSocket, fileName, nameLength);
-	EXPECT(ok && ofm.writable);
+	EXPECT(ok);
 	ok = startIPSocketTasks(&tcps->ipSocket);
 	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
@@ -1058,7 +1061,7 @@ void testTCP(void){
 	int ok = waitForFirstResource("tcpclient", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	const char *target = "tcpclient:192.168.56.1:59999;srcport=59998";
-	uintptr_t tcp = syncOpenFileN(target, strlen(target), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t tcp = syncOpenFileN(target, strlen(target), OPEN_FILE_MODE_0);
 	assert(tcp != IO_REQUEST_FAILURE);
 	while(1){
 		char buffer[16];

@@ -65,7 +65,7 @@ struct ARPServer{
 
 ARPServer *createARPServer(const FileEnumeration *fe, IPConfig *ipConfig, Spinlock *ipConfigLock, uint64_t macAddress){
 	ARPServer *NEW(arp);
-	arp->deviceFile = syncOpenFileN(fe->name, fe->nameLength, OPEN_FILE_MODE_WRITABLE);
+	arp->deviceFile = syncOpenFileN(fe->name, fe->nameLength, OPEN_FILE_MODE_0);
 	EXPECT(arp->deviceFile != IO_REQUEST_FAILURE);
 	uintptr_t r = syncSetFileParameter(arp->deviceFile, FILE_PARAM_TRANSMIT_ETHERTYPE, ETHERTYPE_ARP);
 	EXPECT(r != IO_REQUEST_FAILURE);

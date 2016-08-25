@@ -257,9 +257,9 @@ static void closeFIFOFile(CloseFileRequest *cfr, OpenedFile *of){
 static int openFIFOFile(
 	OpenFileRequest *ofr,
 	__attribute__((__unused__)) const char *fileName, uintptr_t nameLength,
-	OpenFileMode ofm
+	__attribute__((__unused__)) OpenFileMode ofm
 ){
-	if(ofm.writable == 0 || nameLength != 0){
+	if(nameLength != 0){
 		return 0;
 	}
 	struct FIFOFile *NEW(fifo);
@@ -284,7 +284,7 @@ void initFIFOFile(void){
 }
 
 uintptr_t syncOpenFIFOFile(void){
-	return syncOpenFileN("fifo:", strlen("fifo:"), OPEN_FILE_MODE_WRITABLE);
+	return syncOpenFileN("fifo:", strlen("fifo:"), OPEN_FILE_MODE_0);
 }
 
 FIFOFile *syncGetFIFOFile(uintptr_t handle){

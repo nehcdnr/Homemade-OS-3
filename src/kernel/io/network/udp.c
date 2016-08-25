@@ -198,7 +198,10 @@ static void deleteUDPSocket(IPSocket *ips){
 	DELETE(udps);
 }
 
-static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
+static int openUDPSocket(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
 	initIPSocket(
@@ -206,7 +209,7 @@ static int openUDPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t n
 		transmitUDPPacket, filterUDPPacket, receiveUDPPacket, deleteUDPSocket
 	);
 	int ok = scanIPSocketArguments(&udps->ipSocket, fileName, nameLength);
-	EXPECT(ok && ofm.writable);
+	EXPECT(ok);
 	// TODO: is port using
 	ok = startIPSocketTasks(&udps->ipSocket);
 	EXPECT(ok);

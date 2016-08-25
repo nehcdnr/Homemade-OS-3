@@ -300,7 +300,7 @@ static DataLinkDevice *createDataLinkDevice(const FileEnumeration *fe){
 	EXPECT(d != NULL);
 
 	d->fileEnumeration = *fe;
-	d->fileHandle = syncOpenFileN(fe->name, fe->nameLength, OPEN_FILE_MODE_WRITABLE);
+	d->fileHandle = syncOpenFileN(fe->name, fe->nameLength, OPEN_FILE_MODE_0);
 	EXPECT(d->fileHandle != IO_REQUEST_FAILURE);
 	uintptr_t r = syncMaxWriteSizeOfFile(d->fileHandle, &d->mtu);
 	EXPECT(r != IO_REQUEST_FAILURE);
@@ -1089,11 +1089,14 @@ int scanIPSocketArguments(IPSocket *s, const char *fileName, uintptr_t nameLengt
 	return 1;
 }
 
-static int openIPSocket(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
+static int openIPSocket(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
 	IPSocket *socket = createIPSocket(NULL, transmitIPV4Packet, filterIPV4Packet, receiveIPV4Packet, deleteIPSocket);
 	EXPECT(socket != NULL);
 	int ok = scanIPSocketArguments(socket, fileName, nameLength);
-	EXPECT(ok && ofm.writable);
+	EXPECT(ok);
 	ok = startIPSocketTasks(socket);
 	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
@@ -1142,7 +1145,7 @@ void internetService(void){
 #ifndef NDEBUG
 
 static void testRWNetwork(const char *fileName, uintptr_t srcAddr, uintptr_t dstAddr, int cnt, int isWrite){
-	uintptr_t f = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t f = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_0);
 	assert(f != IO_REQUEST_FAILURE);
 	//IPV4Address src1 = {bytes: {0, 0, 0, 1}};
 	uintptr_t r;
@@ -1249,7 +1252,7 @@ void testCancelRWIP(void){
 	int ok = waitForFirstResource("ip", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	const char *fileName = "ip:0.0.0.0;dev=i8254x:eth0";
-	uintptr_t fileHandle = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t fileHandle = syncOpenFileN(fileName, strlen(fileName), OPEN_FILE_MODE_0);
 	assert(fileHandle != IO_REQUEST_FAILURE);
 	uintptr_t req[20];
 	uint8_t buf[4];

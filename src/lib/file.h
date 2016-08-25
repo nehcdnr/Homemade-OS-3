@@ -9,14 +9,13 @@ typedef union{
 	uintptr_t value;
 	struct{
 		uintptr_t enumeration: 1;
-		uintptr_t writable: 1;
+		// uintptr_t noWrite: 1;
 		// uintptr_t noRead: 1;
 	};
 }OpenFileMode;
 
 #define OPEN_FILE_MODE_0 ((OpenFileMode)(uintptr_t)0)
-#define OPEN_FILE_MODE_WRITABLE ((OpenFileMode){enumeration:0, writable: 1})
-#define OPEN_FILE_MODE_ENUMERATION ((OpenFileMOde){enumeration: 1, writable: 0})
+#define OPEN_FILE_MODE_ENUMERATION ((OpenFileMOde){enumeration: 1})
 
 // get parameter
 enum FileParameter{

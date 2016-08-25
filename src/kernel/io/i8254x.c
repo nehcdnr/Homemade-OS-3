@@ -1079,9 +1079,7 @@ static int openI8254x(OpenFileRequest *ofr, const char *name, uintptr_t nameLeng
 	}
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
 	ff.read = readI8254x;
-	if(mode.writable){
-		ff.write = writeI8254x;
-	}
+	ff.write = writeI8254x;
 	ff.getParameter = getI8254xParameter;
 	ff.setParameter = setI8254xParameter;
 	ff.close = closeI8254x;
@@ -1161,12 +1159,8 @@ static void testRWI8254x(
 	const char *filename, int doWrite, int times, uintptr_t bufSize,
 	uintptr_t expectedReadSize, uintptr_t expectedPadSize
 ){
-	OpenFileMode ofm = OPEN_FILE_MODE_0;
 	uintptr_t r;
-	if(doWrite){
-		ofm.writable = 1;
-	}
-	uintptr_t f = syncOpenFileN(filename, strlen(filename), ofm);
+	uintptr_t f = syncOpenFileN(filename, strlen(filename), OPEN_FILE_MODE_0);
 	assert(f != IO_REQUEST_FAILURE);
 	{
 		uintptr_t maxPayloadSize = 0;
@@ -1220,10 +1214,8 @@ void testI8254xTransmit2(void){
 	assert(ok);
 	ok = waitForFirstResource(file1, RESOURCE_DATA_LINK_DEVICE, matchName);
 	assert(ok);
-	OpenFileMode ofm0 = OPEN_FILE_MODE_0;
-	OpenFileMode ofm1 = OPEN_FILE_MODE_0;
-	ofm1.writable = 1;
-	uintptr_t f0 = syncOpenFileN(file0, strlen(file0), ofm0), f1 = syncOpenFileN(file1, strlen(file1), ofm1);
+	uintptr_t f0 = syncOpenFileN(file0, strlen(file0), OPEN_FILE_MODE_0);
+	uintptr_t f1 = syncOpenFileN(file1, strlen(file1), OPEN_FILE_MODE_0);
 	assert(f0 != IO_REQUEST_FAILURE);
 	assert(f1 != IO_REQUEST_FAILURE);
 	uintptr_t r;

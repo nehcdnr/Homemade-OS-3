@@ -228,17 +228,31 @@ static uintptr_t readCommand(const char *cmdLine, uintptr_t length){
 	uint8_t *buffer = systemCall_allocateHeap(4096, USER_WRITABLE_PAGE);
 	EXPECT(buffer != NULL);
 
-	uintptr_t readSize = 4096, r, i;
+	uintptr_t readSize = 4096, r;
 	r = syncReadFile(handle, buffer, &readSize);
-	if(r == IO_REQUEST_FAILURE || readSize == 0)
-		break;
+	EXPECT(r != IO_REQUEST_FAILURE && readSize != 0);
 
-	for(i = 0; i < readSize; i++)
-		printk("%c", buffer[i]);
-
+	printkString((char*)buffer, readSize);
 	systemCall_releaseHeap(buffer);
 	return readSize;
-	// systemCall_releaseHeap(buffer);
+
+	ON_ERROR;
+	systemCall_releaseHeap(buffer);
+	ON_ERROR;
+	ON_ERROR;
+	return UINTPTR_NULL;
+}
+
+static uintptr_t writeCommand(const char *cmdLine, uintptr_t length){
+	uintptr_t handle = nextHexadecimal(&cmdLine, &length);
+	EXPECT(cmdLine != NULL);
+	const char *data = nextArgument(&cmdLine, &length);
+	EXPECT(cmdLine != NULL);
+	uintptr_t writeSize = cmdLine - data;
+	uintptr_t r = syncWriteFile(handle, data, &writeSize);
+	EXPECT(r != IO_REQUEST_FAILURE);
+	return writeSize;
+	ON_ERROR;
 	ON_ERROR;
 	ON_ERROR;
 	return UINTPTR_NULL;
@@ -308,6 +322,7 @@ static void parseCommand(const char *cmdLine, uintptr_t length){
 		{"open", openCommand},
 		{"enum", enumCommand},
 		{"read", readCommand},
+		{"write", writeCommand},
 		{"close", closeCommand},
 		{"dir", dirCommand},
 		{"run", runCommand}
@@ -573,8 +588,10 @@ static void closeConsole(CloseFileRequest *cfr, OpenedFile *of){
 	completeCloseFile(cfr);
 }
 
-static int openConsole(OpenFileRequest *ofr, __attribute__((__unused__)) const char *fileName, uintptr_t nameLength, OpenFileMode ofm){
-	if(nameLength != 0 || ofm.writable == 0){
+static int openConsole(
+	OpenFileRequest *ofr, __attribute__((__unused__)) const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm){
+	if(nameLength != 0){
 		return 0;
 	}
 	OpenedConsole *NEW(oc);
@@ -611,7 +628,7 @@ void testDelayEcho(void);
 void testDelayEcho(void){
 	int ok = waitForFirstResource("console", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
-	uintptr_t f = syncOpenFileN("console:", strlen("console:"), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t f = syncOpenFileN("console:", strlen("console:"), OPEN_FILE_MODE_0);
 	uintptr_t r;
 	while(1){
 		sleep(1000);

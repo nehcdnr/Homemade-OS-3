@@ -6,7 +6,7 @@
 #define CRASH __asm__("hlt\n")
 
 int main(int argc, char *argv[]){
-	uintptr_t f = syncOpenFileN("console:", strlen("console:"), OPEN_FILE_MODE_WRITABLE);
+	uintptr_t f = syncOpenFileN("console:", strlen("console:"), OPEN_FILE_MODE_0);
 	if(f == IO_REQUEST_FAILURE){
 		CRASH;
 	}
