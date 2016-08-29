@@ -310,7 +310,7 @@ static uintptr_t copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBe
 	uintptr_t extendSize = 0;
 	uintptr_t i;
 	for(i = 0; i < bufferSize; i++){
-		uint32_t s = ((remoteSeqBegin + i) & 0xffffffff);
+		uint32_t s = addTCPSequence(remoteSeqBegin, i);
 		if(diffTCPSequence(s, rw->sequenceBegin) >= rw->windowSize){
 			printk("warning: sequence %u not in window (seq %u, len %u)\n", s, rw->sequenceBegin, rw->windowSize);
 			continue;
@@ -319,7 +319,7 @@ static uintptr_t copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBe
 		// assert(rw->windowSize > 0);
 		rw->buffer[s % rw->windowSize] = buffer[i];
 		// extend buffer
-		uint32_t sequenceEnd = ((rw->sequenceBegin + rw->sequenceLength) & 0xffffffff);
+		uint32_t sequenceEnd = addTCPSequence(rw->sequenceBegin, rw->sequenceLength);
 		if(s == sequenceEnd && rw->sequenceLength < rw->windowSize){
 			rw->sequenceLength++;
 			extendSize++;
@@ -328,7 +328,7 @@ static uintptr_t copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBe
 	return extendSize;
 }
 
-static void pushTCPReceiveWindow(TCPReceiveWindow *rw, RWFileRequest *rwfr, uint8_t *buffer, uintptr_t bufferSize){
+static void pushTCPReceiveBuffer(TCPReceiveWindow *rw, RWFileRequest *rwfr, uint8_t *buffer, uintptr_t bufferSize){
 	TCPReceiveBuffer *rb = createTCPReceiveBuffer(rwfr, buffer, bufferSize);
 	if(rb == NULL){
 		completeRWFileIO(rwfr, 0 ,0);
@@ -338,16 +338,24 @@ static void pushTCPReceiveWindow(TCPReceiveWindow *rw, RWFileRequest *rwfr, uint
 	ADD_TO_DQUEUE(rb, tailPrev);
 }
 
+static void popTCPReceiveBuffer(TCPReceiveWindow *rw, uintptr_t receiveSize){
+	assert(rw->head != rw->tail);
+	TCPReceiveBuffer *rb = rw->head;
+	REMOVE_FROM_DQUEUE(rb);
+	completeRWFileIO(rb->rwfr, receiveSize, 0);
+	deleteTCPReceiveBuffer(rb);
+}
+
+static int hasTCPReceiveBuffer(TCPReceiveWindow *rw){
+	return rw->head != rw->tail;
+}
+
 static void copyTCPReceiveBuffer(TCPReceiveWindow *rw, int partialRead){
-	while(rw->sequenceLength != 0){
+	while(rw->sequenceLength != 0 && hasTCPReceiveBuffer(rw)){
 		TCPReceiveBuffer *rb = rw->head;
-		if(rb == rw->tail){
-			break;
-		}
 		if(partialRead == 0 && rw->sequenceLength < rb->bufferSize){
 			break;
 		}
-		REMOVE_FROM_DQUEUE(rb);
 		uintptr_t bi = 0, copySize = MIN(rb->bufferSize, rw->sequenceLength);
 		uint32_t wi = rw->sequenceBegin;
 		while(bi < copySize){
@@ -357,12 +365,15 @@ static void copyTCPReceiveBuffer(TCPReceiveWindow *rw, int partialRead){
 		}
 		rw->sequenceBegin = wi;
 		rw->sequenceLength -= copySize;
-		completeRWFileIO(rb->rwfr, copySize, 0);
-		deleteTCPReceiveBuffer(rb);
+		popTCPReceiveBuffer(rw, copySize);
 	}
 }
 
 static void destroyTCPReceiveWindow(TCPReceiveWindow *rw){
+	// fail all receive request
+	while(hasTCPReceiveBuffer(rw)){
+		popTCPReceiveBuffer(rw, 0);
+	}
 	releaseKernelMemory(rw->buffer);
 }
 
@@ -456,6 +467,10 @@ static void popTCPTransmitBuffer(TCPTransmitWindow *tw){
 	deleteTCPTransmitBuffer(tb);
 }
 
+static int hasTCPTransmitBuffer(TCPTransmitWindow *tw){
+	return tw->head != tw->tail;
+}
+
 //  from file request to packet
 static uintptr_t copyTCPTransmitBuffer(TCPTransmitWindow *tw, uint8_t *buffer, uintptr_t bufferSize){
 	uintptr_t offset = 0;
@@ -463,13 +478,14 @@ static uintptr_t copyTCPTransmitBuffer(TCPTransmitWindow *tw, uint8_t *buffer, u
 	maxCopySize = MIN(maxCopySize, tw->maxSegmentSize);
 	while(maxCopySize > offset && tw->current != tw->tail){
 		TCPTransmitBuffer *const c = tw->current;
-		uintptr_t currentOffset = diffTCPSequence(tw->currentSequence, c->sequenceBegin);
+		const uintptr_t currentOffset = diffTCPSequence(tw->currentSequence, c->sequenceBegin);
 		const uintptr_t copySize = MIN(maxCopySize - offset, c->size - currentOffset);
 		memcpy(buffer + offset, c->buffer + currentOffset, copySize);
 		offset += copySize;
 		tw->currentSequence = addTCPSequence(tw->currentSequence, copySize);
 		if(c->size == diffTCPSequence(tw->currentSequence, c->sequenceBegin)){
 			tw->current = c->next;
+			assert(tw->current->sequenceBegin == tw->currentSequence);
 		}
 	}
 	return offset;
@@ -477,7 +493,7 @@ static uintptr_t copyTCPTransmitBuffer(TCPTransmitWindow *tw, uint8_t *buffer, u
 
 static void ackTransmitWindow(TCPTransmitWindow *tw, uint32_t ack){
 	uintptr_t receiveSize = diffTCPSequence(ack, tw->sequenceBegin);
-	while(tw->head != tw->tail && receiveSize != 0){
+	while(hasTCPTransmitBuffer(tw) && receiveSize != 0){
 		uintptr_t headOffset = diffTCPSequence(tw->sequenceBegin, tw->head->sequenceBegin);
 		uintptr_t ackSize = MIN(tw->head->size - headOffset, receiveSize);
 		tw->sequenceBegin = addTCPSequence(tw->sequenceBegin, ackSize);
@@ -493,14 +509,13 @@ static void ackTransmitWindow(TCPTransmitWindow *tw, uint32_t ack){
 	}
 	assert(tw->sequenceBegin == ack);
 }
-/*
+
 static void destroyTCPTransmitWindow(TCPTransmitWindow *tw){
-	while(tw->tail != NULL){
-		TCPTransmitBuffer *tb = popTCPTransmitBuffer(tw);
-		deleteTCPTransmitBuffer(tb);
+	while(hasTCPTransmitBuffer(tw)){
+		popTCPTransmitBuffer(tw);
 	}
 }
-*/
+
 typedef struct{
 	TCPReceiveWindow receiveWindow;
 	TCPTransmitWindow transmitWindow;
@@ -508,8 +523,9 @@ typedef struct{
 	uintptr_t rawSocketHandle;
 	// RWTCPRequest from user thread to TCP thread
 	uintptr_t rwRequestFIFOHandle;
-	// read buffer for rawSocketHandle
-	TCPHeader *rawBuffer;
+	// read/write buffer for rawSocketHandle
+	TCPHeader *receiveBuffer;
+	TCPHeader *transmitBuffer;
 	uintptr_t rawBufferSize;
 	IPV4Address localAddress, remoteAddress;
 	uint16_t localPort, remotePort;
@@ -547,33 +563,35 @@ static int transmitTCPPacket(TCPSocket *tcps, int syn, int ack, int mustTransmit
 	if(ack){
 		flags.ack = 1;
 	}
-	uint32_t localACKNumber = addTCPSequence(tcps->receiveWindow.sequenceBegin, tcps->receiveWindow.sequenceLength);
-	uint16_t localWindowRemain = (tcps->receiveWindow.windowSize - tcps->receiveWindow.sequenceLength);
 	TCPTransmitWindow *const tw = &tcps->transmitWindow;
+	TCPReceiveWindow *const rw = &tcps->receiveWindow;
+	TCPHeader *const tb = tcps->transmitBuffer;
+	uint32_t localACKNumber = addTCPSequence(rw->sequenceBegin, rw->sequenceLength);
+	uint16_t localWindowRemain = (rw->windowSize - rw->sequenceLength);
 	while(mustTransmit || tw->current != tw->tail){
 		uintptr_t offset = initTCPPacket(
-				tcps->rawBuffer,
+				tb,
 				tw->currentSequence, localACKNumber, localWindowRemain, flags,
 				tcps->localPort, tcps->remotePort
 		);
 		if(syn){
-			offset = appendTCPWindowScale(tcps->rawBuffer, offset, 0);
+			offset = appendTCPWindowScale(tb, offset, 0);
 			// 1460 for Ethernet/IP/TCP
-			offset = appendTCPMaxSegmentSize(tcps->rawBuffer, offset, tcps->rawBufferSize - sizeof(TCPHeader));
+			offset = appendTCPMaxSegmentSize(tb, offset, tcps->rawBufferSize - sizeof(TCPHeader));
 			//offset = appendTCPSACKPermitted(tcps->rawBuffer, offset);
-			offset = appendTCPOptionEnd(tcps->rawBuffer, offset);
+			offset = appendTCPOptionEnd(tb, offset);
 		}
 		// data
-		offset = initTCPData(tcps->rawBuffer, offset);
-		uintptr_t copySize = copyTCPTransmitBuffer(&tcps->transmitWindow, ((uint8_t*)tcps->rawBuffer) + offset, tcps->rawBufferSize - offset);
+		offset = initTCPData(tb, offset);
+		uintptr_t copySize = copyTCPTransmitBuffer(tw, ((uint8_t*)tb) + offset, tcps->rawBufferSize - offset);
 		if(mustTransmit == 0 && copySize == 0){
 			break;
 		}
 		offset += copySize;
-		uintptr_t packetSize = finishInitTCPPacket(tcps->rawBuffer, offset, tcps->localAddress, tcps->remoteAddress);
+		uintptr_t packetSize = finishInitTCPPacket(tb, offset, tcps->localAddress, tcps->remoteAddress);
 		uintptr_t rwSize = packetSize;
 		// write
-		uintptr_t r = syncWriteFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+		uintptr_t r = syncWriteFile(tcps->rawSocketHandle, tb, &rwSize);
 		if(r == IO_REQUEST_FAILURE || rwSize != packetSize){
 			return 0;
 		}
@@ -632,32 +650,33 @@ static uintptr_t receiveTCPData(TCPHeader *rawBuffer, uintptr_t readSize, TCPRec
 }
 
 static uintptr_t receiveTCPPacket(TCPSocket *tcps, uintptr_t readSize){
-	if(tcps->rawBuffer->flags.syn){
+	if(tcps->receiveBuffer->flags.syn){
 		return 0;
 	}
-	if(receiveTCPACK(tcps->rawBuffer, &tcps->transmitWindow) == 0){
+	if(receiveTCPACK(tcps->receiveBuffer, &tcps->transmitWindow) == 0){
 		return 0;
 	}
-	return receiveTCPData(tcps->rawBuffer, readSize, &tcps->receiveWindow);
+	return receiveTCPData(tcps->receiveBuffer, readSize, &tcps->receiveWindow);
 }
 
 static int receiveTCPSYNACK(TCPSocket *tcps){
 	uintptr_t rwSize = tcps->rawBufferSize;
+	TCPHeader *rb = tcps->receiveBuffer;
 	// TODO: retransmission
-	uintptr_t r = syncReadFile(tcps->rawSocketHandle, tcps->rawBuffer, &rwSize);
+	uintptr_t r = syncReadFile(tcps->rawSocketHandle, rb, &rwSize);
 	// check header size and checksum in validateTCPPacket()
-	if(r == IO_REQUEST_FAILURE || rwSize < getTCPHeaderSize(tcps->rawBuffer)){
+	if(r == IO_REQUEST_FAILURE || rwSize < getTCPHeaderSize(rb)){
 		printk("TCP handshake 2 size error\n");
 		return 0;
 	}
-	if(tcps->rawBuffer->flags.syn == 0 || tcps->rawBuffer->flags.ack == 0){
-		printk("TCP handshake 2 flags error\n", tcps->rawBuffer->flags.value);
+	if(rb->flags.syn == 0 || rb->flags.ack == 0){
+		printk("TCP handshake 2 flags error\n", rb->flags.value);
 		return 0;
 	}
-	if(receiveTCPACK(tcps->rawBuffer, &tcps->transmitWindow) == 0){
+	if(receiveTCPACK(rb, &tcps->transmitWindow) == 0){
 		return 0;
 	}
-	receiveTCPData(tcps->rawBuffer, rwSize, &tcps->receiveWindow);
+	receiveTCPData(rb, rwSize, &tcps->receiveWindow);
 	return 1;
 }
 
@@ -697,7 +716,7 @@ static void tcpLoop(TCPSocket *tcps){
 	while(1){
 		RWTCPRequest rwTCPRequest;
 		if(readSocketIO == IO_REQUEST_FAILURE){
-			readSocketIO = systemCall_readFile(tcps->rawSocketHandle, tcps->rawBuffer, tcps->rawBufferSize);
+			readSocketIO = systemCall_readFile(tcps->rawSocketHandle, tcps->receiveBuffer, tcps->rawBufferSize);
 			//if(readSocketIO == IO_REQUEST_FAILURE){
 			//}
 		}
@@ -749,7 +768,7 @@ static void tcpLoop(TCPSocket *tcps){
 				transmitTCPDataPacket(tcps, 0);
 			}
 			else/*read*/{
-				pushTCPReceiveWindow(&tcps->receiveWindow,
+				pushTCPReceiveBuffer(&tcps->receiveWindow,
 					rwTCPRequest.rwfr, rwTCPRequest.buffer, rwTCPRequest.bufferSize);
 				// IMPROVE: decide whether to allow partial read
 				copyTCPReceiveBuffer(&tcps->receiveWindow, 0);
@@ -798,9 +817,6 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 
 	TCPSocket *NEW(tcps);
 	EXPECT(tcps != NULL);
-	initTCPTransmitWindow(&tcps->transmitWindow, 9999);
-	int ok = initTCPReceiveWindow(&tcps->receiveWindow, DEFAULT_TCP_RECEIVE_WINDOW_SIZE);
-	EXPECT(ok);
 	tcps->rwRequestFIFOHandle = syncOpenFIFOFile();
 	EXPECT(tcps->rwRequestFIFOHandle != IO_REQUEST_FAILURE);
 	tcps->rawSocketHandle = syncOpenFileN(tcpRawName, tcpRawNameLength, OPEN_FILE_MODE_0);
@@ -826,21 +842,28 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 	tcps->localPort = (uint16_t)getValue[3];
 	tcps->remotePort = (uint16_t)getValue[4];
 	// allocate a buffer for R/W
-	tcps->rawBuffer = allocateKernelMemory(tcps->rawBufferSize);
-	EXPECT(tcps->rawBuffer != NULL);
+	tcps->receiveBuffer = allocateKernelMemory(tcps->rawBufferSize);
+	EXPECT(tcps->receiveBuffer != NULL);
+	tcps->transmitBuffer = allocateKernelMemory(tcps->rawBufferSize);
+	EXPECT(tcps->transmitBuffer != NULL);
+	initTCPTransmitWindow(&tcps->transmitWindow, 9999);
+	int ok = initTCPReceiveWindow(&tcps->receiveWindow, DEFAULT_TCP_RECEIVE_WINDOW_SIZE);
+	EXPECT(ok);
 
 	releaseKernelMemory(tcpRawName);
 	return tcps;
-	// releaseKernelMemory(tcps->rawBuffer);
+	//destroyTCPReceiveWindow(&tcps->receiveWindow);
+	//destroyTCPTransmitWindow(&tcps->transmitWindow);
+	ON_ERROR;
+	releaseKernelMemory(tcps->transmitBuffer);
+	ON_ERROR;
+	releaseKernelMemory(tcps->receiveBuffer);
 	ON_ERROR;
 	// get parameter
 	ON_ERROR;
 	syncCloseFile(tcps->rawSocketHandle);
 	ON_ERROR;
 	syncCloseFile(tcps->rwRequestFIFOHandle);
-	ON_ERROR;
-	destroyTCPReceiveWindow(&tcps->receiveWindow);
-	// destroyTCPTransmitWindow(&tcps->transmitWindow);
 	ON_ERROR;
 	DELETE(tcps);
 	ON_ERROR;
@@ -850,16 +873,21 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 }
 
 static void deleteTCPSocket(TCPSocket *tcps){
+	destroyTCPTransmitWindow(&tcps->transmitWindow);
+	destroyTCPReceiveWindow(&tcps->receiveWindow);
+	releaseKernelMemory(tcps->receiveBuffer);
+	releaseKernelMemory(tcps->transmitBuffer);
 	uintptr_t r;
 	r = syncCloseFile(tcps->rwRequestFIFOHandle);
 	if(r == IO_REQUEST_FAILURE){
 		printk("warning: cannot close TCP request FIFO\n");
+		assert(0);
 	}
 	r = syncCloseFile(tcps->rawSocketHandle);
 	if(r == IO_REQUEST_FAILURE){
 		printk("warning: cannot close TCP raw socket\n");
+		assert(0);
 	}
-	releaseKernelMemory(tcps->rawBuffer);
 	DELETE(tcps);
 }
 

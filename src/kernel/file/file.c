@@ -180,8 +180,8 @@ struct OpenedFile{
 	FileFunctions fileFunctions;
 
 	Spinlock lock;
-	uint32_t deleteOnCompletion;
-	uint32_t ioCount;
+	int deleteOnCompletion;
+	uintptr_t ioCount;
 	//uint64_t readByteCount, writeByteCount;
 	uint64_t offset;
 
