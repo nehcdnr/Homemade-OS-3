@@ -278,8 +278,14 @@ static void deleteTCPReceiveBuffer(TCPReceiveBuffer *rb){
 typedef struct{
 	uint32_t sequenceBegin;
 	uintptr_t sequenceLength;
+	// IMPROVE: separate bufferSize and windowSize; currently bufferSize == windowSize
+	// uintptr_t bufferBegin;
+	// uintptr_t bufferSize;
 	uintptr_t windowSize;
-	uint8_t *buffer;
+	struct{
+		uint8_t hasData;
+		uint8_t data;
+	}*buffer;
 
 	TCPReceiveBuffer tail[1];
 	TCPReceiveBuffer *head;
@@ -289,16 +295,19 @@ static int initTCPReceiveWindow(TCPReceiveWindow *rw, uintptr_t windowSize){
 	rw->sequenceBegin = 0;
 	rw->sequenceLength = 0;
 	rw->windowSize = windowSize;
-	rw->buffer = allocateKernelMemory(windowSize);
-	if(rw->buffer == NULL){
-		return 0;
-	}
+	NEW_ARRAY(rw->buffer, windowSize);
+	EXPECT(rw->buffer != NULL);
+	memset(rw->buffer, 0, windowSize * (sizeof(*rw->buffer)));
+
 	MEMSET0(rw->tail);
 	rw->tail->next = NULL;
 	rw->tail->prev = NULL;
 	rw->head = NULL;
 	ADD_TO_DQUEUE(rw->tail, &rw->head);
 	return 1;
+	DELETE(rw->buffer);
+	ON_ERROR;
+	return 0;
 }
 
 static void synReceiveWindow(TCPReceiveWindow *rw, uint32_t seq){
@@ -306,8 +315,29 @@ static void synReceiveWindow(TCPReceiveWindow *rw, uint32_t seq){
 	rw->sequenceLength = 0;
 }
 
-static uintptr_t copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBegin, const uint8_t *buffer, uintptr_t bufferSize){
-	uintptr_t extendSize = 0;
+static void setTCPReceiveBufferData(TCPReceiveWindow *rw, uintptr_t seq, uint8_t data){
+	const uintptr_t i = seq % rw->windowSize;
+	rw->buffer[i].hasData = 1;
+	rw->buffer[i].data = data;
+}
+
+static int hasTCPReceiveBufferData(TCPReceiveWindow *rw, uintptr_t seq){
+	return rw->buffer[seq % rw->windowSize].hasData? 1: 0;
+}
+
+static uint8_t unsetTCPReceiveBufferData(TCPReceiveWindow *rw, uintptr_t seq){
+	const uintptr_t i = seq % rw->windowSize;
+	assert(rw->buffer[i].hasData);
+	uint8_t d = rw->buffer[i].data;;
+	rw->buffer[i].data = 0;
+	rw->buffer[i].hasData = 0;
+	return d;
+}
+
+static uintptr_t copyTCPReceiveWindow(
+	TCPReceiveWindow *rw, uint32_t remoteSeqBegin,
+	const uint8_t *buffer, uintptr_t bufferSize
+){
 	uintptr_t i;
 	for(i = 0; i < bufferSize; i++){
 		uint32_t s = addTCPSequence(remoteSeqBegin, i);
@@ -317,15 +347,17 @@ static uintptr_t copyTCPReceiveWindow(TCPReceiveWindow *rw, uint32_t remoteSeqBe
 		}
 		// copy
 		// assert(rw->windowSize > 0);
-		rw->buffer[s % rw->windowSize] = buffer[i];
-		// extend buffer
-		uint32_t sequenceEnd = addTCPSequence(rw->sequenceBegin, rw->sequenceLength);
-		if(s == sequenceEnd && rw->sequenceLength < rw->windowSize){
-			rw->sequenceLength++;
-			extendSize++;
-		}
+		setTCPReceiveBufferData(rw, s, buffer[i]);
 	}
-	return extendSize;
+	// extend buffer
+	uintptr_t oldSeqLen = rw->sequenceLength;
+	while(rw->sequenceLength < rw->windowSize){
+		uint32_t sequenceEnd = addTCPSequence(rw->sequenceBegin, rw->sequenceLength);
+		if(hasTCPReceiveBufferData(rw, sequenceEnd) == 0)
+			break;
+		rw->sequenceLength++;
+	}
+	return rw->sequenceLength - oldSeqLen;
 }
 
 static void pushTCPReceiveBuffer(TCPReceiveWindow *rw, RWFileRequest *rwfr, uint8_t *buffer, uintptr_t bufferSize){
@@ -359,7 +391,7 @@ static void copyTCPReceiveBuffer(TCPReceiveWindow *rw, int partialRead){
 		uintptr_t bi = 0, copySize = MIN(rb->bufferSize, rw->sequenceLength);
 		uint32_t wi = rw->sequenceBegin;
 		while(bi < copySize){
-			rb->buffer[bi] = rw->buffer[wi % rw->windowSize];
+			rb->buffer[bi] = unsetTCPReceiveBufferData(rw, wi);
 			wi = addTCPSequence(wi, 1);
 			bi++;
 		}
@@ -374,7 +406,7 @@ static void destroyTCPReceiveWindow(TCPReceiveWindow *rw){
 	while(hasTCPReceiveBuffer(rw)){
 		popTCPReceiveBuffer(rw, 0);
 	}
-	releaseKernelMemory(rw->buffer);
+	DELETE(rw->buffer);
 }
 
 typedef struct TCPTransmitBuffer{
