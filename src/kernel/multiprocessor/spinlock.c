@@ -46,6 +46,7 @@ void releaseLock(Spinlock *spinlock){
 		return;
 	}
 	assert(spinlock->acquirable == NOT_ACQUIRABLE);
+	assert(getEFlags().bit.interrupt == 0);
 	int interruptEnabled = spinlock->interruptFlag;
 	xchg8(&spinlock->acquirable, ACQUIRABLE);
 	if(interruptEnabled){
