@@ -644,6 +644,7 @@ typedef struct{
 	uintptr_t rawBufferSize;
 	IPV4Address localAddress, remoteAddress;
 	uint16_t localPort, remotePort;
+	int isClosing;
 	int hasSentFINACK;
 }TCPSocket;
 
@@ -987,11 +988,12 @@ static int checkRetransmit(
 }
 
 static int tcpLoop(TCPSocket *tcps){
-	int errorFlag = 0, closeFlag = 0;
+	int errorFlag = 0;
 	// read socket
 	uintptr_t readSocketIO = IO_REQUEST_FAILURE;
 	// RW request
 	uintptr_t rwRequestFIFOIO = IO_REQUEST_FAILURE;
+	RWTCPRequest rwTCPRequest;
 	// ACK timer
 	int needACKFlag = 0;
 	const int ackDelayTime = 40;
@@ -1028,13 +1030,12 @@ static int tcpLoop(TCPSocket *tcps){
 			}
 		}
 		if(
-			closeFlag && hasTCPTransmitBuffer(&tcps->transmitWindow) == 0 && // transmit
+			tcps->isClosing && hasTCPTransmitBuffer(&tcps->transmitWindow) == 0 && // transmit
 			tcps->hasSentFINACK // receive
 		){
 			break;
 		}
 		// start IO
-		RWTCPRequest rwTCPRequest;
 		if(readSocketIO == IO_REQUEST_FAILURE){
 			readSocketIO = systemCall_readFile(tcps->rawSocketHandle, tcps->receiveBuffer, tcps->rawBufferSize);
 			if(readSocketIO == IO_REQUEST_FAILURE){
@@ -1087,7 +1088,7 @@ static int tcpLoop(TCPSocket *tcps){
 				continue;
 			}
 			if(rwTCPRequest.rwfr == NULL){ // closeFile
-				closeFlag = 1;
+				tcps->isClosing = 1;
 				int ok = pushTCPTransmitBuffer(&tcps->transmitWindow, (const uint8_t*)"?", 1, 1);
 				if(!ok){
 					errorFlag = 1;
@@ -1148,6 +1149,24 @@ static int tcpLoop(TCPSocket *tcps){
 	return 1;
 }
 
+static void flushTCPRWRequest(TCPSocket *tcps){
+	while(tcps->isClosing == 0){
+		RWTCPRequest req;
+		uintptr_t s = sizeof(req);
+		uintptr_t r = syncReadFile(tcps->rwRequestFIFOHandle, &req, &s);
+		if(r == IO_REQUEST_FAILURE || s != sizeof(req)){
+			printk("warning: TCP socket FIFO error\n");
+			tcps->isClosing = 1;
+		}
+		else if(req.rwfr == NULL){ // close
+			tcps->isClosing = 1;
+		}
+		else{ // read/write
+			completeRWFileIO(req.rwfr, 0, 0);
+		}
+	}
+}
+
 #define DEFAULT_TCP_RECEIVE_WINDOW_SIZE (8192)
 
 static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
@@ -1183,6 +1202,7 @@ static TCPSocket *createTCPSocket(const char *fileName, uintptr_t nameLength){
 	tcps->remoteAddress.value = (uint32_t)getValue[2];
 	tcps->localPort = (uint16_t)getValue[3];
 	tcps->remotePort = (uint16_t)getValue[4];
+	tcps->isClosing = 0;
 	tcps->hasSentFINACK = 0;
 	// allocate a buffer for R/W
 	tcps->receiveBuffer = allocateKernelMemory(tcps->rawBufferSize);
@@ -1278,6 +1298,8 @@ static void tcpTask(void *voidArg){
 	if(tcpLoop(tcps) == 0){
 		printk("warning: TCP loop error\n");
 	}
+	flushTCPRWRequest(tcps);
+
 	deleteTCPSocket(tcps);
 	systemCall_terminate();
 
