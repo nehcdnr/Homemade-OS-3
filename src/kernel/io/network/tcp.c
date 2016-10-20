@@ -246,10 +246,10 @@ static int parseTCPOptions(
 	uintptr_t offset = sizeof(*tcp);
 	uint8_t *const p = ((uint8_t*)tcp);
 	while(offset != headerSize){
-		if(parseTCPOptionEnd(p)){
+		if(parseTCPOptionEnd(p + offset)){
 			break;
 		}
-		if(parseTCPOptionNOP(p)){
+		if(parseTCPOptionNOP(p + offset)){
 			offset++;
 			continue;
 		}
@@ -890,6 +890,24 @@ static int timeoutReadFile(uintptr_t f, void *buffer, uintptr_t *readSize, uint6
 	return 0;
 }
 
+static int receiveTCPSYNPacket(TCPSocket *tcps){
+	uintptr_t rwSize = tcps->rawBufferSize;
+	TCPHeader *rb = tcps->receiveBuffer;
+	while(1){
+	uintptr_t r = syncReadFile(tcps->rawSocketHandle, rb, &rwSize);
+		if(r == IO_REQUEST_FAILURE)
+			return 0;
+		if(rwSize < getTCPHeaderSize(rb))
+			continue;
+		if(rb->flags.ack || rb->flags.fin || rb->flags.rst)
+			continue;
+		if(receiveTCPSYN(rb, &tcps->transmitWindow) == 0)
+			continue;
+		synTCPReceiveWindow(&tcps->receiveWindow, getSequenceNumber(rb) + 1);
+		return 1;
+	}
+}
+
 static int receiveTCPSYNACK(TCPSocket *tcps){
 	uintptr_t rwSize = tcps->rawBufferSize;
 	TCPHeader *rb = tcps->receiveBuffer;
@@ -902,11 +920,11 @@ static int receiveTCPSYNACK(TCPSocket *tcps){
 		printk("TCP handshake 2 size error\n");
 		return 0;
 	}
-	if(receiveTCPSYN(rb, &tcps->transmitWindow) != 1){
+	if(receiveTCPSYN(rb, &tcps->transmitWindow) == 0){
 		printk("TCP handshake 2 SYN error; SYN=%d\n", (int)rb->flags.syn);
 		return 0;
 	}
-	if(receiveTCPACK(rb, &tcps->transmitWindow) != 1){
+	if(receiveTCPACK(rb, &tcps->transmitWindow) == 0){
 		printk("TCP handshake 2 ACK error; seq=%u ack=%u\n",
 			tcps->transmitWindow.sequenceBegin, getAcknowledgeNumber(rb));
 		return 0;
@@ -920,7 +938,7 @@ static int tcpHandShake(TCPSocket *tcps){
 	for(retryCount = 0; retryCount <= TCP_MAX_RETRANSMIT_COUNT; retryCount++){
 		// 1. SYN
 		if(transmitTCPSYNPacket(tcps, 0) == 0){
-			printk("TCP handshake 1 error");
+			printk("TCP client handshake 1 error");
 			continue;
 		}
 		// 2. SYN ACK
@@ -929,7 +947,7 @@ static int tcpHandShake(TCPSocket *tcps){
 		}
 		break;
 	}
-	if(retryCount >= TCP_MAX_RETRANSMIT_COUNT){
+	if(retryCount > TCP_MAX_RETRANSMIT_COUNT){
 		return 0;
 	}
 	// 3. ACK
@@ -939,6 +957,45 @@ static int tcpHandShake(TCPSocket *tcps){
 		return 0;
 	}
 	assert(transmitSize == 0);
+	return 1;
+}
+
+static int tcpServerHandShake(TCPSocket *tcps){
+	// TODO: move to permanent thread
+	if(receiveTCPSYNPacket(tcps) == 0)
+		return 0;
+	uint16_t p = changeEndian16(tcps->receiveBuffer->sourcePort);
+	uintptr_t r = syncSetFileParameter(tcps->rawSocketHandle,
+		FILE_PARAM_DESTINATION_PORT, p);
+	// TODO: syncSetFileParameter(tcps->rawSocketHandle, FILE_PARAM_DESTINATION_ADDRESS, );
+	if(r == IO_REQUEST_FAILURE){
+		return 0;
+	}
+	tcps->remotePort = p;
+	//tcps->localAddress = ;
+
+	int retryCount;
+	for(retryCount = 0; retryCount <= TCP_MAX_RETRANSMIT_COUNT; retryCount++){
+		if(transmitTCPSYNPacket(tcps, 1) == 0){
+			printk("TCP server handshake 2 error\n");
+			continue;
+		}
+		uintptr_t readSize = tcps->rawBufferSize;
+		if(timeoutReadFile(tcps->rawSocketHandle, tcps->receiveBuffer, &readSize, TCP_RETRANSMIT_TIMEOUT) == 0){
+			printk("TCP server handshake 3 read error\n");
+			continue;
+		}
+		uintptr_t ackSize;
+		receiveTCPDataPacket(tcps, readSize, &ackSize);
+		if(ackSize != 1){
+			printk("TCP server handshake 3 ACK error\n");
+			continue;
+		}
+		break;
+	}
+	if(retryCount > TCP_MAX_RETRANSMIT_COUNT){
+		return 0;
+	}
 	return 1;
 }
 
@@ -1279,6 +1336,7 @@ struct TCPTaskArgument{
 	OpenFileRequest *ofr;
 	const char *fileName;
 	uintptr_t nameLength;
+	int isServer;
 };
 
 static void tcpTask(void *voidArg){
@@ -1286,7 +1344,7 @@ static void tcpTask(void *voidArg){
 
 	TCPSocket *tcps = createTCPSocket(arg->fileName, arg->nameLength);
 	EXPECT(tcps != NULL);
-	int ok = tcpHandShake(tcps);
+	int ok = (arg->isServer? tcpServerHandShake(tcps): tcpHandShake(tcps));
 	EXPECT(ok);
 
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
@@ -1310,17 +1368,28 @@ static void tcpTask(void *voidArg){
 	systemCall_terminate();
 }
 
-static int openTCPClient(
-	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
-	__attribute__((__unused__)) OpenFileMode ofm
-){
-	struct TCPTaskArgument arg = {ofr, fileName, nameLength};
+static int openTCP(OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength, int isServer){
+	struct TCPTaskArgument arg = {ofr, fileName, nameLength, isServer};
 	Task *t = createSharedMemoryTask(tcpTask, &arg, sizeof(arg), processorLocalTask());
 	if(t == NULL){
 		return 0;
 	}
 	resume(t);
 	return 1;
+}
+
+static int openTCPClient(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
+	return openTCP(ofr, fileName, nameLength, 0);
+}
+
+static int openTCPServer(
+	OpenFileRequest *ofr, const char *fileName, uintptr_t nameLength,
+	__attribute__((__unused__)) OpenFileMode ofm
+){
+	return openTCP(ofr, fileName, nameLength, 1);
 }
 
 typedef struct{
@@ -1333,6 +1402,15 @@ static int getTCPRawParameter(FileIORequest2 *r2, OpenedFile *of, enum FileParam
 	int ok = getIPSocketParam(&tcps->ipSocket, fp, &value);
 	if(ok){
 		completeFileIO64(r2, value);
+	}
+	return ok;
+}
+
+static int setTCPRawParameter(FileIORequest2 *r2, OpenedFile *of, enum FileParameter fp, uint64_t value){
+	TCPRawSocket *tcps = getFileInstance(of);
+	int ok = setIPSocketParam(&tcps->ipSocket, fp, value);
+	if(ok){
+		completeFileIO0(r2);
 	}
 	return ok;
 }
@@ -1384,9 +1462,9 @@ static int filterTCPPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t pa
 	}
 	//TCPRawSocket tcps = ips->instance;
 	if(
-		ips->remotePort != changeEndian16(h->sourcePort) ||
+		(ips->remotePort != ANY_PORT && ips->remotePort != changeEndian16(h->sourcePort)) ||
 		ips->localPort != changeEndian16(h->destinationPort) ||
-		ips->remoteAddress.value != packet->source.value
+		(ips->remoteAddress.value != ANY_IPV4_ADDRESS.value && ips->remoteAddress.value != packet->source.value)
 	){
 		return 0;
 	}
@@ -1412,7 +1490,8 @@ static int openTCPRaw(
 	ok = startIPSocketTasks(&tcps->ipSocket);
 	EXPECT(ok);
 	FileFunctions ff = INITIAL_FILE_FUNCTIONS;
-	ff.getParameter= getTCPRawParameter;
+	ff.getParameter = getTCPRawParameter;
+	ff.setParameter = setTCPRawParameter;
 	ff.read = readTCPRawSocket;
 	ff.write = writeTCPRawSocket;
 	ff.close = closeTCPRawSocket;
@@ -1443,11 +1522,40 @@ void initTCP(void){
 	if(!ok){
 		panic("cannot initialize TCP client file system");
 	}
-	//fnf.open = openTCPServer;
-	//addFileSystem(&fnf, "tcpserver", strlen("tcpserver"));
+	fnf.open = openTCPServer;
+	ok = addFileSystem(&fnf, "tcpserver", strlen("tcpserver"));
+	if(!ok){
+		panic("cannot initialize TCP server file system");
+	}
 }
 
 #ifndef NDEBUG
+
+static void tcpEcho(const char *name, uintptr_t nameLength){
+	uintptr_t tcp = syncOpenFileN(name, nameLength, OPEN_FILE_MODE_0);
+	assert(tcp != IO_REQUEST_FAILURE);
+	uintptr_t r;
+	while(1){
+		char buffer[16];
+		uintptr_t readSize = sizeof(buffer);
+		r = syncReadFile(tcp, buffer, &readSize);
+		assert(r != IO_REQUEST_FAILURE);
+		if(readSize == 0){
+			printk("remote close TCP\n");
+			break;
+		}
+		printk("%d: ", readSize);
+		printkString(buffer, readSize);
+		printk("\n");
+		r = syncWriteFile(tcp, buffer, &readSize);
+		assert(r != IO_REQUEST_FAILURE && readSize != 0);
+		if(isStringEqual(buffer, readSize, "fin", 3)){
+			break;
+		}
+	}
+	r = syncCloseFile(tcp);
+	assert(r != IO_REQUEST_FAILURE);
+}
 
 void testTCP(void);
 void testTCP(void){
@@ -1457,26 +1565,20 @@ void testTCP(void){
 	int ok = waitForFirstResource("tcpclient", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
 	const char *target = "tcpclient:192.168.56.1:59999;srcport=59998";
-	uintptr_t tcp = syncOpenFileN(target, strlen(target), OPEN_FILE_MODE_0);
-	assert(tcp != IO_REQUEST_FAILURE);
-	while(1){
-		char buffer[16];
-		uintptr_t readSize = sizeof(buffer);
-		uintptr_t r = syncReadFile(tcp, buffer, &readSize);
-		assert(r != IO_REQUEST_FAILURE);
-		printk("%d: ", readSize);
-		printkString(buffer, readSize);
-		printk("\n");
-		r = syncWriteFile(tcp, buffer, &readSize);
-		assert(r != IO_REQUEST_FAILURE);
-		if(isStringEqual(buffer, readSize, "fin", 3) || readSize == 0){
-			break;
-		}
-	}
-	uintptr_t r;
-	r = syncCloseFile(tcp);
-	assert(r != IO_REQUEST_FAILURE);
-	printk("test TCP ok\n");
+	tcpEcho(target, strlen(target));
+	printk("TCP client OK\n");
+	systemCall_terminate();
+}
+
+void testTCPServer(void);
+void testTCPServer(void){
+	sleep(3000);
+	printk("test TCP server\n");
+	int ok = waitForFirstResource("tcpserver", RESOURCE_FILE_SYSTEM, matchName);
+	assert(ok);
+	const char *server = "tcpserver:192.168.56.103:0;srcport=59997";
+	tcpEcho(server, strlen(server));
+	printk("TCP server OK\n");
 	systemCall_terminate();
 }
 

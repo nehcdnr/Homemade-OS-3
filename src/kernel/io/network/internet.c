@@ -512,7 +512,6 @@ static int readIPSocket(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer, ui
 
 static int validateIPV4Packet(const IPV4Header *packet, uintptr_t readSize/*TODO: src/dst address*/){
 	if(packet->version != 4 || readSize < sizeof(*packet)){
-		printk("IP packet version = %u; read size %u\n", packet->version, readSize);
 		return 0;
 	}
 	uintptr_t packetSize = getIPPacketSize(packet);
@@ -787,9 +786,9 @@ void initIPSocket(
 	s->instance = inst;
 	s->protocol = p;
 	s->localAddress = ANY_IPV4_ADDRESS;
-	s->localPort = 0;
+	s->localPort = ANY_PORT;
 	s->remoteAddress = ANY_IPV4_ADDRESS;
-	s->remotePort = 0;
+	s->remotePort = ANY_PORT;
 	s->bindToDevice = 0;
 	memset(s->deviceName, 0, sizeof(s->deviceName));
 	s->deviceNameLength = 0;

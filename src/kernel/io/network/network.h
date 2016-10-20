@@ -8,6 +8,7 @@ typedef union{
 }IPV4Address;
 
 #define ANY_IPV4_ADDRESS ((IPV4Address)(uint32_t)0)
+#define ANY_PORT ((uint16_t)0)
 
 enum IPDataProtocol{
 	IP_DATA_PROTOCOL_ICMP = 1,
