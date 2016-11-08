@@ -852,6 +852,7 @@ static IORequest *dispatchFileHandleCommand(const InterruptParam *p){
 	}
 	// if failed
 	assert(isClosing == 0);
+	addFileIOCount(of, -1); // undo addIOCount in searchOpenFileList
 	return IO_REQUEST_FAILURE;
 }
 

@@ -249,7 +249,7 @@ static int readEnumWaitable(RWFileRequest *rwfr, OpenedFile *of, uint8_t *buffer
 	struct ReadEnumRequest *req2 = iterateNext_noLock(re, 1);
 	assert(req2 == NULL || req2 == req);
 	releaseLock(re->lock);
-	// if we want to support cancel by other thread, must lock RWFileRequest
+	// if we want to support cancel by other thread, must lock ReadEnumRequest
 	if(req2 != NULL){
 		completeEnumNextRequest(req);
 	}

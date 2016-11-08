@@ -313,6 +313,21 @@ static void testRWFIFO(struct TestArg *arg, int isWrite){
 	FIFOFile *fifo = syncGetFIFOFile(f);
 	assert(fifo != NULL);
 	uintptr_t r, s;
+	// fail
+	if(isWrite){
+		char buf[4] = "111";
+		r = systemCall_writeFile(f, NULL, 1);
+		assert(r == IO_REQUEST_FAILURE);
+		r = systemCall_writeFile(f, buf, 0xffff0000);
+		assert(r == IO_REQUEST_FAILURE);
+	}
+	else{
+		char buf[4];
+		r = systemCall_readFile(f, NULL, 1);
+		assert(r == IO_REQUEST_FAILURE);
+		r = systemCall_readFile(f, buf, 0xffff0000);
+		assert(r == IO_REQUEST_FAILURE);
+	}
 	// w->w->r->r
 	if(isWrite){
 		char buf[4] = "123";
