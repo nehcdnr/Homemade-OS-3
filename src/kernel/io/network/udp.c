@@ -82,8 +82,8 @@ static IPV4Header *createUDPIPPacketFromSocket(
 	//UDPSocket *udps = ips->instance;
 	UDPIPHeader *h = createUDPIPPacket(
 		buffer, size,
-		src, ips->localPort,
-		dst, ips->remotePort
+		src, ips->arguments.localPort,
+		dst, ips->arguments.remotePort
 	);
 	EXPECT(h != NULL);
 	return &h->ip;
@@ -127,7 +127,10 @@ static int filterUDPPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t pa
 		return 0;
 	}
 	//UDPSocket *udps = ips->instance;
-	if(changeEndian16(h->destinationPort) != ips->localPort){
+	if(
+		ips->arguments.localPort != changeEndian16(h->destinationPort) ||
+		(ips->arguments.remotePort != ANY_PORT && ips->arguments.remotePort != changeEndian16(h->sourcePort))
+	){
 		return 0;
 	}
 	return 1;
@@ -190,6 +193,7 @@ static int setUDPParameter(FileIORequest2 *r2, OpenedFile *of, uintptr_t param, 
 static void closeUDPSocket(CloseFileRequest *cfr, OpenedFile *of){
 	UDPSocket *udps = getFileInstance(of);
 	stopIPSocketTasks(&udps->ipSocket);
+	addIPSocketReference(&udps->ipSocket, -1);
 	completeCloseFile(cfr);
 }
 
@@ -205,10 +209,10 @@ static int openUDPSocket(
 	UDPSocket *NEW(udps);
 	EXPECT(udps != NULL);
 	initIPSocket(
-		&udps->ipSocket, udps, IP_DATA_PROTOCOL_UDP,
+		&udps->ipSocket, udps,
 		transmitUDPPacket, filterUDPPacket, receiveUDPPacket, deleteUDPSocket
 	);
-	int ok = scanIPSocketArguments(&udps->ipSocket, fileName, nameLength);
+	int ok = scanIPSocketArguments(&udps->ipSocket.arguments, IP_DATA_PROTOCOL_UDP, fileName, nameLength);
 	EXPECT(ok);
 	// TODO: is port using
 	ok = startIPSocketTasks(&udps->ipSocket);
@@ -221,10 +225,10 @@ static int openUDPSocket(
 	ff.close = closeUDPSocket;
 	completeOpenFile(ofr, udps, &ff);
 	return 1;
-	// destroyIPSocket
+	// stopIPSocketTasks(&udps->ipSocket);
 	ON_ERROR;
 	ON_ERROR;
-	DELETE(udps);
+	addIPSocketReference(&udps->ipSocket, -1);
 	ON_ERROR;
 	return 0;
 }

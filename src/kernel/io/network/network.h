@@ -49,6 +49,7 @@ void initIPV4Header(
 	IPV4Header *h, uint16_t dataLength, IPV4Address srcAddress, IPV4Address dstAddress,
 	enum IPDataProtocol dataProtocol
 );
+uintptr_t getIPPacketSize(const IPV4Header *h);
 uintptr_t getIPHeaderSize(const IPV4Header *h);
 uintptr_t getIPDataSize(const IPV4Header *h);
 void *getIPData(const IPV4Header *h);
@@ -86,8 +87,7 @@ int transmitSinglePacket(IPSocket *ips, CreatePacket *c, DeletePacket *d);
 int receiveSinglePacket(IPSocket *ips, QueuedPacket *qp, CopyPacketData *copyPacketData);
 
 // one receive queue & task for every socket
-struct IPSocket{
-	void *instance;
+typedef struct{
 	IPV4Address localAddress;
 	IPV4Address remoteAddress;
 	enum IPDataProtocol protocol;
@@ -96,6 +96,15 @@ struct IPSocket{
 	int bindToDevice;
 	char deviceName[MAX_FILE_ENUM_NAME_LENGTH];
 	uintptr_t deviceNameLength;
+}IPSocketArguments;
+
+void initIPSocketArguments(IPSocketArguments *a);
+int scanIPSocketArguments(IPSocketArguments *a, enum IPDataProtocol p, const char *arg, uintptr_t argLength);
+uintptr_t printIPSocketArguments(char *buffer, uintptr_t length, const IPSocketArguments *a);
+
+struct IPSocket{
+	void *instance;
+	IPSocketArguments arguments;
 
 	TransmitPacket *transmitPacket;
 	FilterPacket *filterPacket;
@@ -106,25 +115,26 @@ struct IPSocket{
 	struct RWIPQueue *receive, *transmit;
 };
 
-void initIPSocket(IPSocket *s, void *inst, enum IPDataProtocol p, TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d);
-int scanIPSocketArguments(IPSocket *socket, const char *arg, uintptr_t argLength);
-int startIPSocketTasks(IPSocket *socket);
-void stopIPSocketTasks(IPSocket *socket);
+void initIPSocket(IPSocket *s, void *inst, TransmitPacket *t, FilterPacket *f, ReceivePacket *r, DeleteSocket *d);
+int startIPSocketTasks(IPSocket *s);
+void stopIPSocketTasks(IPSocket *s);
+// initial value = 1. if reference == 0, call DeleteSocket
+void addIPSocketReference(IPSocket *ips, int v);
 
 void setIPSocketLocalAddress(IPSocket *s, IPV4Address a);
 void setIPSocketRemoteAddress(IPSocket *s, IPV4Address a);
 void setIPSocketBindingDevice(IPSocket *s, const char *deviceName, uintptr_t nameLength);
 
 int createAddRWIPArgument(struct RWIPQueue *q, RWFileRequest *rwfr, IPSocket *ips, uint8_t *buffer, uintptr_t size);
-int nextRWIPRequest(struct RWIPQueue *q, RWFileRequest **rwfr, uint8_t **buffer, uintptr_t *size);
+int nextRWIPRequest(struct RWIPQueue *q, int block, RWFileRequest **rwfr, uint8_t **buffer, uintptr_t *size);
 
 const IPV4Header *getQueuedPacketHeader(QueuedPacket *p);
 void addQueuedPacketRef(QueuedPacket *p, int n);
 
-DataLinkDevice *resolveLocalAddress(const IPSocket *s, IPV4Address *a);
+DataLinkDevice *resolveLocalAddress(const IPSocketArguments *s, IPV4Address *a);
 int transmitIPPacket(DataLinkDevice *device, const IPV4Header *packet);
 
-int getIPSocketParam(IPSocket *ips, uintptr_t param, uint64_t *value);
+int getIPSocketParam(const IPSocket *ips, uintptr_t param, uint64_t *value);
 int setIPSocketParam(IPSocket *ips, uintptr_t param, uint64_t value);
 
 // udp.c

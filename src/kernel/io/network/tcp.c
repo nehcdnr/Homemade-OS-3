@@ -2,6 +2,7 @@
 #include"kernel.h"
 #include"resource/resource.h"
 #include"task/task.h"
+#include"task/exclusivelock.h"
 #include"multiprocessor/processorlocal.h"
 #include"io/fifo.h"
 #include"network.h"
@@ -889,7 +890,7 @@ static int timeoutReadFile(uintptr_t f, void *buffer, uintptr_t *readSize, uint6
 	ON_ERROR;
 	return 0;
 }
-
+/*
 static int receiveTCPSYNPacket(TCPSocket *tcps){
 	uintptr_t rwSize = tcps->rawBufferSize;
 	TCPHeader *rb = tcps->receiveBuffer;
@@ -907,8 +908,8 @@ static int receiveTCPSYNPacket(TCPSocket *tcps){
 		return 1;
 	}
 }
-
-static int receiveTCPSYNACK(TCPSocket *tcps){
+*/
+static int receiveTCPSYNACKPacket(TCPSocket *tcps){
 	uintptr_t rwSize = tcps->rawBufferSize;
 	TCPHeader *rb = tcps->receiveBuffer;
 	if(timeoutReadFile(tcps->rawSocketHandle, rb, &rwSize, TCP_RETRANSMIT_TIMEOUT) == 0){
@@ -942,7 +943,7 @@ static int tcpHandShake(TCPSocket *tcps){
 			continue;
 		}
 		// 2. SYN ACK
-		if(receiveTCPSYNACK(tcps) == 0){
+		if(receiveTCPSYNACKPacket(tcps) == 0){
 			continue;
 		}
 		break;
@@ -961,19 +962,6 @@ static int tcpHandShake(TCPSocket *tcps){
 }
 
 static int tcpServerHandShake(TCPSocket *tcps){
-	// TODO: move to permanent thread
-	if(receiveTCPSYNPacket(tcps) == 0)
-		return 0;
-	uint16_t p = changeEndian16(tcps->receiveBuffer->sourcePort);
-	uintptr_t r = syncSetFileParameter(tcps->rawSocketHandle,
-		FILE_PARAM_DESTINATION_PORT, p);
-	// TODO: syncSetFileParameter(tcps->rawSocketHandle, FILE_PARAM_DESTINATION_ADDRESS, );
-	if(r == IO_REQUEST_FAILURE){
-		return 0;
-	}
-	tcps->remotePort = p;
-	//tcps->localAddress = ;
-
 	int retryCount;
 	for(retryCount = 0; retryCount <= TCP_MAX_RETRANSMIT_COUNT; retryCount++){
 		if(transmitTCPSYNPacket(tcps, 1) == 0){
@@ -1339,10 +1327,19 @@ struct TCPTaskArgument{
 	int isServer;
 };
 
+
+static TCPSocket *tcpServerHandshake1(const char *fileName, uintptr_t nameLength);
+
 static void tcpTask(void *voidArg){
 	struct TCPTaskArgument *arg = (struct TCPTaskArgument *)voidArg;
 
-	TCPSocket *tcps = createTCPSocket(arg->fileName, arg->nameLength);
+	TCPSocket *tcps;
+	if(arg->isServer){
+		tcps = tcpServerHandshake1(arg->fileName, arg->nameLength);
+	}
+	else{
+		tcps = createTCPSocket(arg->fileName, arg->nameLength);
+	}
 	EXPECT(tcps != NULL);
 	int ok = (arg->isServer? tcpServerHandShake(tcps): tcpHandShake(tcps));
 	EXPECT(ok);
@@ -1428,9 +1425,9 @@ static int writeTCPRawSocket(RWFileRequest *rwfr, OpenedFile *of, const uint8_t 
 static void closeTCPRawSocket(CloseFileRequest *cfr, OpenedFile *of){
 	TCPRawSocket *tcps = getFileInstance(of);
 	stopIPSocketTasks(&tcps->ipSocket);
+	addIPSocketReference(&tcps->ipSocket, -1);
 	completeCloseFile(cfr);
 }
-
 
 static const TCPHeader *validateTCPPacket(const IPV4Header *packet, uintptr_t packetSize){
 	if(packet->protocol != IP_DATA_PROTOCOL_TCP){
@@ -1455,16 +1452,38 @@ static const TCPHeader *validateTCPPacket(const IPV4Header *packet, uintptr_t pa
 	return h;
 }
 
+static int filterTCPSYNPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t packetSize){ //TODO:filter by device
+	const TCPHeader *h = validateTCPPacket(packet, packetSize); // TODO: check option format
+	if(h == NULL){
+		return 0;
+	}
+	//TCPRawSocket tcps = ips->instance;
+	if(h->flags.syn == 0 || h->flags.ack == 1 || h->flags.rst == 1 || h->flags.fin == 1){
+		return 0;
+	}
+	const IPSocketArguments *a = &ips->arguments;
+	if(
+		(a->remotePort != ANY_PORT && a->remotePort != changeEndian16(h->sourcePort)) ||
+		(a->localPort != ANY_PORT && a->localPort != changeEndian16(h->destinationPort))
+	){
+		return 0;
+	}
+	return 1;
+}
+
 static int filterTCPPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t packetSize){
 	const TCPHeader *h = validateTCPPacket(packet, packetSize);
 	if(h == NULL){
 		return 0;
 	}
+
 	//TCPRawSocket tcps = ips->instance;
+	const IPSocketArguments *a = &ips->arguments;
 	if(
-		(ips->remotePort != ANY_PORT && ips->remotePort != changeEndian16(h->sourcePort)) ||
-		ips->localPort != changeEndian16(h->destinationPort) ||
-		(ips->remoteAddress.value != ANY_IPV4_ADDRESS.value && ips->remoteAddress.value != packet->source.value)
+		a->remotePort != changeEndian16(h->sourcePort) ||
+		a->localPort != changeEndian16(h->destinationPort) ||
+		a->remoteAddress.value != packet->source.value ||
+		(a->localAddress.value != ANY_IPV4_ADDRESS.value && a->localAddress.value != packet->destination.value)
 	){
 		return 0;
 	}
@@ -1481,11 +1500,12 @@ static int openTCPRaw(
 	__attribute__((__unused__)) OpenFileMode ofm
 ){
 	TCPRawSocket *NEW(tcps);
+	EXPECT(tcps != NULL);
 	initIPSocket(
-		&tcps->ipSocket, tcps, IP_DATA_PROTOCOL_TCP,
+		&tcps->ipSocket, tcps,
 		transmitIPV4Packet, filterTCPPacket, receiveIPV4Packet, deleteTCPRawSocket
 	);
-	int ok = scanIPSocketArguments(&tcps->ipSocket, fileName, nameLength);
+	int ok = scanIPSocketArguments(&tcps->ipSocket.arguments, IP_DATA_PROTOCOL_TCP, fileName, nameLength);
 	EXPECT(ok);
 	ok = startIPSocketTasks(&tcps->ipSocket);
 	EXPECT(ok);
@@ -1497,11 +1517,278 @@ static int openTCPRaw(
 	ff.close = closeTCPRawSocket;
 	completeOpenFile(ofr, tcps, &ff);
 	return 1;
-	stopIPSocketTasks(&tcps->ipSocket);
+	//stopIPSocketTasks(&tcps->ipSocket);
 	ON_ERROR;
 	// invalid argument
 	ON_ERROR;
+	addIPSocketReference(&tcps->ipSocket, -1);
+	ON_ERROR;
 	return 0;
+}
+
+typedef struct TCPSYN{
+	struct TCPSYN *next, **prev;
+
+	IPV4Address sourceAddress;
+	uint16_t sourcePort;
+	IPV4Address destinationAddress;
+	uint16_t destinationPort;
+	uintptr_t packetSize;
+	IPV4Header packet[];
+}TCPSYN;
+
+typedef struct TCPWaitSYN{
+	IPSocketArguments arguments;
+	Semaphore *semaphore;
+	TCPSYN *result;
+
+	struct TCPWaitSYN *next, **prev;
+}TCPWaitSYN;
+
+typedef struct{
+	Spinlock lock;
+	int synLength;
+
+	TCPSYN synTail[1];
+	TCPSYN *synHead;
+	TCPWaitSYN waitTail[1];
+	TCPWaitSYN *waitHead;
+
+	IPSocket ipSocket;
+}TCPListener;
+
+static TCPListener *globalTCPListener;
+
+static void initTCPSYNTail(TCPSYN *t){
+	t->destinationAddress = ANY_IPV4_ADDRESS;
+	t->sourceAddress = ANY_IPV4_ADDRESS;
+	t->next = NULL;
+	t->prev = NULL;
+}
+
+static TCPSYN *createTCPSYN(const IPV4Header *h){ // IMPROVE: QueuedPacket
+	uintptr_t packetSize = getIPPacketSize(h);
+	TCPSYN *s = allocateKernelMemory(sizeof(TCPSYN) + packetSize);
+	if(s == NULL){
+		return NULL;
+	}
+	TCPHeader *tcpHeader = getIPData(h);
+	s->destinationAddress = h->destination;
+	s->destinationPort = changeEndian16(tcpHeader->destinationPort);
+	s->sourceAddress = h->source;
+	s->sourcePort = changeEndian16(tcpHeader->sourcePort);
+	s->packetSize = packetSize;
+	memcpy(s->packet, h, packetSize);
+	s->next = NULL;
+	s->prev = NULL;
+	return s;
+}
+
+static void deleteTCPSYN(TCPSYN *s){
+	releaseKernelMemory(s);
+}
+
+static int matchTCPSYN_noLock(const TCPWaitSYN *w, const TCPSYN *s){
+	const IPSocketArguments *a = &w->arguments;
+	if(
+		(a->remoteAddress.value != ANY_IPV4_ADDRESS.value && a->remoteAddress.value != s->sourceAddress.value) ||
+		(a->remotePort != ANY_PORT && a->remotePort != s->sourcePort) ||
+		(a->localAddress.value != ANY_IPV4_ADDRESS.value && a->localAddress.value != s->destinationAddress.value) ||
+		(/*a->localPort != ANY_PORT && */a->localPort != s->destinationPort) // see initTCPWaitSYN
+	){
+		return 0;
+	}
+	return 1;
+}
+
+static void addTCPSYN(TCPListener *tcpl, TCPSYN *s){
+	acquireLock(&tcpl->lock);
+	int matched = 0;
+	TCPWaitSYN *w;
+	for(w = tcpl->waitHead; w != tcpl->waitTail; w = w->next){
+		if(matchTCPSYN_noLock(w, s)){ // TODO: device name, timeout
+			matched = 1;
+			break;
+		}
+	}
+	if(matched){
+		REMOVE_FROM_DQUEUE(w);
+	}
+	else{
+		TCPSYN **synTailPrev = tcpl->synTail->prev;
+		ADD_TO_DQUEUE(s, synTailPrev);
+	}
+	releaseLock(&tcpl->lock);
+	if(matched){
+		w->result = s;
+		releaseSemaphore(w->semaphore);
+	}
+}
+
+static void initTCPWaitSYNTail(TCPWaitSYN *t){
+	initIPSocketArguments(&t->arguments);
+	t->semaphore = NULL;
+	t->result = NULL;
+	t->next = NULL;
+	t->prev = NULL;
+}
+
+static int initTCPWaitSYN(TCPWaitSYN *w, const char *fileName, uintptr_t nameLength){
+	initIPSocketArguments(&w->arguments);
+	if(scanIPSocketArguments(&w->arguments, IP_DATA_PROTOCOL_TCP, fileName, nameLength) == 0){
+		return 0;
+	}
+	if(w->arguments.localPort == ANY_PORT){
+		return 0;
+	}
+	w->semaphore = createSemaphore(0);
+	if(w->semaphore == NULL){
+		return 0;
+	}
+	w->result = NULL;
+	w->next = NULL;
+	w->prev = NULL;
+	return 1;
+}
+
+static void destroyTCPWaitSYN(TCPWaitSYN *w){
+	deleteSemaphore(w->semaphore);
+}
+
+static TCPSYN *waitTCPSYN(TCPListener *tcpl, TCPWaitSYN *w){
+	assert(w->result == NULL);
+	acquireLock(&tcpl->lock);
+	int matched = 0;
+	TCPSYN *s;
+	for(s = tcpl->synHead; s != tcpl->synTail; s = s->next){
+		if(matchTCPSYN_noLock(w, s)){
+			matched = 1;
+			break;
+		}
+	}
+	if(matched){
+		REMOVE_FROM_DQUEUE(s);
+	}
+	else{
+		TCPWaitSYN **waitTailPrev = tcpl->waitTail->prev;
+		ADD_TO_DQUEUE(w, waitTailPrev);
+	}
+	releaseLock(&tcpl->lock);
+	if(matched == 0){
+		acquireSemaphore(w->semaphore);
+		s = w->result;// TODO: if cancelled, w->result == NULL
+	}
+	return s;
+}
+
+static TCPSocket *tcpServerHandshake1(const char *fileName, uintptr_t nameLength){
+	TCPWaitSYN w;
+	int ok = initTCPWaitSYN(&w, fileName, nameLength);
+	EXPECT(ok);
+	TCPSYN *s = waitTCPSYN(globalTCPListener, &w);
+	EXPECT(s != NULL);
+
+	char newFileName[MAX_FILE_ENUM_NAME_LENGTH];
+	uintptr_t newNameLength = LENGTH_OF(newFileName);
+	w.arguments.remoteAddress = s->sourceAddress;
+	w.arguments.remotePort = s->sourcePort;
+	newNameLength = printIPSocketArguments(newFileName, newNameLength, &w.arguments);
+	TCPSocket *tcps = createTCPSocket(newFileName, newNameLength);
+	EXPECT(tcps != NULL);
+
+	const TCPHeader *h = getIPData(s->packet);
+	if(receiveTCPSYN(h, &tcps->transmitWindow) == 0){
+		panic("TCP listener/server error"); // TODO: check option format in filter
+	}
+	synTCPReceiveWindow(&tcps->receiveWindow, getSequenceNumber(h) + 1);
+
+	deleteTCPSYN(s);
+	return tcps;
+	//deleteTCPSocket(tcps);
+	ON_ERROR;
+	deleteTCPSYN(s);
+	ON_ERROR;
+	destroyTCPWaitSYN(&w);
+	ON_ERROR;
+	return NULL;
+}
+
+static int nextCloseIPRequest(IPSocket *ips){
+	RWFileRequest *rwfr;
+	uint8_t *buffer;
+	uintptr_t size;
+	int ok = nextRWIPRequest(ips->receive, 0, &rwfr, &buffer, &size);
+	if(ok == 0){
+		return 0;
+	}
+	assert(rwfr == NULL);
+	return 1;
+}
+
+static int transmitTCPListener(IPSocket *ips){
+	return nextCloseIPRequest(ips);
+}
+
+static int receiveTCPListener(IPSocket *ips, QueuedPacket *qp){
+	int ok = nextCloseIPRequest(ips);
+	if(ok == 0){
+		return 0;
+	}
+	TCPListener *tcpl = ips->instance;
+	TCPSYN *tcpSYN = createTCPSYN(getQueuedPacketHeader(qp));
+	EXPECT(tcpSYN != NULL);
+	addTCPSYN(tcpl, tcpSYN);
+	return 1;
+	// deleteTCPSYN(tcpSYN);
+	ON_ERROR;
+	return 1;
+}
+
+
+static void deleteTCPListener(IPSocket *ips){
+	TCPListener *tcpListener = ips->instance;
+	assert(
+		tcpListener->synHead == tcpListener->synTail &&
+		tcpListener->waitHead == tcpListener->waitTail);
+	assert(0); // currently there is only one global listener
+	DELETE(tcpListener);
+}
+
+static TCPListener *createTCPListener(void){
+	TCPListener *NEW(tcpListener);
+	EXPECT(tcpListener != NULL);
+	tcpListener->lock = initialSpinlock;
+	tcpListener->synLength = 0;
+
+	tcpListener->synHead = NULL;
+	initTCPSYNTail(tcpListener->synTail);
+	ADD_TO_DQUEUE(tcpListener->synTail, &tcpListener->synHead);
+
+	tcpListener->waitHead = NULL;
+	initTCPWaitSYNTail(tcpListener->waitTail);
+	ADD_TO_DQUEUE(tcpListener->waitTail, &tcpListener->waitHead);
+	// IP socket
+	initIPSocket(
+		&tcpListener->ipSocket, tcpListener,
+		transmitTCPListener, filterTCPSYNPacket, receiveTCPListener, deleteTCPListener
+	);
+	char name[20];
+	uintptr_t nameLength = snprintf(name, LENGTH_OF(name), "%I:%u", ANY_IPV4_ADDRESS, ANY_PORT);
+	assert(nameLength < LENGTH_OF(name));
+	int ok = scanIPSocketArguments(&tcpListener->ipSocket.arguments, IP_DATA_PROTOCOL_TCP, name, nameLength);
+	assert(ok);
+	EXPECT(ok);
+	ok = startIPSocketTasks(&tcpListener->ipSocket);
+	EXPECT(ok);
+
+	return tcpListener;
+	// stopIPSocketTasks(&tcpListener->ipSocket);
+	ON_ERROR;
+	// invalid arguments
+	ON_ERROR;
+	addIPSocketReference(&tcpListener->ipSocket, -1);
+	ON_ERROR;
+	return NULL;
 }
 
 void initTCP(void){
@@ -1522,6 +1809,10 @@ void initTCP(void){
 	if(!ok){
 		panic("cannot initialize TCP client file system");
 	}
+	globalTCPListener = createTCPListener();
+	if(globalTCPListener == NULL){
+		panic("cannot initialize TCP listener\n");
+	}
 	fnf.open = openTCPServer;
 	ok = addFileSystem(&fnf, "tcpserver", strlen("tcpserver"));
 	if(!ok){
@@ -1535,6 +1826,11 @@ static void tcpEcho(const char *name, uintptr_t nameLength){
 	uintptr_t tcp = syncOpenFileN(name, nameLength, OPEN_FILE_MODE_0);
 	assert(tcp != IO_REQUEST_FAILURE);
 	uintptr_t r;
+	{
+		uintptr_t write0 = 0;
+		r = syncWriteFile(tcp, "", &write0);
+		assert(r != IO_REQUEST_FAILURE && write0 == 0);
+	}
 	while(1){
 		char buffer[16];
 		uintptr_t readSize = sizeof(buffer);
@@ -1557,8 +1853,8 @@ static void tcpEcho(const char *name, uintptr_t nameLength){
 	assert(r != IO_REQUEST_FAILURE);
 }
 
-void testTCP(void);
-void testTCP(void){
+void testTCPClient(void);
+void testTCPClient(void){
 	// wait for DHCP
 	sleep(3000);
 	printk("test TCP client\n");
@@ -1576,7 +1872,7 @@ void testTCPServer(void){
 	printk("test TCP server\n");
 	int ok = waitForFirstResource("tcpserver", RESOURCE_FILE_SYSTEM, matchName);
 	assert(ok);
-	const char *server = "tcpserver:192.168.56.103:0;srcport=59997";
+	const char *server = "tcpserver:0.0.0.0:0;srcport=59904";
 	tcpEcho(server, strlen(server));
 	printk("TCP server OK\n");
 	systemCall_terminate();
