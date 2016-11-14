@@ -1457,8 +1457,12 @@ static int filterTCPSYNPacket(IPSocket *ips, const IPV4Header *packet, uintptr_t
 	if(h == NULL){
 		return 0;
 	}
-	//TCPRawSocket tcps = ips->instance;
 	if(h->flags.syn == 0 || h->flags.ack == 1 || h->flags.rst == 1 || h->flags.fin == 1){
+		return 0;
+	}
+	uintptr_t mss = 0, ws = 0;
+	int sack = 0;
+	if(parseTCPOptions(h, &mss, &ws, &sack) == 0){
 		return 0;
 	}
 	const IPSocketArguments *a = &ips->arguments;
@@ -1547,7 +1551,7 @@ typedef struct TCPWaitSYN{
 
 typedef struct{
 	Spinlock lock;
-	int synLength;
+	int synCount;
 
 	TCPSYN synTail[1];
 	TCPSYN *synHead;
@@ -1588,6 +1592,34 @@ static void deleteTCPSYN(TCPSYN *s){
 	releaseKernelMemory(s);
 }
 
+// assume s in tcpl->head
+static TCPSYN *popTCPSYN_noLock(TCPListener *tcpl, TCPSYN* s){
+	tcpl->synCount--;
+	REMOVE_FROM_DQUEUE(s);
+	return s;
+}
+
+// return a list of TCPSYN
+static TCPSYN *popDuplicatedTCPSYN_noLock(TCPListener *tcpl, IPV4Address src, uint16_t sPort, uint16_t dPort){
+	TCPSYN *s = tcpl->synHead, *r = NULL;
+	while(s != tcpl->synTail){
+		if(
+			s->sourceAddress.value == src.value &&
+			s->sourcePort == sPort &&
+			s->destinationPort == dPort
+		){
+			TCPSYN *next = s->next;
+			popTCPSYN_noLock(tcpl, s);
+			ADD_TO_DQUEUE(s, &r);
+			s = next;
+		}
+		else{
+			s = s->next;
+		}
+	}
+	return r;
+}
+
 static int matchTCPSYN_noLock(const TCPWaitSYN *w, const TCPSYN *s){
 	const IPSocketArguments *a = &w->arguments;
 	if(
@@ -1601,12 +1633,17 @@ static int matchTCPSYN_noLock(const TCPWaitSYN *w, const TCPSYN *s){
 	return 1;
 }
 
-static void addTCPSYN(TCPListener *tcpl, TCPSYN *s){
+#define MAX_QUEUED_SYN_COUNT (10)
+
+static void addTCPSYN(TCPListener *tcpl, TCPSYN *newSYN){
 	acquireLock(&tcpl->lock);
+	assert(tcpl->synCount <= MAX_QUEUED_SYN_COUNT);
+	TCPSYN *dupSYN = popDuplicatedTCPSYN_noLock(tcpl, newSYN->sourceAddress, newSYN->sourcePort, newSYN->destinationPort);
+	// match waiting socket
 	int matched = 0;
 	TCPWaitSYN *w;
 	for(w = tcpl->waitHead; w != tcpl->waitTail; w = w->next){
-		if(matchTCPSYN_noLock(w, s)){ // TODO: device name, timeout
+		if(matchTCPSYN_noLock(w, newSYN)){ // TODO: device name, timeout
 			matched = 1;
 			break;
 		}
@@ -1615,12 +1652,21 @@ static void addTCPSYN(TCPListener *tcpl, TCPSYN *s){
 		REMOVE_FROM_DQUEUE(w);
 	}
 	else{
+		if(tcpl->synCount == MAX_QUEUED_SYN_COUNT){
+			assert(dupSYN == NULL);
+			dupSYN = popTCPSYN_noLock(tcpl, tcpl->synHead);
+		}
 		TCPSYN **synTailPrev = tcpl->synTail->prev;
-		ADD_TO_DQUEUE(s, synTailPrev);
+		ADD_TO_DQUEUE(newSYN, synTailPrev);
+		tcpl->synCount++;
 	}
 	releaseLock(&tcpl->lock);
+	if(dupSYN != NULL){
+		assert(dupSYN->next == NULL); // keep at most 0~1 SYN
+		deleteTCPSYN(dupSYN);
+	}
 	if(matched){
-		w->result = s;
+		w->result = newSYN;
 		releaseSemaphore(w->semaphore);
 	}
 }
@@ -1667,7 +1713,7 @@ static TCPSYN *waitTCPSYN(TCPListener *tcpl, TCPWaitSYN *w){
 		}
 	}
 	if(matched){
-		REMOVE_FROM_DQUEUE(s);
+		popTCPSYN_noLock(tcpl, s);
 	}
 	else{
 		TCPWaitSYN **waitTailPrev = tcpl->waitTail->prev;
@@ -1698,7 +1744,7 @@ static TCPSocket *tcpServerHandshake1(const char *fileName, uintptr_t nameLength
 
 	const TCPHeader *h = getIPData(s->packet);
 	if(receiveTCPSYN(h, &tcps->transmitWindow) == 0){
-		panic("TCP listener/server error"); // TODO: check option format in filter
+		panic("TCP server SYN format error"); // see filterTCPSYNPacket
 	}
 	synTCPReceiveWindow(&tcps->receiveWindow, getSequenceNumber(h) + 1);
 
@@ -1726,7 +1772,11 @@ static int nextCloseIPRequest(IPSocket *ips){
 }
 
 static int transmitTCPListener(IPSocket *ips){
-	return nextCloseIPRequest(ips);
+	int ok = transmitIPV4Packet(ips);
+	if(ok){
+		panic("TCP listener is not allowed to transmit");
+	}
+	return ok;
 }
 
 static int receiveTCPListener(IPSocket *ips, QueuedPacket *qp){
@@ -1748,6 +1798,7 @@ static int receiveTCPListener(IPSocket *ips, QueuedPacket *qp){
 static void deleteTCPListener(IPSocket *ips){
 	TCPListener *tcpListener = ips->instance;
 	assert(
+		tcpListener->synCount == 0 &&
 		tcpListener->synHead == tcpListener->synTail &&
 		tcpListener->waitHead == tcpListener->waitTail);
 	assert(0); // currently there is only one global listener
@@ -1758,7 +1809,7 @@ static TCPListener *createTCPListener(void){
 	TCPListener *NEW(tcpListener);
 	EXPECT(tcpListener != NULL);
 	tcpListener->lock = initialSpinlock;
-	tcpListener->synLength = 0;
+	tcpListener->synCount = 0;
 
 	tcpListener->synHead = NULL;
 	initTCPSYNTail(tcpListener->synTail);
