@@ -266,8 +266,6 @@ static int openPS2(OpenFileRequest *ofr, const char *name, uintptr_t nameLength,
 	return 0;
 }
 
-typedef struct InterruptController PIC;
-
 static void initPS2Driver(PIC* pic){
 	// interrupt
 	InterruptVector *keyboardVector = pic->irqToVector(pic, KEYBOARD_IRQ);

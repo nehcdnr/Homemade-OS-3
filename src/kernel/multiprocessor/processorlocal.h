@@ -1,5 +1,5 @@
 #ifndef PROCESSORLOCAL_H_
-//#define PROCESSORLOCAL_H_
+#define PROCESSORLOCAL_H_
 typedef struct SegmentTable SegmentTable;
 typedef struct InterruptController PIC;
 typedef struct TaskManager TaskManager;

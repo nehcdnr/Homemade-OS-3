@@ -46,7 +46,7 @@ int isspace(int c);
 
 #define LOW64(V) ((V) & 0xffffffff)
 #define HIGH64(V) ((((uint64_t)(V)) >> 32) & 0xffffffff)
-#define COMBINE64(H,L) ((uint64_t)(L) + ((uint64_t)(H) << 32))
+#define COMBINE64(H, L) ((uint64_t)(L) + ((uint64_t)(H) << 32))
 
 uint16_t changeEndian16(uint16_t v);
 uint32_t changeEndian32(uint32_t v);

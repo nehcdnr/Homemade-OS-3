@@ -1131,7 +1131,7 @@ void i8254xDriver(void){
 		}
 		addI8254xDeviceList(i8254x);
 		PIC *pic = processorLocalPIC();
-		addHandler(pic->irqToVector(pic, regs0->interruptLine),i8254xHandler, (uintptr_t)i8254x);
+		addHandler(pic->irqToVector(pic, regs0->interruptLine), i8254xHandler, (uintptr_t)i8254x);
 		pic->setPICMask(pic, regs0->interruptLine, 0);
 		// set link up
 		i8254x->regs[DEVICE_CONTROL] |= (1 << 6);

@@ -24,6 +24,7 @@ enum SystemCall{
 	SYSCALL_CREATE_USER_THREAD = 14,
 	SYSCALL_TERMINATE = 15,
 	SYSCALL_SET_ALARM = 16,
+	SYSCALL_GET_TIME = 17,
 	// file
 	SYSCALL_OPEN_FILE = 20,
 	SYSCALL_CLOSE_FILE = 24,
@@ -76,7 +77,7 @@ void *systemCall_allocateHeap(uintptr_t size, PageAttribute attribtue);
 int systemCall_releaseHeap(void *address);
 PhysicalAddress systemCall_translatePage(void *address);
 
-// task
+uint64_t systemCall_getTime(void);
 
 // return UINTPTR_NULL if failed
 // return task id if succeeded

@@ -38,10 +38,15 @@ static void initService(void){
 		//testAHCI,
 		//testPCI,
 		//testFAT,
+		//testFIFOFile,
 		//testI8254xTransmit2
 		//testI8254xTransmit,
 		//testI8254xReceive,
 		//testMemoryTask,
+		//testIPFileName,
+		//testTCPClient,
+		//testTCPServer,
+		//testCountDays,
 		//testCreateThread,
 		//testTimer,
 		//testRWLock
@@ -110,6 +115,7 @@ void c_entry(void){
 	}
 	// 10. driver
 	if(isBSP){
+		initCMOS(pic, global.syscallTable); // TCP requires date&time
 		initTimer(global.syscallTable);
 	}
 	initLocalTimer(pic, global.idt, timer);

@@ -61,3 +61,9 @@ int sleep(uint64_t millisecond){
 	}
 	return 1;
 }
+
+uint64_t systemCall_getTime(void){
+	uintptr_t v[5];
+	v[0] = systemCall6Return(SYSCALL_GET_TIME, v + 1, v + 2, v + 3, v + 4, v + 5);
+	return COMBINE64(v[1], v[0]);
+}

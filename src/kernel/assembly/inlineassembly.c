@@ -85,7 +85,7 @@ int cpuid_getInitialAPICID(){
 	return (ebx >> 24) & 0xff;
 }
 
-void rdmsr(enum MSR ecx, uint32_t *edx,uint32_t *eax){
+void rdmsr(enum MSR ecx, uint32_t *edx, uint32_t *eax){
 	__asm__(
 	"rdmsr\n"
 	:"=d"(*edx),"=a"(*eax)
@@ -93,7 +93,7 @@ void rdmsr(enum MSR ecx, uint32_t *edx,uint32_t *eax){
 	);
 }
 
-void wrmsr(enum MSR ecx, uint32_t edx,uint32_t eax){
+void wrmsr(enum MSR ecx, uint32_t edx, uint32_t eax){
 	__asm__(
 	"wrmsr\n"
 	:

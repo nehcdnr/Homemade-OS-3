@@ -2,6 +2,7 @@
 #define IO_SERVICE_H_INCLUDED
 
 #include"interrupt/handler.h"
+#include"multiprocessor/processorlocal.h"
 #include"io.h"
 
 typedef struct IORequest IORequest;
@@ -50,6 +51,9 @@ void initIORequest(
 
 // timer8254.c
 void setTimer8254Frequency(unsigned frequency);
+// interval in milliseconds
+void setTimer8254OneShot(unsigned interval);
+uint16_t readTimer8254Count(void);
 
 // timer.c
 typedef struct InterruptParam InterruptParam;
@@ -64,6 +68,9 @@ void setTimerHandler(TimerEventList *tel, InterruptVector *v);
 int addTimerHandler(TimerEventList *tel, InterruptVector *v);
 typedef struct SystemCallTable SystemCallTable;
 void initTimer(SystemCallTable *systemCallTable);
+
+// cmos.c
+void initCMOS(PIC *pic, SystemCallTable *s);
 
 //console.h
 void initKernelConsole(void);
